@@ -2,7 +2,9 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/gpu"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/job"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/lease"
 	clientv3 "go.etcd.io/etcd/client/v3"
@@ -10,14 +12,13 @@ import (
 	"time"
 )
 
-// Store current lease for fencing validation during execution
-var currentLease *lease.Lease
-
 // Worker Executes jobs with exactly-once guarantees
 type Worker struct {
-	id       string
-	etcd     *clientv3.Client
-	leaseMgr *lease.Manager
+	id          string
+	etcd        *clientv3.Client
+	leaseMgr    *lease.Manager
+	gpuDetector *gpu.Detector
+	topology    *gpu.Topology
 }
 
 // NewWorker creates a new Worker
@@ -30,12 +31,23 @@ func NewWorker(workerID string, etcdEndpoints []string) (*Worker, error) {
 		return nil, fmt.Errorf("failed to connect to etcd: %w", err)
 	}
 
-	leaseMgr := lease.NewManager(cli, workerID)
+	// Detect GPU topology
+	detector := gpu.NewDetector()
+	topology, err := detector.DetectTopology(context.Background())
+	if err != nil {
+		log.Printf("Warning: GPU detection failed : %v", err)
+		topology = &gpu.Topology{GPUs: []*gpu.GPU{}}
+	} else {
+		topology.WorkerID = workerID
+		log.Printf("Detected %d GPUs", len(topology.GPUs))
+	}
 
 	return &Worker{
-		id:       workerID,
-		etcd:     cli,
-		leaseMgr: leaseMgr,
+		id:          workerID,
+		etcd:        cli,
+		leaseMgr:    lease.NewManager(cli, workerID),
+		gpuDetector: detector,
+		topology:    topology,
 	}, nil
 }
 
@@ -45,6 +57,11 @@ func (w *Worker) Close() error {
 
 func (w *Worker) Run(ctx context.Context) error {
 	log.Printf("Worker %s starting...", w.id)
+
+	// Register topology
+	if err := w.RegisterTopology(ctx); err != nil {
+		log.Printf("Warning: Failed to register topology: %v", err)
+	}
 
 	for {
 		select {
@@ -58,6 +75,28 @@ func (w *Worker) Run(ctx context.Context) error {
 			time.Sleep(1 * time.Second)
 		}
 	}
+}
+
+// RegisterTopology Added method
+func (w *Worker) RegisterTopology(ctx context.Context) error {
+	topologyKey := fmt.Sprintf("/topology/%s", w.id)
+
+	topologyData, err := json.Marshal(w.topology)
+	if err != nil {
+		return err
+	}
+
+	_, err = w.etcd.Put(ctx, topologyKey, string(topologyData))
+	if err != nil {
+		return err
+	}
+
+	log.Printf("Worker %s registered with %d GPUs", w.id, len(w.topology.GPUs))
+	for _, g := range w.topology.GPUs {
+		log.Printf(" - %s", g.String())
+	}
+
+	return nil
 }
 
 func (w *Worker) processNextJob(ctx context.Context) error {

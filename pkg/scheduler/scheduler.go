@@ -2,7 +2,9 @@ package scheduler
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/gpu"
 	"github.com/google/uuid"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"log"
@@ -33,16 +35,17 @@ func NewScheduler(etcdEndpoints []string) (*Scheduler, error) {
 	}, nil
 }
 
-// Closes the etcd client connection
+// Close the etcd client connection
 func (s *Scheduler) Close() error {
 	return s.etcd.Close()
 }
 
-// SubmitJob submits a new Job with idempotency guarantee
+// SubmitJob submits a new Job with idempotency guarantee and GPU-aware scheduling
 func (s *Scheduler) SubmitJob(ctx context.Context, req job.JobSubmission) (string, error) {
 	log.Printf("Submitting Job: %s (RequestID: %s)", req.Name, req.RequestID)
 
 	// Step 1: Check if this request was already processed (idempotency)
+	// checking deduplication
 	requestKey := fmt.Sprintf("/requests/%s", req.RequestID)
 	getResp, err := s.etcd.Get(ctx, requestKey)
 
@@ -50,11 +53,11 @@ func (s *Scheduler) SubmitJob(ctx context.Context, req job.JobSubmission) (strin
 		return "", fmt.Errorf("Failed to check request: %w", err)
 	}
 
-	//	If request already exists, return exisiting job ID
+	//	If request already exists, return existing job ID
 	if len(getResp.Kvs) > 0 {
-		exisitngJobID := string(getResp.Kvs[0].Value)
-		log.Printf("Request %s already processed, returning existing JobID: %s", req.RequestID, exisitngJobID)
-		return exisitngJobID, nil
+		existingJobID := string(getResp.Kvs[0].Value)
+		log.Printf("Request %s already processed, returning existing JobID: %s", req.RequestID, existingJobID)
+		return existingJobID, nil
 	}
 
 	//	If Job not exists, generate a new Job ID
@@ -81,6 +84,28 @@ func (s *Scheduler) SubmitJob(ctx context.Context, req job.JobSubmission) (strin
 		return "", fmt.Errorf("Failed to serialize job: %w", err)
 	}
 
+	// If job needs GPUs, find best placement
+	var assignedGPUs []int
+	if req.GPUs > 0 {
+		placement, err := s.findBestGPUPlacement(ctx, req.GPUs)
+		if err != nil {
+			log.Printf("Warning: Could not find any Optimal GPU Placement: %v", err)
+			//	Job Still queued, worker will try to place it
+		} else {
+			assignedGPUs = placement.GPUIndices
+			log.Printf("GPU placement for job %s: %v (score: %.1f, %s)",
+				jobID, assignedGPUs, placement.Score, placement.Reasoning)
+		}
+	}
+
+	// Store assignment if found
+	if len(assignedGPUs) > 0 {
+		assignmentData, _ := json.Marshal(map[string]interface{}{
+			"gpu_indices": assignedGPUs,
+		})
+		s.etcd.Put(ctx, fmt.Sprintf("/assignments/%s", jobID), string(assignmentData))
+	}
+
 	//	Step 4: Atomic Transaction
 	txn := s.etcd.Txn(ctx).
 		If(clientv3.Compare(clientv3.CreateRevision(requestKey), "=", 0)).
@@ -101,9 +126,47 @@ func (s *Scheduler) SubmitJob(ctx context.Context, req job.JobSubmission) (strin
 		return s.SubmitJob(ctx, req)
 	}
 
-	log.Printf("Job %s successfully created and queued", jobID)
+	log.Printf("Job %s queued successfully", jobID)
 	return jobID, nil
 
+}
+
+// findBestGPUPlacement finds optimal GPU placement across workers
+func (s *Scheduler) findBestGPUPlacement(ctx context.Context, requiredGPUs int) (*gpu.PlacementCandidate, error) {
+	//	Get all worker topologies
+	resp, err := s.etcd.Get(ctx, "/topology/", clientv3.WithPrefix())
+	if err != nil {
+		return nil, err
+	}
+
+	var bestPlacement *gpu.PlacementCandidate
+	var bestScore float64 = -1
+
+	//	Try each worker
+	for _, kv := range resp.Kvs {
+		var topology gpu.Topology
+		if err := json.Unmarshal(kv.Value, &topology); err != nil {
+			continue
+		}
+
+		scorer := gpu.NewPlacementScorer(&topology)
+		placement, err := scorer.FindBestPlacement(requiredGPUs)
+		if err != nil {
+			continue
+		}
+
+		if placement.Score > bestScore {
+			bestScore = placement.Score
+			bestPlacement = placement
+			bestPlacement.Reasoning += fmt.Sprintf(" on worker %s", topology.WorkerID)
+		}
+	}
+
+	if bestPlacement == nil {
+		return nil, fmt.Errorf("no suitable GPU placement found")
+	}
+
+	return bestPlacement, nil
 }
 
 // GetJob retrieves job information by ID
