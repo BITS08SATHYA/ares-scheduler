@@ -15,7 +15,7 @@ func main() {
 	log.Println("Starting Ares Scheduler....")
 
 	//	Connect to etcd
-	scheduler, err := s.NewScheduler([]string{"localhost:2379"})
+	scheduler, err := s.NewScheduler([]string{"http://localhost:2379"})
 
 	if err != nil {
 		log.Fatalf("Failed to create a scheduler: %v", err)
