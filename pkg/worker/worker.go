@@ -21,6 +21,12 @@ type Worker struct {
 	topology    *gpu.Topology
 }
 
+// JobResult stores job execution outcome
+type JobResult struct {
+	Output   string
+	ExitCode int
+}
+
 // NewWorker creates a new Worker
 func NewWorker(workerID string, etcdEndpoints []string) (*Worker, error) {
 	cli, err := clientv3.New(clientv3.Config{
@@ -106,7 +112,16 @@ func (w *Worker) processNextJob(ctx context.Context) error {
 		return err
 	}
 
-	log.Printf("Worker %s: Found job %s (%s)", w.id, j.JobID, j.Name)
+	log.Printf("Worker %s: Found job %s (attempt %d/%d)", w.id, j.JobID, j.RetryCount+1, j.MaxRetries)
+
+	// Check if we should retry this job
+	if j.State == job.StateRetrying {
+		if time.Now().Before(j.NextRetryAt) {
+			//	Not yet time to retry
+			return nil
+		}
+		log.Printf("Worker %s: Retry delay elapsed, attempting job %s", w.id, j.JobID)
+	}
 
 	//	Acquire lease with fencing token
 	lease, err := w.leaseMgr.AcquireJobLease(ctx, j.JobID, 30)
@@ -118,8 +133,11 @@ func (w *Worker) processNextJob(ctx context.Context) error {
 
 	log.Printf("Worker %s: ACQUIRED LEASE (token=%d) for %s", w.id, lease.FencingToken, j.JobID)
 
+	j.RetryCount++
+	w.updateJobMetadata(ctx, j)
+
 	//	Transition from PENDING to RUNNING
-	if err := w.transitionState(ctx, j.JobID, job.StatePending, job.StateRunning); err != nil {
+	if err := w.transitionState(ctx, j.JobID, j.State, job.StateRunning); err != nil {
 		log.Printf("Worker %s: Failed to transition state: %v", w.id, err)
 		//w.leaseMgr.ReleaseLease(ctx, lease)
 		return err
@@ -135,7 +153,10 @@ func (w *Worker) processNextJob(ctx context.Context) error {
 	if err != nil {
 		log.Printf("Worker %s: Failed to start keepalive: %v", w.id, err)
 		//w.leaseMgr.ReleaseLease(ctx, lease)
-		w.transitionState(ctx, j.JobID, job.StateRunning, job.StateFailed)
+		//w.transitionState(ctx, j.JobID, job.StateRunning, job.StateFailed)
+
+		// handleJobFailure
+		w.handleJobFailure(ctx, j, lease, err)
 		return err
 	}
 
@@ -156,13 +177,15 @@ func (w *Worker) processNextJob(ctx context.Context) error {
 
 	// State transition: Running --> Succeeded/Failed
 	if execErr != nil {
-		log.Printf("Worker %s: Job Execution failed: %v", w.id, execErr)
-
-		//	Transition to Failed
-		w.transitionState(ctx, j.JobID, job.StateRunning, job.StateFailed)
-		log.Printf("Worker %s: Job %s -> FAILED", w.id, j.JobID)
-
-		return w.commitFailure(ctx, j.JobID, lease, execErr)
+		//log.Printf("Worker %s: Job Execution failed: %v", w.id, execErr)
+		//
+		////	Transition to Failed
+		//w.transitionState(ctx, j.JobID, job.StateRunning, job.StateFailed)
+		//log.Printf("Worker %s: Job %s -> FAILED", w.id, j.JobID)
+		//
+		//return w.commitFailure(ctx, j.JobID, lease, execErr)
+		//	 JOB Failed -- Check Retry Policy
+		return w.handleJobFailure(ctx, j, lease, execErr)
 	}
 
 	// Transition to SUCCEEDED
@@ -211,6 +234,51 @@ func (w *Worker) processNextJob(ctx context.Context) error {
 	//return nil
 }
 
+// handleJobFailure implements retry logic with exponential backoff
+func (w *Worker) handleJobFailure(ctx context.Context, j *job.Job, lease *lease.Lease, execErr error) error {
+	log.Printf("Worker %s: Job %s failed (attempt %d/%d): %v",
+		w.id, j.JobID, j.RetryCount, j.MaxRetries, execErr)
+
+	// Get retry policy
+	policy := j.RetryPolicy
+	if policy == nil {
+		policy = job.DefaultRetryPolicy()
+	}
+
+	// Should we retry?
+	if policy.ShouldRetry(j.RetryCount) {
+		//	YES - RETRY with BACKOFF
+		backoff := policy.CalculateBackoff(j.RetryCount)
+		nextRetryAt := time.Now().Add(backoff)
+
+		log.Printf("Worker %s: Scheduling retry for job %s in %v (attempt %d/%d)",
+			w.id, j.JobID, backoff.Round(time.Millisecond), j.RetryCount+1, j.MaxRetries)
+
+		//	Update Job Metadata
+		j.State = job.StateRetrying
+		j.NextRetryAt = nextRetryAt
+		j.LastFailure = execErr.Error()
+		w.updateJobMetadata(ctx, j)
+
+		//	Transition to RETRYING state
+		w.transitionState(ctx, j.JobID, job.StateRunning, job.StateRetrying)
+
+		//	Re-queue job for retry
+		queueKey := fmt.Sprintf("/queue/pending/%s", j.JobID)
+		w.etcd.Put(ctx, queueKey, j.JobID)
+
+		return nil
+
+	}
+
+	//	NO more retires -- PERMANENT FAILURE
+	log.Printf("Worker %s: Job %s exhausted retires (%d/%d) - marking as FAILED", w.id, j.JobID, j.RetryCount, j.MaxRetries)
+
+	w.transitionState(ctx, j.JobID, job.StateRunning, job.StateFailed)
+	return w.commitFailure(ctx, j.JobID, lease, execErr)
+
+}
+
 // executeJob runs the actual Job
 func (w *Worker) executeJob(ctx context.Context, j *job.Job, lease *lease.Lease) (*JobResult, error) {
 	log.Printf("Worker %s: Executing job %s", w.id, j.JobID)
@@ -229,7 +297,7 @@ func (w *Worker) executeJob(ctx context.Context, j *job.Job, lease *lease.Lease)
 
 		//	check fencing token every second
 		if err := w.leaseMgr.ValidateFencingToken(ctx, lease); err != nil {
-			return nil, fmt.Errorf("fencing validation failed: %w", err)
+			return nil, fmt.Errorf("fencing validation failed (Zombie detected): %w", err)
 		}
 
 		log.Printf("Worker %s: Progress %d/5 (token valid)", w.id, i+1)
@@ -241,11 +309,22 @@ func (w *Worker) executeJob(ctx context.Context, j *job.Job, lease *lease.Lease)
 	return result, nil
 }
 
+// updateJobMetadata
+func (w *Worker) updateJobMetadata(ctx context.Context, j *job.Job) error {
+	jobKey := fmt.Sprintf("/jobs/%s", j.JobID)
+	jobData, err := j.Serialize()
+	if err != nil {
+		return err
+	}
+	_, err = w.etcd.Put(ctx, jobKey, jobData)
+	return err
+}
+
 // commitSuccess write results with fencing token validation
 func (w *Worker) commitSuccess(ctx context.Context, jobID string, lease *lease.Lease, result *JobResult) error {
 	fencingKey := fmt.Sprintf("/fencing/%s", jobID)
 	resultKey := fmt.Sprintf("/results/%s", jobID)
-	stateKey := fmt.Sprintf("/state/%s", jobID)
+	//stateKey := fmt.Sprintf("/state/%s", jobID)
 	lockKey := fmt.Sprintf("/locks/%s", jobID)
 	queueKey := fmt.Sprintf("/queue/pending/%s", jobID)
 
@@ -254,14 +333,14 @@ func (w *Worker) commitSuccess(ctx context.Context, jobID string, lease *lease.L
 		If(clientv3.Compare(clientv3.Value(fencingKey), "=", fmt.Sprintf("%d", lease.FencingToken))).
 		Then(
 			clientv3.OpPut(resultKey, result.Output),
-			clientv3.OpPut(stateKey, string(job.StateSucceeded)),
+			//clientv3.OpPut(stateKey, string(job.StateSucceeded)),
 			clientv3.OpDelete(lockKey),
 			clientv3.OpDelete(fencingKey),
 			clientv3.OpDelete(queueKey),
 		)
 	txnResp, err := txn.Commit()
 	if err != nil {
-		return err
+		return fmt.Errorf("Commit transaction failed: %w", err)
 	}
 
 	if !txnResp.Succeeded {
@@ -269,7 +348,7 @@ func (w *Worker) commitSuccess(ctx context.Context, jobID string, lease *lease.L
 	}
 
 	//	Revoke lease
-	w.leaseMgr.ReleaseLease(ctx, lease)
+	//w.leaseMgr.ReleaseLease(ctx, lease)
 
 	return nil
 }
@@ -280,6 +359,7 @@ func (w *Worker) commitFailure(ctx context.Context, jobID string, lease *lease.L
 	errorKey := fmt.Sprintf("/errors/%s", jobID)
 	lockKey := fmt.Sprintf("/locks/%s", jobID)
 	fencingKey := fmt.Sprintf("/fencing/%s", jobID)
+	queueKey := fmt.Sprintf("/queue/pending/%s", jobID)
 
 	// Store error details
 	w.etcd.Put(ctx, errorKey, execErr.Error())
@@ -287,6 +367,7 @@ func (w *Worker) commitFailure(ctx context.Context, jobID string, lease *lease.L
 	// Clean Up
 	w.etcd.Delete(ctx, lockKey)
 	w.etcd.Delete(ctx, fencingKey)
+	w.etcd.Delete(ctx, queueKey)
 
 	return nil
 }
@@ -295,13 +376,19 @@ func (w *Worker) commitFailure(ctx context.Context, jobID string, lease *lease.L
 func (w *Worker) transitionState(ctx context.Context, jobID string, from, to job.JobState) error {
 	key := fmt.Sprintf("/state/%s", jobID)
 
+	// Allow transition from Retrying to Running (for retries)
+	if from == job.StateRetrying && to == job.StateRunning {
+		_, err := w.etcd.Put(ctx, key, string(to))
+		return err
+	}
+
 	txn := w.etcd.Txn(ctx).
 		If(clientv3.Compare(clientv3.Value(key), "=", string(from))).
 		Then(clientv3.OpPut(key, string(to)))
 
 	resp, err := txn.Commit()
 	if err != nil {
-		return err
+		return fmt.Errorf("transaction failed: %w", err)
 	}
 
 	if !resp.Succeeded {
@@ -336,12 +423,6 @@ func (w *Worker) getNextPendingJob(ctx context.Context) (*job.Job, error) {
 	}
 
 	return job.DeserializeJob(string(jobResp.Kvs[0].Value))
-}
-
-// JobResult stores job execution outcome
-type JobResult struct {
-	Output   string
-	ExitCode int
 }
 
 //

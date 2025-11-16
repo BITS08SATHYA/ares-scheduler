@@ -2,6 +2,7 @@ package job
 
 import (
 	"encoding/json"
+	"fmt"
 	"time"
 )
 
@@ -13,6 +14,7 @@ const (
 	StateRunning   JobState = "RUNNING"
 	StateSucceeded JobState = "SUCCEEDED"
 	StateFailed    JobState = "FAILED"
+	StateRetrying  JobState = "RETRYING" // Retry Scenario
 )
 
 // Job Represents a unit of work to be executed
@@ -38,6 +40,24 @@ type Job struct {
 
 	//	Exactly-Once tracking
 	ExecutionCount int `json:"execution_count"`
+
+	// Retry tracking
+	RetryCount  int          `json:"retry_count"`
+	MaxRetries  int          `json:"max_retries"`
+	LastFailure string       `json:"last_failure,omitempty"`
+	NextRetryAt time.Time    `json:"next_retry_at,omitempty"`
+	RetryPolicy *RetryPolicy `json:"retry_policy,omitempty"`
+}
+
+// JobSubmission represents a clients' job submission request
+type JobSubmission struct {
+	RequestID  string   `json:"request_id"`
+	Name       string   `json:"name"`
+	Image      string   `json:"image"`
+	Command    []string `json:"command"`
+	CPUs       int      `json:"cpus"`
+	GPUs       int      `json:"gpus"`
+	MaxRetries int      `json:"max_retries,omitempty"`
 }
 
 // Serialize converts Job to JSON string
@@ -49,22 +69,11 @@ func (j *Job) Serialize() (string, error) {
 	return string(data), nil
 }
 
-// Deserialization converts JSON string back to Job
+// DeserializeJob converts JSON string back to Job
 func DeserializeJob(data string) (*Job, error) {
-	var job Job
-	err := json.Unmarshal([]byte(data), &job)
-	if err != nil {
-		return nil, err
+	var j Job
+	if err := json.Unmarshal([]byte(data), &j); err != nil {
+		return nil, fmt.Errorf("failed to deserialize job: %w", err)
 	}
-	return &job, nil
-}
-
-// JobSubmission represents a clients' job submission request
-type JobSubmission struct {
-	RequestID string   `json:"request_id"`
-	Name      string   `json:"name"`
-	Image     string   `json:"image"`
-	Command   []string `json:"command"`
-	CPUs      int      `json:"cpus"`
-	GPUs      int      `json:"gpus"`
+	return &j, nil
 }
