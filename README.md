@@ -10,9 +10,6 @@ A distributed, multi-cluster Kubernetes scheduler with exactly-once job executio
 - Multi-Cluster Scheduling
 - Observability Dashboard
 
-### Today's
-Basic Job Queue + request ID deduplication
-
 ## Architecture
 
 (Writing Soon)
