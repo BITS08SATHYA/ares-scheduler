@@ -64,7 +64,13 @@ func (s *Scheduler) SubmitJob(ctx context.Context, req job.JobSubmission) (strin
 	jobID := uuid.New().String()
 	log.Printf("Creating new job with ID: %s", jobID)
 
-	//	Step 3: Create job Object
+	// Set retry Configuration
+	maxRetries := req.MaxRetries
+	if maxRetries == 0 {
+		maxRetries = 3 // Default retries
+	}
+
+	//	Step 3: Create job Object with retry policy
 	newJob := &job.Job{
 		JobID:          jobID,
 		Name:           req.Name,
@@ -76,6 +82,9 @@ func (s *Scheduler) SubmitJob(ctx context.Context, req job.JobSubmission) (strin
 		State:          job.StatePending,
 		CreatedAt:      time.Now(),
 		ExecutionCount: 0,
+		RetryCount:     0,
+		MaxRetries:     maxRetries,
+		RetryPolicy:    job.DefaultRetryPolicy(),
 	}
 
 	jobData, err := newJob.Serialize()

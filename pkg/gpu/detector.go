@@ -54,7 +54,7 @@ func (d *Detector) DetectGPUs(ctx context.Context) ([]*GPU, error) {
 		"--format=csv,noheader,nounits",
 	)
 
-	output, err := cmd.Output()
+	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("nvidia-smi failed: %w", err)
 	}
