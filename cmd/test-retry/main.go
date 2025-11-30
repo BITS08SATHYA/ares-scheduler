@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
-	"github.com/BITS08SATHYA/ares-scheduler/pkg/job"
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/job/to_delete"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler"
 	"log"
 	"strings"
@@ -17,7 +17,7 @@ func main() {
 
 	//	Test-1: Retry Policy Calculations
 	log.Println("\n Test 1: Retry Policy Calculations")
-	policy := job.DefaultRetryPolicy()
+	policy := to_delete.DefaultRetryPolicy()
 
 	log.Printf("Configurations:")
 	log.Printf(" Max Retries: %d", policy.MaxRetries)
@@ -53,7 +53,7 @@ func main() {
 
 	ctx := context.Background()
 
-	jobID, err := sched.SubmitJob(ctx, job.JobSubmission{
+	jobID, err := sched.SubmitJob(ctx, to_delete.JobSubmission{
 		RequestID:  fmt.Sprintf("retry-test-%d", time.Now().Unix()),
 		Name:       "test-retry-job",
 		Image:      "alpine:latest",

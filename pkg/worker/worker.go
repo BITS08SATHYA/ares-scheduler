@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/gpu"
-	"github.com/BITS08SATHYA/ares-scheduler/pkg/job"
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/job/to_delete"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/lease"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"log"
@@ -115,7 +115,7 @@ func (w *Worker) processNextJob(ctx context.Context) error {
 	log.Printf("Worker %s: Found job %s (attempt %d/%d)", w.id, j.JobID, j.RetryCount+1, j.MaxRetries)
 
 	// Check if we should retry this job
-	if j.State == job.StateRetrying {
+	if j.State == to_delete.StateRetrying {
 		if time.Now().Before(j.NextRetryAt) {
 			//	Not yet time to retry
 			return nil
@@ -137,7 +137,7 @@ func (w *Worker) processNextJob(ctx context.Context) error {
 	w.updateJobMetadata(ctx, j)
 
 	//	Transition from PENDING to RUNNING
-	if err := w.transitionState(ctx, j.JobID, j.State, job.StateRunning); err != nil {
+	if err := w.transitionState(ctx, j.JobID, j.State, to_delete.StateRunning); err != nil {
 		log.Printf("Worker %s: Failed to transition state: %v", w.id, err)
 		//w.leaseMgr.ReleaseLease(ctx, lease)
 		return err
@@ -189,7 +189,7 @@ func (w *Worker) processNextJob(ctx context.Context) error {
 	}
 
 	// Transition to SUCCEEDED
-	if err := w.transitionState(ctx, j.JobID, job.StateRunning, job.StateSucceeded); err != nil {
+	if err := w.transitionState(ctx, j.JobID, to_delete.StateRunning, to_delete.StateSucceeded); err != nil {
 		log.Printf("Worker %s: Failed to transition to Succeeded: %v", w.id, err)
 		return err
 	}
@@ -235,14 +235,14 @@ func (w *Worker) processNextJob(ctx context.Context) error {
 }
 
 // handleJobFailure implements retry logic with exponential backoff
-func (w *Worker) handleJobFailure(ctx context.Context, j *job.Job, lease *lease.Lease, execErr error) error {
+func (w *Worker) handleJobFailure(ctx context.Context, j *to_delete.Job, lease *lease.Lease, execErr error) error {
 	log.Printf("Worker %s: Job %s failed (attempt %d/%d): %v",
 		w.id, j.JobID, j.RetryCount, j.MaxRetries, execErr)
 
 	// Get retry policy
 	policy := j.RetryPolicy
 	if policy == nil {
-		policy = job.DefaultRetryPolicy()
+		policy = to_delete.DefaultRetryPolicy()
 	}
 
 	// Should we retry?
@@ -255,13 +255,13 @@ func (w *Worker) handleJobFailure(ctx context.Context, j *job.Job, lease *lease.
 			w.id, j.JobID, backoff.Round(time.Millisecond), j.RetryCount+1, j.MaxRetries)
 
 		//	Update Job Metadata
-		j.State = job.StateRetrying
+		j.State = to_delete.StateRetrying
 		j.NextRetryAt = nextRetryAt
 		j.LastFailure = execErr.Error()
 		w.updateJobMetadata(ctx, j)
 
 		//	Transition to RETRYING state
-		w.transitionState(ctx, j.JobID, job.StateRunning, job.StateRetrying)
+		w.transitionState(ctx, j.JobID, to_delete.StateRunning, to_delete.StateRetrying)
 
 		//	Re-queue job for retry
 		queueKey := fmt.Sprintf("/queue/pending/%s", j.JobID)
@@ -274,13 +274,13 @@ func (w *Worker) handleJobFailure(ctx context.Context, j *job.Job, lease *lease.
 	//	NO more retires -- PERMANENT FAILURE
 	log.Printf("Worker %s: Job %s exhausted retires (%d/%d) - marking as FAILED", w.id, j.JobID, j.RetryCount, j.MaxRetries)
 
-	w.transitionState(ctx, j.JobID, job.StateRunning, job.StateFailed)
+	w.transitionState(ctx, j.JobID, to_delete.StateRunning, to_delete.StateFailed)
 	return w.commitFailure(ctx, j.JobID, lease, execErr)
 
 }
 
 // executeJob runs the actual Job
-func (w *Worker) executeJob(ctx context.Context, j *job.Job, lease *lease.Lease) (*JobResult, error) {
+func (w *Worker) executeJob(ctx context.Context, j *to_delete.Job, lease *lease.Lease) (*JobResult, error) {
 	log.Printf("Worker %s: Executing job %s", w.id, j.JobID)
 	log.Printf("Image: %s", j.Image)
 	log.Printf("Command: %v", j.Command)
@@ -310,7 +310,7 @@ func (w *Worker) executeJob(ctx context.Context, j *job.Job, lease *lease.Lease)
 }
 
 // updateJobMetadata
-func (w *Worker) updateJobMetadata(ctx context.Context, j *job.Job) error {
+func (w *Worker) updateJobMetadata(ctx context.Context, j *to_delete.Job) error {
 	jobKey := fmt.Sprintf("/jobs/%s", j.JobID)
 	jobData, err := j.Serialize()
 	if err != nil {
@@ -373,11 +373,11 @@ func (w *Worker) commitFailure(ctx context.Context, jobID string, lease *lease.L
 }
 
 // transitionState atomically changes job state
-func (w *Worker) transitionState(ctx context.Context, jobID string, from, to job.JobState) error {
+func (w *Worker) transitionState(ctx context.Context, jobID string, from, to to_delete.JobState) error {
 	key := fmt.Sprintf("/state/%s", jobID)
 
 	// Allow transition from Retrying to Running (for retries)
-	if from == job.StateRetrying && to == job.StateRunning {
+	if from == to_delete.StateRetrying && to == to_delete.StateRunning {
 		_, err := w.etcd.Put(ctx, key, string(to))
 		return err
 	}
@@ -397,7 +397,7 @@ func (w *Worker) transitionState(ctx context.Context, jobID string, from, to job
 	return nil
 }
 
-func (w *Worker) getNextPendingJob(ctx context.Context) (*job.Job, error) {
+func (w *Worker) getNextPendingJob(ctx context.Context) (*to_delete.Job, error) {
 	resp, err := w.etcd.Get(ctx, "/queue/pending/",
 		clientv3.WithPrefix(),
 		clientv3.WithLimit(1),
@@ -422,7 +422,7 @@ func (w *Worker) getNextPendingJob(ctx context.Context) (*job.Job, error) {
 		return nil, fmt.Errorf("job not found: %s", jobID)
 	}
 
-	return job.DeserializeJob(string(jobResp.Kvs[0].Value))
+	return to_delete.DeserializeJob(string(jobResp.Kvs[0].Value))
 }
 
 //

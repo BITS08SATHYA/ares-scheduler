@@ -1,304 +1,292 @@
+// Layer 2: Redis client wrapper (depends on types, logger)
 package storage
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/logger"
 	"github.com/redis/go-redis/v9"
-	clientv3 "go.etcd.io/etcd/client/v3"
 	"time"
 )
 
-// Client provides unified access to etcd and Redis
-type Client struct {
-	etcd  *clientv3.Client
-	redis *redis.Client
+// RedisClient: Wrapper around redis client
+type RedisClient struct {
+	cli *redis.Client
+	log *logger.Logger
 }
 
-// NewClient creates a new storage client
-func NewClient(etcdEndpoints []string, redisAddr string) (*Client, error) {
-	//	Connect to etcd
-	etcdClient, err := clientv3.New(clientv3.Config{
-		Endpoints:   etcdEndpoints,
-		DialTimeout: 5 * time.Second,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to connect to etcd: %w", err)
-	}
-
-	//	Connect to Redis
-	redisClient := redis.NewClient(&redis.Options{
-		Addr:        redisAddr,
-		MaxRetries:  3,
-		PoolSize:    10,
-		ReadTimeout: 3 * time.Second,
+// NewRedisClient: Create a new Redis client
+func NewRedisClient(addr, password string, db int) (*RedisClient, error) {
+	cli := redis.NewClient(&redis.Options{
+		Addr:     addr,
+		Password: password,
+		DB:       db,
 	})
 
-	//	Test Redis Connection
-	if err := redisClient.Ping(context.Background()).Err(); err != nil {
-		return nil, fmt.Errorf("Failed to connect to redis: %w", err)
-	}
+	// Test connection
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
-	return &Client{
-		etcd:  etcdClient,
-		redis: redisClient,
-	}, nil
-
-}
-
-// Close closes all connections
-func (c *Client) Close() error {
-
-	redisErr := c.redis.Close()
-	etcdErr := c.etcd.Close()
-	if redisErr != nil {
-		return redisErr
-	}
-	return etcdErr
-}
-
-// ETCD Operations: Strong Consistency
-// PutEtcd writes a value to etcd
-// Use for: Job state, configuration, permanent records
-func (c *Client) PutEtcd(ctx context.Context, key string, value interface{}) error {
-	data, err := json.Marshal(value)
+	err := cli.Ping(ctx).Err()
 	if err != nil {
-		return err
-	}
-
-	_, err = c.etcd.Put(ctx, key, string(data))
-	return err
-}
-
-// GetEtcd reads a value from etcd
-func (c *Client) GetEtcd(ctx context.Context, key string, result interface{}) error {
-	resp, err := c.etcd.Get(ctx, key)
-	if err != nil {
-		return err
-	}
-
-	if len(resp.Kvs) == 0 {
-		return fmt.Errorf("Key not found: %s", key)
-	}
-
-	return json.Unmarshal(resp.Kvs[0].Value, result)
-}
-
-// DeleteEtcd deletes a key from etcd
-func (c *Client) DeleteEtcd(ctx context.Context, key string) error {
-	_, err := c.etcd.Delete(ctx, key)
-	return err
-}
-
-// GetEtcdWithPrefix gets all keys matching prefix
-func (c *Client) GetEtcdWithPrefix(ctx context.Context, prefix string) (map[string]string, error) {
-	resp, err := c.etcd.Get(ctx, prefix, clientv3.WithPrefix())
-	if err != nil {
+		logger.Error("Failed to connect to Redis at %s: %v", addr, err)
 		return nil, err
 	}
 
-	result := make(map[string]string)
-	for _, kv := range resp.Kvs {
-		result[string(kv.Key)] = string(kv.Value)
+	logger.Info("Connected to Redis at %s", addr)
+
+	return &RedisClient{
+		cli: cli,
+		log: logger.Get(),
+	}, nil
+}
+
+// Close: Close Redis connection
+func (rc *RedisClient) Close() error {
+	return rc.cli.Close()
+}
+
+// Set: Store a string value
+func (rc *RedisClient) Set(ctx context.Context, key string, value interface{}, ttl time.Duration) error {
+	err := rc.cli.Set(ctx, key, value, ttl).Err()
+	if err != nil {
+		rc.log.Error("Failed to set key %s: %v", key, err)
+		return err
+	}
+	rc.log.Debug("Set key: %s (TTL: %v)", key, ttl)
+	return nil
+}
+
+// Get: Retrieve a string value
+func (rc *RedisClient) Get(ctx context.Context, key string) (string, error) {
+	val, err := rc.cli.Get(ctx, key).Result()
+	if err == redis.Nil {
+		rc.log.Debug("Key not found: %s", key)
+		return "", nil
+	}
+	if err != nil {
+		rc.log.Error("Failed to get key %s: %v", key, err)
+		return "", err
+	}
+	rc.log.Debug("Got key: %s", key)
+	return val, nil
+}
+
+// Del: Delete one or more keys
+func (rc *RedisClient) Del(ctx context.Context, keys ...string) error {
+	err := rc.cli.Del(ctx, keys...).Err()
+	if err != nil {
+		rc.log.Error("Failed to delete keys: %v", err)
+		return err
+	}
+	rc.log.Debug("Deleted %d keys", len(keys))
+	return nil
+}
+
+// Exists: Check if key exists
+func (rc *RedisClient) Exists(ctx context.Context, key string) (bool, error) {
+	count, err := rc.cli.Exists(ctx, key).Result()
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+// ============================================================================
+// SORTED SET OPERATIONS (For priority queue - Feature 21)
+// ============================================================================
+
+// ZAdd: Add member to sorted set with score
+// Lower score = higher priority in queue
+// Score format: -priority + (timestamp/1e10)
+// Example: Job with priority 10 at time 1000 → score = -10 + 1e-7 = -9.99999999
+func (rc *RedisClient) ZAdd(ctx context.Context, key string, member string, score float64) error {
+	err := rc.cli.ZAdd(ctx, key, redis.Z{
+		Score:  score,
+		Member: member,
+	}).Err()
+	if err != nil {
+		rc.log.Error("Failed to zadd %s: %v", key, err)
+		return err
+	}
+	rc.log.Debug("Added to sorted set %s: %s (score: %f)", key, member, score)
+	return nil
+}
+
+// ZPopMin: Pop member with minimum score (atomic dequeue)
+// Returns: member, score, error
+// Used for: Dequeue next job from priority queue
+func (rc *RedisClient) ZPopMin(ctx context.Context, key string, count int) (map[string]float64, error) {
+	results, err := rc.cli.ZPopMin(ctx, key, int64(count)).Result()
+	if err != nil {
+		rc.log.Error("Failed to zpopmin %s: %v", key, err)
+		return nil, err
 	}
 
+	result := make(map[string]float64)
+	for _, z := range results {
+		result[z.Member.(string)] = z.Score
+	}
+	rc.log.Debug("Popped %d members from sorted set %s", len(result), key)
 	return result, nil
 }
 
-// REDIS OPERATIONS: Fast Cache & Queues
-// SetRedis sets a key with optional TTL
-// Use for: Caches, temporary state, hot data
-func (c *Client) setRedis(ctx context.Context, key string, value interface{}, ttl time.Duration) error {
-	data, err := json.Marshal(value)
+// ZRange: Get members by index range
+func (rc *RedisClient) ZRange(ctx context.Context, key string, start, stop int) ([]string, error) {
+	results, err := rc.cli.ZRange(ctx, key, int64(start), int64(stop)).Result()
+	if err != nil {
+		rc.log.Error("Failed to zrange %s: %v", key, err)
+		return nil, err
+	}
+	rc.log.Debug("Got %d members from sorted set %s", len(results), key)
+	return results, nil
+}
+
+// ZCard: Get number of members in sorted set
+func (rc *RedisClient) ZCard(ctx context.Context, key string) (int, error) {
+	count, err := rc.cli.ZCard(ctx, key).Result()
+	if err != nil {
+		return 0, err
+	}
+	return int(count), nil
+}
+
+// ZRem: Remove member from sorted set
+func (rc *RedisClient) ZRem(ctx context.Context, key string, members ...string) error {
+	err := rc.cli.ZRem(ctx, key, members).Err()
 	if err != nil {
 		return err
 	}
-	return c.redis.Set(ctx, key, data, ttl).Err()
+	rc.log.Debug("Removed %d members from sorted set %s", len(members), key)
+	return nil
 }
 
-// GetRedis gets a value from Redis
-func (c *Client) GetRedis(ctx context.Context, key string, result interface{}) error {
-	val, err := c.redis.Get(ctx, key).Result()
-	if err == redis.Nil {
-		return fmt.Errorf("Key not found: %s", key)
-	}
+// ============================================================================
+// HASH OPERATIONS (For job details storage)
+// ============================================================================
+
+// HSet: Set hash field value
+// Example: HSet("job:123", "status", "RUNNING")
+func (rc *RedisClient) HSet(ctx context.Context, key string, field string, value interface{}) error {
+	err := rc.cli.HSet(ctx, key, field, value).Err()
 	if err != nil {
+		rc.log.Error("Failed to hset %s:%s: %v", key, field, err)
 		return err
 	}
-	return json.Unmarshal([]byte(val), result)
+	rc.log.Debug("Set hash field: %s:%s", key, field)
+	return nil
 }
 
-// DeleteRedis deletes a key from Redis
-func (c *Client) DeleteRedis(ctx context.Context, key string) error {
-	return c.redis.Del(ctx, key).Err()
-}
-
-// ExistsRedis checks if a key exists in Redis
-func (c *Client) ExistsRedis(ctx context.Context, key string) (bool, error) {
-	n, err := c.redis.Exists(ctx, key).Result()
-	return n > 0, err
-}
-
-// Queue Operations: Redis Streams/Lists
-// PushQueue adds items to a queue (list)
-// Use for: Job Queues, taks lists
-func (c *Client) PushQueue(ctx context.Context, queueName string, items ...string) error {
-	if len(items) == 0 {
-		return nil
-	}
-	//	LPUSH = push to left (head)
-	return c.redis.LPush(ctx, queueName, items).Err()
-}
-
-// PopQueue removes item from queue
-// Use for: Worker pops job to execute
-func (c *Client) PopQueue(ctx context.Context, queueName string, timeout time.Duration) (string, error) {
-	//	BRPOP = blocking right pop (tail)
-	result, err := c.redis.BRPop(ctx, timeout, queueName).Result()
+// HGet: Get hash field value
+func (rc *RedisClient) HGet(ctx context.Context, key string, field string) (string, error) {
+	val, err := rc.cli.HGet(ctx, key, field).Result()
 	if err == redis.Nil {
-		return "", fmt.Errorf("quque empty: %s", queueName)
+		return "", nil
+	}
+	if err != nil {
+		rc.log.Error("Failed to hget %s:%s: %v", key, field, err)
+		return "", err
+	}
+	return val, nil
+}
+
+// HGetAll: Get all fields and values from hash
+func (rc *RedisClient) HGetAll(ctx context.Context, key string) (map[string]string, error) {
+	vals, err := rc.cli.HGetAll(ctx, key).Result()
+	if err != nil {
+		rc.log.Error("Failed to hgetall %s: %v", key, err)
+		return nil, err
+	}
+	return vals, nil
+}
+
+// ============================================================================
+// ATOMIC OPERATIONS (Feature 6 - Layer 1: Idempotency)
+// ============================================================================
+
+// SetNX: Set if not exists (atomic)
+// Used for: Request ID deduplication
+// Returns: true if set, false if already existed
+func (rc *RedisClient) SetNX(ctx context.Context, key string, value interface{}, ttl time.Duration) (bool, error) {
+	ok, err := rc.cli.SetNX(ctx, key, value, ttl).Result()
+	if err != nil {
+		rc.log.Error("Failed to setnx %s: %v", key, err)
+		return false, err
+	}
+	rc.log.Debug("SetNX on key %s: success=%v", key, ok)
+	return ok, nil
+}
+
+// GetSet: Atomic get-and-set
+// Returns previous value
+func (rc *RedisClient) GetSet(ctx context.Context, key string, value interface{}) (string, error) {
+	val, err := rc.cli.GetSet(ctx, key, value).Result()
+	if err == redis.Nil {
+		return "", nil
 	}
 	if err != nil {
 		return "", err
 	}
-
-	//	Result is [queueName, value]
-	if len(result) < 2 {
-		return "", fmt.Errorf("invalid pop result")
-	}
-	return result[1], nil
+	return val, nil
 }
 
-// QueueLen returns the length of a queue
-func (c *Client) QueueLen(ctx context.Context, queueName string) (int64, error) {
-	return c.redis.LLen(ctx, queueName).Result()
-}
-
-// SORTED SET Operations: Retry/BackOff Queues
-// AddToSortedSet adds item to sorted set with score
-// Use for: Retry queues with backoff timing
-func (c *Client) AddToSortedSet(ctx context.Context, key string, score float64, member string) error {
-	return c.redis.ZAdd(ctx, key, &redis.Z{Score: score, Member: member}).Err()
-}
-
-// GetFromSortedSet gets items from sorted set by score range
-func (c *Client) GetFromSortedSet(ctx context.Context, key string, minScore, maxScore float64) ([]string, error) {
-	return c.redis.ZRangeByScore(ctx, key, &redis.ZRangeBy{
-		Min: fmt.Sprintf("%f", minScore),
-		Max: fmt.Sprintf("%f", maxScore),
-	}).Result()
-}
-
-// RemoveFromSortedSet removes item from sorted set
-func (c *Client) RemoveFromSortedSet(ctx context.Context, key string, member string) error {
-	return c.redis.ZRem(ctx, key, member).Err()
-}
-
-// Distributed Locking: Leases
-// AcquireLease acquires a distributed lock
-// Use for: Ensuring only one scheduler runs
-func (c *Client) AcquireLease(ctx context.Context, name string, ttl time.Duration) (clientv3.LeaseID, error) {
-	//	Create Lease
-	grant, err := c.etcd.Grant(ctx, int64(ttl.Seconds()))
+// Incr: Increment integer value (atomic)
+func (rc *RedisClient) Incr(ctx context.Context, key string) (int64, error) {
+	val, err := rc.cli.Incr(ctx, key).Result()
 	if err != nil {
+		rc.log.Error("Failed to incr %s: %v", key, err)
 		return 0, err
 	}
+	return val, nil
+}
 
-	//	Create key with lease
-	_, err = c.etcd.Put(ctx, fmt.Sprintf("/ares/leases/%s", name), "held", clientv3.WithLease(grant.ID))
+// ============================================================================
+// KEY PATTERN OPERATIONS
+// ============================================================================
+
+// Keys: Get all keys matching pattern
+func (rc *RedisClient) Keys(ctx context.Context, pattern string) ([]string, error) {
+	keys, err := rc.cli.Keys(ctx, pattern).Result()
 	if err != nil {
-		return 0, err
+		rc.log.Error("Failed to get keys with pattern %s: %v", pattern, err)
+		return nil, err
 	}
-
-	return grant.ID, nil
+	rc.log.Debug("Found %d keys matching pattern %s", len(keys), pattern)
+	return keys, nil
 }
 
-// KeepAliveLease renews a lease
-func (c *Client) KeepAliveLease(ctx context.Context, leaseID clientv3.LeaseID) error {
-	_, err := c.etcd.KeepAliveOnce(ctx, leaseID)
-	return err
-}
-
-// ReleaseLease releases a lease
-func (c *Client) ReleaseLease(ctx context.Context, leaseID clientv3.LeaseID) error {
-	_, err := c.etcd.Revoke(ctx, leaseID)
-	return err
-}
-
-// DeDuplication: Request Tracking
-// SetIfNotExists sets a key only if it doesn't exist (atomic)
-// Use for: Request Deduplication
-func (c *Client) setIfNotExists(ctx context.Context, key string, value string, ttl time.Duration) (bool, error) {
-	//	SET With NX Option = set if not exists
-	result, err := c.redis.SetNX(ctx, key, value, ttl).Result()
-	return result, err
-}
-
-// GetOrSet get existing value or sets new one (atomic)
-func (c *Client) GetOrSet(ctx context.Context, key string, value string, ttl time.Duration) (string, bool, error) {
-	//	Try or Set
-	exists, err := c.setIfNotExists(ctx, key, value, ttl)
+// DeleteWithPattern: Delete all keys matching pattern
+func (rc *RedisClient) DeleteWithPattern(ctx context.Context, pattern string) error {
+	keys, err := rc.Keys(ctx, pattern)
 	if err != nil {
-		return "", false, err
+		return err
 	}
 
-	if exists {
-		//	We set it (was new)
-		return value, true, nil
+	if len(keys) == 0 {
+		return nil
 	}
 
-	// It already existed, get the value
-	retrieved, err := c.redis.Get(ctx, key).Result()
+	return rc.Del(ctx, keys...)
+}
+
+// ============================================================================
+// EXPIRATION OPERATIONS
+// ============================================================================
+
+// Expire: Set key expiration time
+func (rc *RedisClient) Expire(ctx context.Context, key string, ttl time.Duration) error {
+	err := rc.cli.Expire(ctx, key, ttl).Err()
 	if err != nil {
-		return "", false, err
+		return err
 	}
-
-	//	Return existing value
-	return retrieved, false, nil
-
-}
-
-// Metrics & Counters
-// IncrCounter increments a counter
-// Use for: Metrics (jobs submitted, jobs completed, etc)
-func (c *Client) IncrCounter(ctx context.Context, key string) (int64, error) {
-	return c.redis.Incr(ctx, key).Result()
-}
-
-// GetCounter gets a counter value
-func (c *Client) GetCounter(ctx context.Context, key string) (int64, error) {
-	n, err := c.redis.Get(ctx, key).Int64()
-	if err == redis.Nil {
-		return 0, nil
-	}
-	return n, err
-}
-
-// HELPER: Choose storage by key pattern
-// StoreState stores state with appropriate persistence
-// Automatically chooses etcd for critical state, Redis for cache
-func (c *Client) StoreState(ctx context.Context, key string, value interface{}, ttl time.Duration) error {
-	//	 Determine which storage to use based on key prefix
-	switch {
-	case len(key) > 0 && key[0] == '/': // etcd-style key (e.g., /ares/jobs/123)
-		return c.PutEtcd(ctx, key, value)
-	default:
-		return c.setRedis(ctx, key, value, ttl)
-	}
-}
-
-// Health Check
-// HealthCheck checks both storage systems
-func (c *Client) HealthCheck(ctx context.Context) error {
-	//	Check etcd
-	if _, err := c.etcd.Get(ctx, "health"); err != nil {
-		return fmt.Errorf("etcd health check failed: %w", err)
-	}
-
-	//	Check Redis
-	if err := c.redis.Ping(ctx).Err(); err != nil {
-		return fmt.Errorf("redis health check failed: %w", err)
-	}
-
+	rc.log.Debug("Set expiration on key %s: %v", key, ttl)
 	return nil
+}
+
+// TTL: Get remaining time to live
+func (rc *RedisClient) TTL(ctx context.Context, key string) (time.Duration, error) {
+	ttl, err := rc.cli.TTL(ctx, key).Result()
+	if err != nil {
+		return 0, err
+	}
+	return ttl, nil
 }

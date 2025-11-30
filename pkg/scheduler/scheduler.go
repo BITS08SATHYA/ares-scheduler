@@ -5,13 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/gpu"
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/job/to_delete"
 	"github.com/google/uuid"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"log"
 	"time"
-
-	// Import your job package
-	"github.com/BITS08SATHYA/ares-scheduler/pkg/job"
 )
 
 // Scheduler orchestrates job submission and execution
@@ -41,7 +39,7 @@ func (s *Scheduler) Close() error {
 }
 
 // SubmitJob submits a new Job with idempotency guarantee and GPU-aware scheduling
-func (s *Scheduler) SubmitJob(ctx context.Context, req job.JobSubmission) (string, error) {
+func (s *Scheduler) SubmitJob(ctx context.Context, req to_delete.JobSubmission) (string, error) {
 	log.Printf("Submitting Job: %s (RequestID: %s)", req.Name, req.RequestID)
 
 	// Step 1: Check if this request was already processed (idempotency)
@@ -71,7 +69,7 @@ func (s *Scheduler) SubmitJob(ctx context.Context, req job.JobSubmission) (strin
 	}
 
 	//	Step 3: Create job Object with retry policy
-	newJob := &job.Job{
+	newJob := &to_delete.Job{
 		JobID:          jobID,
 		Name:           req.Name,
 		RequestID:      req.RequestID,
@@ -79,12 +77,12 @@ func (s *Scheduler) SubmitJob(ctx context.Context, req job.JobSubmission) (strin
 		Command:        req.Command,
 		CPUs:           req.CPUs,
 		GPUs:           req.GPUs,
-		State:          job.StatePending,
+		State:          to_delete.StatePending,
 		CreatedAt:      time.Now(),
 		ExecutionCount: 0,
 		RetryCount:     0,
 		MaxRetries:     maxRetries,
-		RetryPolicy:    job.DefaultRetryPolicy(),
+		RetryPolicy:    to_delete.DefaultRetryPolicy(),
 	}
 
 	jobData, err := newJob.Serialize()
@@ -122,7 +120,7 @@ func (s *Scheduler) SubmitJob(ctx context.Context, req job.JobSubmission) (strin
 			clientv3.OpPut(requestKey, jobID),
 			clientv3.OpPut(fmt.Sprintf("/jobs/%s", jobID), jobData),
 			clientv3.OpPut(fmt.Sprintf("/queue/pending/%s", jobID), jobID),
-			clientv3.OpPut(fmt.Sprintf("/state/%s", jobID), string(job.StatePending)),
+			clientv3.OpPut(fmt.Sprintf("/state/%s", jobID), string(to_delete.StatePending)),
 		)
 
 	txnResp, err := txn.Commit()
@@ -179,7 +177,7 @@ func (s *Scheduler) findBestGPUPlacement(ctx context.Context, requiredGPUs int) 
 }
 
 // GetJob retrieves job information by ID
-func (s *Scheduler) GetJob(ctx context.Context, jobID string) (*job.Job, error) {
+func (s *Scheduler) GetJob(ctx context.Context, jobID string) (*to_delete.Job, error) {
 	key := fmt.Sprintf("/jobs/%s", jobID)
 	resp, err := s.etcd.Get(ctx, key)
 	if err != nil {
@@ -188,16 +186,16 @@ func (s *Scheduler) GetJob(ctx context.Context, jobID string) (*job.Job, error) 
 	if len(resp.Kvs) == 0 {
 		return nil, fmt.Errorf("job not found: %s", jobID)
 	}
-	return job.DeserializeJob(string(resp.Kvs[0].Value))
+	return to_delete.DeserializeJob(string(resp.Kvs[0].Value))
 }
 
 // ListPendingJobs -- lists all jobs in the pending queue
-func (s *Scheduler) ListPendingJobs(ctx context.Context) ([]*job.Job, error) {
+func (s *Scheduler) ListPendingJobs(ctx context.Context) ([]*to_delete.Job, error) {
 	resp, err := s.etcd.Get(ctx, "/queue/pending/", clientv3.WithPrefix())
 	if err != nil {
 		return nil, fmt.Errorf("Failed to list pending jobs: %w", err)
 	}
-	var jobs []*job.Job
+	var jobs []*to_delete.Job
 	for _, kv := range resp.Kvs {
 		jobID := string(kv.Value)
 		j, err := s.GetJob(ctx, jobID)

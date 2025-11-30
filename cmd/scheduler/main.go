@@ -3,10 +3,10 @@ package main
 import (
 	"context"
 	"fmt"
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/job/to_delete"
 	"log"
 	"time"
 
-	"github.com/BITS08SATHYA/ares-scheduler/pkg/job"
 	s "github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler"
 )
 
@@ -29,7 +29,7 @@ func main() {
 
 	//	Test 1: Submit first job
 	log.Println("\n--- Test 1: Submit First Job ---")
-	job1ID, err := scheduler.SubmitJob(ctx, job.JobSubmission{
+	job1ID, err := scheduler.SubmitJob(ctx, to_delete.JobSubmission{
 		RequestID: "req-001",
 		Name:      "ml-traning-v1",
 		Image:     "pytorch:2.0",
@@ -44,7 +44,7 @@ func main() {
 	log.Printf("Job Submitted: %s", job1ID)
 
 	//	Test 2: Submit duplicated request (testing idempotency)
-	job1IDRetry, err := scheduler.SubmitJob(ctx, job.JobSubmission{
+	job1IDRetry, err := scheduler.SubmitJob(ctx, to_delete.JobSubmission{
 		RequestID: "req-001", // Same RequestID!
 		Name:      "ml-training-v1-retry",
 		Image:     "pytorch:2.0",
@@ -65,7 +65,7 @@ func main() {
 
 	//	Test 3: Submit Second unique job
 	log.Println("\n--- Test 3: Submit Second Unique Job ---")
-	job2ID, err := scheduler.SubmitJob(ctx, job.JobSubmission{
+	job2ID, err := scheduler.SubmitJob(ctx, to_delete.JobSubmission{
 		RequestID: "req-002",
 		Name:      "data-pipeline-v1",
 		Image:     "python:3.11",

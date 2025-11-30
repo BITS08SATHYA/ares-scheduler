@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
-	"github.com/BITS08SATHYA/ares-scheduler/pkg/job"
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/job/to_delete"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"log"
@@ -40,7 +40,7 @@ func main() {
 
 	//	Submit a job
 	log.Println("\n Submitting job with retry policy")
-	jobID, err := sched.SubmitJob(ctx, job.JobSubmission{
+	jobID, err := sched.SubmitJob(ctx, to_delete.JobSubmission{
 		RequestID:  fmt.Sprintf("retry-integration=%d", time.Now().Unix()),
 		Name:       "retry-test-job",
 		Image:      "alpine:latest",
@@ -75,7 +75,7 @@ func main() {
 				stateChanges = append(stateChanges, state)
 				log.Printf(" State: %s", state)
 
-				if state == string(job.StateFailed) {
+				if state == string(to_delete.StateFailed) {
 					log.Println("\n Final State: Failed (expected after retries)")
 					goto done
 				}
