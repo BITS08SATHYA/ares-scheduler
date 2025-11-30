@@ -188,13 +188,14 @@ func (ec *ETCDClient) CAS(ctx context.Context, key string, expectedVersion int64
 	cond := clientv3.Compare(clientv3.Version(key), "=", expectedVersion)
 
 	// If condition true: put the value
-	then := clientv3.OpPut(key, value)
+	thenOp := clientv3.OpPut(key, value)
 
 	// If condition false: get current value
-	else := clientv3.OpGet(key)
+	elseOp := clientv3.OpGet(key)
 
-	resp, err := txn.If(cond).Then(then).Else(else).Commit()
+	resp, err := txn.If(cond).Then(thenOp).Else(elseOp).Commit()
 	if err != nil {
+		ec.log.Error("CAS failed on key %s: %v", key, err)
 		return false, err
 	}
 
@@ -202,7 +203,6 @@ func (ec *ETCDClient) CAS(ctx context.Context, key string, expectedVersion int64
 	ec.log.Debug("CAS on key %s: succeeded=%v", key, success)
 	return success, nil
 }
-
 
 // LeaseCAS: Atomic "set with lease if not exists"
 // Used for exactly-once: Only acquire lease if no one else has it
@@ -213,12 +213,12 @@ func (ec *ETCDClient) LeaseCAS(ctx context.Context, key string, value string, le
 	cond := clientv3.Compare(clientv3.Version(key), "=", 0)
 
 	// If condition true: put with lease
-	then := clientv3.OpPut(key, value, clientv3.WithLease(clientv3.LeaseID(leaseID)))
+	thenOp := clientv3.OpPut(key, value, clientv3.WithLease(clientv3.LeaseID(leaseID)))
 
 	// If condition false: get current
-	else := clientv3.OpGet(key)
+	elseOp := clientv3.OpGet(key)
 
-	resp, err := txn.If(cond).Then(then).Else(else).Commit()
+	resp, err := txn.If(cond).Then(thenOp).Else(elseOp).Commit()
 	if err != nil {
 		return false, err
 	}
