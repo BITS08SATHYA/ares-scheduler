@@ -1,5 +1,5 @@
 // Layer 2: Redis client wrapper (depends on types, logger)
-package storage
+package redis
 
 import (
 	"context"
