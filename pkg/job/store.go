@@ -249,8 +249,9 @@ func (store *ETCDJobStore) WatchJobs(ctx context.Context, jobID string) <-chan *
 				store.log.Debug("Stopped watching job %s", jobID)
 				return
 
-			case resp := <-watchChan:
-				if resp == nil {
+			case resp, ok := <-watchChan:
+				if !ok {
+					store.log.Debug("Watch channel closed for job %s", jobID)
 					return
 				}
 

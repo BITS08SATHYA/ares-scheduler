@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/logger"
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler/local"
 )
 
 // ============================================================================
@@ -28,15 +29,15 @@ import (
 
 // LocalSchedulingDecision: Output from Layer 6 LocalScheduler
 // Contains node and GPU selection decision
-type LocalSchedulingDecision struct {
-	JobID            string    // Job identifier
-	NodeID           string    // Node selected (e.g., "node-001")
-	GPUIndices       []int     // GPU indices selected (e.g., [0, 1])
-	NodeScore        float64   // Scheduling score
-	GPUAffinityScore float64   // GPU affinity score
-	PlacementReasons []string  // Why this node was selected
-	ScheduledAt      time.Time // When scheduled
-}
+//type LocalSchedulingDecision struct {
+//	JobID            string    // Job identifier
+//	NodeID           string    // Node selected (e.g., "node-001")
+//	GPUIndices       []int     // GPU indices selected (e.g., [0, 1])
+//	NodeScore        float64   // Scheduling score
+//	GPUAffinityScore float64   // GPU affinity score
+//	PlacementReasons []string  // Why this node was selected
+//	ScheduledAt      time.Time // When scheduled
+//}
 
 // ============================================================================
 // EXECUTOR SERVICE
@@ -92,7 +93,7 @@ type ExecutorConfig struct {
 // ExecutionContext: Runtime context for a job being executed
 type ExecutionContext struct {
 	JobID         string
-	LocalDecision *LocalSchedulingDecision // From Layer 6
+	LocalDecision *local.LocalSchedulingDecision // From Layer 6 (Local Scheduler)
 	PodName       string
 	Namespace     string
 	StartTime     time.Time
@@ -264,7 +265,7 @@ func NewExecutor(
 // Output: ExecutionContext (tracking info)
 func (ex *Executor) ExecuteJob(
 	ctx context.Context,
-	decision *LocalSchedulingDecision,
+	decision *local.LocalSchedulingDecision,
 ) (*ExecutionContext, error) {
 
 	if decision == nil {
@@ -338,7 +339,7 @@ func (ex *Executor) ExecuteJob(
 // createPodSpec: Create Kubernetes Pod specification
 // CORRECTED: Uses NodeID and GPUIndices from LocalSchedulingDecision
 func (ex *Executor) createPodSpec(
-	decision *LocalSchedulingDecision,
+	decision *local.LocalSchedulingDecision,
 	podName string,
 ) *PodSpec {
 

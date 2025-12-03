@@ -170,3 +170,98 @@ func PrintConfig(cfg *common.Config) {
 	println("Health Check Interval:", cfg.HealthCheckInterval.String())
 	println("===========================")
 }
+
+// DRFConfig configuration for fair resource allocation
+type DRFConfig struct {
+	// Resource weights
+	CPUWeight    float64
+	GPUWeight    float64
+	MemoryWeight float64
+
+	// Fairness thresholds
+	FairnessThreshold float64
+	UpdateInterval    time.Duration
+
+	// Preemption settings
+	PreemptionEnabled      bool
+	MaxPreemptionsPerHour  int
+	GracePeriodSec         int
+	PreemptiblePriorityMax int
+}
+
+// PreemptionConfig configuration for job preemption
+type PreemptionConfig struct {
+	Enabled               bool
+	GracePeriodSec        int
+	CheckGracePeriodEvery int
+	MaxPreemptionsPerHour int
+	MaxPreemptionsPerDay  int
+	HighPriorityWaitSec   int
+	FairnessViolation     bool
+	PriorityPreemption    bool
+	SLAPreemption         bool
+	PreferCheckpointable  bool
+	AvoidDuplicates       bool
+	MinimumAgeSeconds     int
+}
+
+// LoadDRFConfig loads DRF configuration from environment variables
+func LoadDRFConfig() *DRFConfig {
+	return &DRFConfig{
+		CPUWeight:              getEnvFloat("DRF_CPU_WEIGHT", 1.0),
+		GPUWeight:              getEnvFloat("DRF_GPU_WEIGHT", 3.0),
+		MemoryWeight:           getEnvFloat("DRF_MEMORY_WEIGHT", 0.5),
+		FairnessThreshold:      getEnvFloat("DRF_FAIRNESS_THRESHOLD", 0.2),
+		UpdateInterval:         time.Duration(getEnvInt("DRF_UPDATE_INTERVAL_SEC", 30)) * time.Second,
+		PreemptionEnabled:      getEnvBool("PREEMPTION_ENABLED", true),
+		MaxPreemptionsPerHour:  getEnvInt("MAX_PREEMPTIONS_PER_HOUR", 10),
+		GracePeriodSec:         getEnvInt("GRACE_PERIOD_SEC", 30),
+		PreemptiblePriorityMax: getEnvInt("PREEMPTIBLE_PRIORITY_MAX", 50),
+	}
+}
+
+// LoadPreemptionConfig loads preemption configuration from environment variables
+func LoadPreemptionConfig() *PreemptionConfig {
+	return &PreemptionConfig{
+		Enabled:               getEnvBool("PREEMPTION_ENABLED", true),
+		GracePeriodSec:        getEnvInt("GRACE_PERIOD_SEC", 30),
+		CheckGracePeriodEvery: getEnvInt("CHECK_GRACE_PERIOD_MS", 100),
+		MaxPreemptionsPerHour: getEnvInt("MAX_PREEMPTIONS_PER_HOUR", 10),
+		MaxPreemptionsPerDay:  getEnvInt("MAX_PREEMPTIONS_PER_DAY", 100),
+		HighPriorityWaitSec:   getEnvInt("HIGH_PRIORITY_WAIT_SEC", 300),
+		FairnessViolation:     getEnvBool("PREEMPT_ON_FAIRNESS", true),
+		PriorityPreemption:    getEnvBool("PREEMPT_ON_PRIORITY", true),
+		SLAPreemption:         getEnvBool("PREEMPT_ON_SLA", true),
+		PreferCheckpointable:  getEnvBool("PREFER_CHECKPOINT_JOBS", true),
+		AvoidDuplicates:       getEnvBool("AVOID_DUPLICATE_PREEMPTION", true),
+		MinimumAgeSeconds:     getEnvInt("MINIMUM_JOB_AGE_SEC", 10),
+	}
+}
+
+// Helper functions (add to existing config.go if not present)
+func getEnvBool(key string, defaultVal bool) bool {
+	val := os.Getenv(key)
+	if val == "" {
+		return defaultVal
+	}
+	b, _ := strconv.ParseBool(val)
+	return b
+}
+
+func getEnvInt(key string, defaultVal int) int {
+	val := os.Getenv(key)
+	if val == "" {
+		return defaultVal
+	}
+	i, _ := strconv.Atoi(val)
+	return i
+}
+
+func getEnvFloat(key string, defaultVal float64) float64 {
+	val := os.Getenv(key)
+	if val == "" {
+		return defaultVal
+	}
+	f, _ := strconv.ParseFloat(val, 64)
+	return f
+}

@@ -299,7 +299,6 @@ func (gs *GlobalScheduler) GetHealthStatus() map[string]bool {
 	for clusterID, cluster := range gs.clusters {
 		status[clusterID] = cluster.IsHealthy
 	}
-
 	return status
 }
 
@@ -314,7 +313,6 @@ func (gs *GlobalScheduler) HealthyClusterCount() int {
 			count++
 		}
 	}
-
 	return count
 }
 
@@ -453,6 +451,7 @@ func (gs *GlobalScheduler) scoreCluster(
 	if score.Score > 100.0 {
 		score.Score = 100.0
 	}
+
 	if score.Score < 0.0 {
 		score.Score = 0.0
 	}
@@ -474,11 +473,11 @@ func (gs *GlobalScheduler) ScheduleJob(
 ) (*GlobalSchedulingDecision, error) {
 
 	if jobSpec == nil || jobSpec.Name == "" {
-		return nil, fmt.Errorf("invalid job spec")
+		return nil, fmt.Errorf("Invalid job spec")
 	}
 
 	if jobSpec.GPUCount < 0 || jobSpec.GPUCount > 256 {
-		return nil, fmt.Errorf("invalid GPU count: %d", jobSpec.GPUCount)
+		return nil, fmt.Errorf("Invalid GPU count: %d", jobSpec.GPUCount)
 	}
 
 	// Step 1: Select best cluster (ONLY decision made by global scheduler)

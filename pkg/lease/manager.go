@@ -1,344 +1,583 @@
-// File: pkg/lease/manager.go
-// Layer 3: Distributed Lease Manager (Feature 6 Layer 2, Feature 19)
-// CRITICAL: This implements distributed locking for exactly-once semantics
-//
-// How it works:
-// 1. Job wants to execute
-// 2. Request lease from etcd (with TTL, auto-expiry)
-// 3. If we get the lease, we own the execution
-// 4. Keep-alive lease while executing (heartbeat every 10s)
-// 5. If executor crashes, lease expires and someone else can take over
-// 6. Using fencing tokens to prevent stale executor from re-running
+// ============================================================================
+// LAYER 3: LEASE MANAGER & JOB STORE
+// ============================================================================
+// Features: #19 (Distributed Locking / Lease System) + #17-18 (Job Lifecycle)
+// Responsibilities:
+//   1. Distributed leases via etcd (for exactly-once semantics)
+//   2. Job state management (PENDING → RUNNING → SUCCEEDED/FAILED)
+//   3. Request deduplication (via request IDs)
+//   4. Retry logic with exponential backoff
+// ============================================================================
 
 package lease
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
-	"github.com/BITS08SATHYA/ares-scheduler/pkg/logger"
-	"github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler/common"
-	"github.com/BITS08SATHYA/ares-scheduler/pkg/storage/etcd"
+	"math"
+	"sync"
 	"time"
+
+	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
-// LeaseManager: Manages distributed leases for job execution
-type LeaseManager struct {
-	etcd            *etcd.ETCDClient
-	log             *logger.Logger
-	leaseTTL        int              // TTL in seconds (usually 30)
-	renewalInterval time.Duration    // How often to renew (usually 10s)
-	leaseKeyPrefix  string           // "/ares/leases/job"
-	activeLeases    map[string]int64 // Track active leases in memory: jobID → leaseID
+// ============================================================================
+// TYPES & CONSTANTS
+// ============================================================================
+
+// JobState represents the state of a job in the scheduling pipeline
+type JobState string
+
+const (
+	JobStatePending   JobState = "PENDING"
+	JobStateScheduled JobState = "SCHEDULED"
+	JobStatePlaced    JobState = "PLACED"
+	JobStateRunning   JobState = "RUNNING"
+	JobStateSucceeded JobState = "SUCCEEDED"
+	JobStateFailed    JobState = "FAILED"
+	JobStateCancelled JobState = "CANCELLED"
+)
+
+// JobRecord is the complete state of a job stored in etcd
+type JobRecord struct {
+	JobID           string    `json:"job_id"`
+	TenantID        string    `json:"tenant_id"`
+	Status          JobState  `json:"status"`
+	CreatedAt       time.Time `json:"created_at"`
+	ScheduledAt     time.Time `json:"scheduled_at,omitempty"`
+	PlacedAt        time.Time `json:"placed_at,omitempty"`
+	StartedAt       time.Time `json:"started_at,omitempty"`
+	CompletedAt     time.Time `json:"completed_at,omitempty"`
+	Attempts        int       `json:"attempts"`
+	MaxRetries      int       `json:"max_retries"`
+	LastRetryTime   time.Time `json:"last_retry_time,omitempty"`
+	AssignedCluster string    `json:"assigned_cluster,omitempty"`
+	AssignedNode    string    `json:"assigned_node,omitempty"`
+	PodName         string    `json:"pod_name,omitempty"`
+	Result          string    `json:"result,omitempty"`
+	FencingToken    string    `json:"fencing_token,omitempty"`
+	PreemptionCount int       `json:"preemption_count,omitempty"`
 }
 
-// NewLeaseManager: Create a new lease manager
-func NewLeaseManager(
-	etcd *etcd.ETCDClient,
-	leaseTTL int,
-	renewalInterval time.Duration,
-) *LeaseManager {
+// Lease represents a distributed lease in etcd
+type Lease struct {
+	JobID       string    `json:"job_id"`
+	SchedulerID string    `json:"scheduler_id"`
+	AcquiredAt  time.Time `json:"acquired_at"`
+	ExpiresAt   time.Time `json:"expires_at"`
+	TTL         int64     `json:"ttl"`
+}
+
+// LeaseManager handles distributed leases for exactly-once semantics
+type LeaseManager struct {
+	etcdClient  *clientv3.Client
+	schedulerID string
+	leaseTTL    int64
+	log         Logger
+	mu          sync.RWMutex
+}
+
+// JobStore handles persistent job state in etcd
+type JobStore struct {
+	etcdClient *clientv3.Client
+	log        Logger
+	mu         sync.RWMutex
+}
+
+// ============================================================================
+// LEASE MANAGER IMPLEMENTATION
+// ============================================================================
+
+// NewLeaseManager creates a new lease manager
+// schedulerID: unique identifier for this scheduler instance
+// leaseTTL: how long a lease lasts (default 30 seconds)
+func NewLeaseManager(etcdClient *clientv3.Client, schedulerID string, log Logger) *LeaseManager {
 	return &LeaseManager{
-		etcd:            etcd,
-		log:             logger.Get(),
-		leaseTTL:        leaseTTL,
-		renewalInterval: renewalInterval,
-		leaseKeyPrefix:  "/ares/leases/job",
-		activeLeases:    make(map[string]int64),
+		etcdClient:  etcdClient,
+		schedulerID: schedulerID,
+		leaseTTL:    30, // 30 second lease TTL
+		log:         log,
 	}
 }
 
-// ============================================================================
-// CORE LEASE OPERATIONS
-// ============================================================================
-
-// AcquireJobLease: Try to acquire a lease for a job
+// AcquireLeaseForJob attempts to acquire a distributed lease for a job
+//
+// CRITICAL: Uses etcd Txn (compare-and-set) which is ATOMIC.
+// Only ONE scheduler succeeds, even if 1000 try simultaneously.
 //
 // Returns:
-//   - leaseID: ID of the acquired lease (used to renew/revoke)
-//   - token: Fencing token unique to this execution attempt
-//   - acquired: true if we got the lease, false if someone else has it
-//   - error: Any error during operation
+//   - (true, nil) if lease acquired by this scheduler
+//   - (false, nil) if lease already held by another scheduler
+//   - (false, err) on error
 //
-// KEY POINT: This is atomic. Either we get it or we don't. No race conditions.
-func (lm *LeaseManager) AcquireJobLease(
-	ctx context.Context,
-	jobID string,
-	executorID string,
-) (leaseID int64, token string, acquired bool, err error) {
+// Algorithm:
+// 1. Create etcd lease with 30-second TTL
+// 2. Atomically check: does "ares:leases:job-123" exist?
+// 3. If NO: Create it with this scheduler's ID and lease ID
+// 4. If YES: Another scheduler holds it, return false
+//
+// RACE CONDITION SAFETY:
+// etcd Txn is atomic - either completely succeeds or completely fails.
+// Between check and set, etcd prevents other schedulers from inserting.
+func (lm *LeaseManager) AcquireLeaseForJob(ctx context.Context, jobID string) (bool, error) {
+	lm.mu.Lock()
+	defer lm.mu.Unlock()
 
-	lm.log.Debug("Attempting to acquire lease for job: %s", jobID)
-
-	// Step 1: Create a new lease in etcd
-	// This lease will auto-expire after leaseTTL seconds
-	leaseID, err = lm.etcd.GrantLease(ctx, lm.leaseTTL)
+	// Step 1: Create etcd lease with TTL
+	lease, err := lm.etcdClient.Lease.Grant(ctx, lm.leaseTTL)
 	if err != nil {
-		lm.log.Error("Failed to grant lease for job %s: %v", jobID, err)
-		return 0, "", false, fmt.Errorf("grant lease failed: %w", err)
+		lm.log.Errorf("failed to grant lease: %v", err)
+		return false, fmt.Errorf("grant lease: %w", err)
 	}
 
-	lm.log.Debug("Granted lease %d for job %s", leaseID, jobID)
+	leaseKey := fmt.Sprintf("ares:leases:%s", jobID)
 
-	// Step 2: Generate fencing token (unique to this execution attempt)
-	// This proves that WE are the ones executing, not a stale executor
-	token = generateFencingToken()
+	// Step 2: Create lease record
+	leaseRecord := Lease{
+		JobID:       jobID,
+		SchedulerID: lm.schedulerID,
+		AcquiredAt:  time.Now(),
+		ExpiresAt:   time.Now().Add(time.Duration(lm.leaseTTL) * time.Second),
+		TTL:         lm.leaseTTL,
+	}
+	leaseValue, _ := json.Marshal(leaseRecord)
 
-	// Step 3: Build lease value (what to store in etcd)
-	// Format: "jobID|executorID|token|leaseID|timestamp"
-	leaseValue := fmt.Sprintf("%s|%s|%s|%d|%d",
-		jobID,
-		executorID,
-		token,
-		leaseID,
-		time.Now().Unix(),
-	)
+	// Step 3: ATOMIC transaction
+	// If key doesn't exist (CreateRevision == 0), create it
+	// Otherwise, abort the transaction
+	txnResponse, err := lm.etcdClient.Txn(ctx).
+		If(clientv3.Compare(clientv3.CreateRevision(leaseKey), "=", 0)).
+		Then(clientv3.OpPut(leaseKey, string(leaseValue), clientv3.WithLease(lease.ID))).
+		Else(clientv3.OpGet(leaseKey)).
+		Commit()
 
-	// Step 4: Atomic "set with lease if not exists"
-	// If the key already exists, someone else has the lease
-	// If the key doesn't exist, we get it
-	leaseKey := fmt.Sprintf("%s/%s", lm.leaseKeyPrefix, jobID)
-	success, err := lm.etcd.LeaseCAS(ctx, leaseKey, leaseValue, leaseID)
 	if err != nil {
-		// Lease creation failed, revoke what we created
-		lm.etcd.RevokeLease(ctx, leaseID)
-		lm.log.Error("Failed to acquire lease for job %s: %v", jobID, err)
-		return 0, "", false, fmt.Errorf("lease acquisition failed: %w", err)
+		lm.log.Errorf("txn failed for lease: %v", err)
+		return false, fmt.Errorf("txn failed: %w", err)
 	}
 
-	if !success {
-		// Someone else has the lease, revoke ours
-		lm.etcd.RevokeLease(ctx, leaseID)
-		lm.log.Debug("Lease already held for job %s, backing off", jobID)
-		return 0, "", false, nil // Not an error, just already leased
+	if txnResponse.Succeeded {
+		lm.log.Infof("lease acquired for job %s", jobID)
+		return true, nil
 	}
 
-	// Success! We have the lease
-	lm.activeLeases[jobID] = leaseID
-	lm.log.Info("✓ Acquired lease for job %s (lease: %d, token: %s)", jobID, leaseID, token[:8])
-
-	return leaseID, token, true, nil
+	// Another scheduler holds the lease
+	lm.log.Warnf("lease already held for job %s (by another scheduler)", jobID)
+	return false, nil
 }
 
-// RenewLease: Keep a lease alive
-//
-// Call this periodically (every 10 seconds) while job is running
-// If we don't renew, lease expires and another executor can take over
-func (lm *LeaseManager) RenewLease(
-	ctx context.Context,
-	leaseID int64,
-	jobID string,
-) error {
+// RenewLeaseForJob renews an existing lease (called periodically)
+// This prevents the lease from expiring while we're still executing
+func (lm *LeaseManager) RenewLeaseForJob(ctx context.Context, jobID string) error {
+	lm.mu.Lock()
+	defer lm.mu.Unlock()
 
-	if leaseID == 0 {
-		return fmt.Errorf("invalid lease ID")
-	}
+	leaseKey := fmt.Sprintf("ares:leases:%s", jobID)
 
-	err := lm.etcd.KeepAliveOnce(ctx, leaseID)
+	// Get current lease
+	resp, err := lm.etcdClient.Get(ctx, leaseKey)
 	if err != nil {
-		lm.log.Error("Failed to renew lease %d for job %s: %v", leaseID, jobID, err)
-		return fmt.Errorf("lease renewal failed: %w", err)
+		return fmt.Errorf("get lease: %w", err)
 	}
 
-	lm.log.Debug("Renewed lease %d for job %s", leaseID, jobID)
+	if len(resp.Kvs) == 0 {
+		return errors.New("lease not found")
+	}
+
+	// Parse existing lease
+	var lease Lease
+	if err := json.Unmarshal(resp.Kvs[0].Value, &lease); err != nil {
+		return fmt.Errorf("unmarshal lease: %w", err)
+	}
+
+	// Verify we're the owner
+	if lease.SchedulerID != lm.schedulerID {
+		return errors.New("lease owned by different scheduler")
+	}
+
+	// Create new lease with extended TTL
+	newLease, err := lm.etcdClient.Lease.Grant(ctx, lm.leaseTTL)
+	if err != nil {
+		return fmt.Errorf("grant new lease: %w", err)
+	}
+
+	// Update with new lease ID (old lease will auto-expire)
+	lease.ExpiresAt = time.Now().Add(time.Duration(lm.leaseTTL) * time.Second)
+	leaseValue, _ := json.Marshal(lease)
+
+	_, err = lm.etcdClient.Put(ctx, leaseKey, string(leaseValue), clientv3.WithLease(newLease.ID))
+	return err
+}
+
+// ReleaseLeaseForJob releases a lease (when job completes or times out)
+func (lm *LeaseManager) ReleaseLeaseForJob(ctx context.Context, jobID string) error {
+	lm.mu.Lock()
+	defer lm.mu.Unlock()
+
+	leaseKey := fmt.Sprintf("ares:leases:%s", jobID)
+
+	// Get current lease
+	resp, err := lm.etcdClient.Get(ctx, leaseKey)
+	if err != nil {
+		return fmt.Errorf("get lease: %w", err)
+	}
+
+	if len(resp.Kvs) == 0 {
+		return nil // Already released
+	}
+
+	// Parse and verify ownership
+	var lease Lease
+	if err := json.Unmarshal(resp.Kvs[0].Value, &lease); err != nil {
+		return fmt.Errorf("unmarshal lease: %w", err)
+	}
+
+	if lease.SchedulerID != lm.schedulerID {
+		return errors.New("lease owned by different scheduler")
+	}
+
+	// Delete the lease key
+	_, err = lm.etcdClient.Delete(ctx, leaseKey)
+	if err != nil {
+		return fmt.Errorf("delete lease: %w", err)
+	}
+
+	lm.log.Infof("lease released for job %s", jobID)
 	return nil
 }
 
-// ReleaseLease: Explicitly release a lease
-//
-// Call this when:
-// - Job completed successfully
-// - Job failed and won't retry
-// - We're shutting down
-//
-// This allows another executor to take over immediately
-// (instead of waiting for lease to expire)
-func (lm *LeaseManager) ReleaseLease(
-	ctx context.Context,
-	leaseID int64,
-	jobID string,
-) error {
+// GetLeaseForJob gets the current lease holder for a job (for monitoring)
+func (lm *LeaseManager) GetLeaseForJob(ctx context.Context, jobID string) (*Lease, error) {
+	leaseKey := fmt.Sprintf("ares:leases:%s", jobID)
 
-	if leaseID == 0 {
-		return fmt.Errorf("invalid lease ID")
-	}
-
-	err := lm.etcd.RevokeLease(ctx, leaseID)
+	resp, err := lm.etcdClient.Get(ctx, leaseKey)
 	if err != nil {
-		lm.log.Error("Failed to revoke lease %d for job %s: %v", leaseID, jobID, err)
-		return fmt.Errorf("lease revocation failed: %w", err)
+		return nil, fmt.Errorf("get lease: %w", err)
 	}
 
-	delete(lm.activeLeases, jobID)
-	lm.log.Info("✓ Released lease for job %s (lease: %d)", jobID, leaseID)
+	if len(resp.Kvs) == 0 {
+		return nil, errors.New("lease not found")
+	}
+
+	var lease Lease
+	if err := json.Unmarshal(resp.Kvs[0].Value, &lease); err != nil {
+		return nil, fmt.Errorf("unmarshal lease: %w", err)
+	}
+
+	return &lease, nil
+}
+
+// ============================================================================
+// JOB STORE IMPLEMENTATION
+// ============================================================================
+
+// NewJobStore creates a new job store
+func NewJobStore(etcdClient *clientv3.Client, log Logger) *JobStore {
+	return &JobStore{
+		etcdClient: etcdClient,
+		log:        log,
+	}
+}
+
+// StoreJob stores a job record in etcd
+// This is called when a job is first submitted
+func (js *JobStore) StoreJob(ctx context.Context, job *JobRecord) error {
+	js.mu.Lock()
+	defer js.mu.Unlock()
+
+	jobKey := fmt.Sprintf("ares:jobs:%s", job.JobID)
+	jobValue, err := json.Marshal(job)
+	if err != nil {
+		return fmt.Errorf("marshal job: %w", err)
+	}
+
+	_, err = js.etcdClient.Put(ctx, jobKey, string(jobValue))
+	if err != nil {
+		js.log.Errorf("failed to store job %s: %v", job.JobID, err)
+		return fmt.Errorf("put job: %w", err)
+	}
+
+	js.log.Infof("job stored: %s (state=%s)", job.JobID, job.Status)
+	return nil
+}
+
+// GetJob retrieves a job record from etcd
+func (js *JobStore) GetJob(ctx context.Context, jobID string) (*JobRecord, error) {
+	jobKey := fmt.Sprintf("ares:jobs:%s", jobID)
+
+	resp, err := js.etcdClient.Get(ctx, jobKey)
+	if err != nil {
+		return nil, fmt.Errorf("get job: %w", err)
+	}
+
+	if len(resp.Kvs) == 0 {
+		return nil, errors.New("job not found")
+	}
+
+	var job JobRecord
+	if err := json.Unmarshal(resp.Kvs[0].Value, &job); err != nil {
+		return nil, fmt.Errorf("unmarshal job: %w", err)
+	}
+
+	return &job, nil
+}
+
+// UpdateJobState updates a job's state atomically
+// This ensures state transitions are valid and durable
+//
+// Valid transitions:
+// PENDING → SCHEDULED (global scheduler routed it)
+// SCHEDULED → PLACED (local scheduler placed it)
+// PLACED → RUNNING (pod created)
+// RUNNING → SUCCEEDED/FAILED (pod exited)
+// Any state → CANCELLED (user cancelled)
+func (js *JobStore) UpdateJobState(ctx context.Context, jobID string, newState JobState, metadata map[string]interface{}) error {
+	js.mu.Lock()
+	defer js.mu.Unlock()
+
+	// Fetch current job
+	job, err := js.GetJob(ctx, jobID)
+	if err != nil {
+		return fmt.Errorf("get job: %w", err)
+	}
+
+	// Validate state transition
+	if !isValidTransition(job.Status, newState) {
+		return fmt.Errorf("invalid state transition: %s → %s", job.Status, newState)
+	}
+
+	// Update fields based on new state
+	job.Status = newState
+	now := time.Now()
+
+	switch newState {
+	case JobStateScheduled:
+		job.ScheduledAt = now
+	case JobStatePlaced:
+		job.PlacedAt = now
+		if nodeID, ok := metadata["node_id"].(string); ok {
+			job.AssignedNode = nodeID
+		}
+		if clusterID, ok := metadata["cluster_id"].(string); ok {
+			job.AssignedCluster = clusterID
+		}
+	case JobStateRunning:
+		job.StartedAt = now
+		if podName, ok := metadata["pod_name"].(string); ok {
+			job.PodName = podName
+		}
+	case JobStateSucceeded, JobStateFailed:
+		job.CompletedAt = now
+		if result, ok := metadata["result"].(string); ok {
+			job.Result = result
+		}
+	}
+
+	// Store updated job
+	return js.StoreJob(ctx, job)
+}
+
+// isValidTransition checks if a state transition is allowed
+func isValidTransition(from, to JobState) bool {
+	validTransitions := map[JobState][]JobState{
+		JobStatePending:   {JobStateScheduled, JobStateCancelled},
+		JobStateScheduled: {JobStatePlaced, JobStateCancelled},
+		JobStatePlaced:    {JobStateRunning, JobStateCancelled},
+		JobStateRunning:   {JobStateSucceeded, JobStateFailed, JobStateCancelled},
+		JobStateSucceeded: {},
+		JobStateFailed:    {JobStatePending}, // Retry: go back to pending
+		JobStateCancelled: {},
+	}
+
+	if transitions, ok := validTransitions[from]; ok {
+		for _, valid := range transitions {
+			if valid == to {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+// PrepareRetry prepares a failed job for retry with exponential backoff
+//
+// Algorithm:
+// 1. Calculate backoff: delay = min(2^attempt, 5 minutes) + jitter
+// 2. Increment attempt counter
+// 3. Set job status back to PENDING
+// 4. Store updated job
+//
+// Returns: (backoff duration, error)
+func (js *JobStore) PrepareRetry(ctx context.Context, jobID string) (time.Duration, error) {
+	js.mu.Lock()
+	defer js.mu.Unlock()
+
+	job, err := js.GetJob(ctx, jobID)
+	if err != nil {
+		return 0, fmt.Errorf("get job: %w", err)
+	}
+
+	if job.Attempts >= job.MaxRetries {
+		return 0, fmt.Errorf("max retries exceeded (%d)", job.MaxRetries)
+	}
+
+	// Calculate exponential backoff: 2^attempt seconds, capped at 5 minutes
+	backoffSeconds := math.Min(math.Pow(2, float64(job.Attempts)), 300)
+
+	// Add jitter (0-10% random variation)
+	jitterFraction := float64(time.Now().UnixNano()%100) / 100.0 * 0.1
+	backoffSeconds *= (1.0 + jitterFraction)
+
+	backoff := time.Duration(backoffSeconds) * time.Second
+
+	// Update job for retry
+	job.Attempts++
+	job.LastRetryTime = time.Now()
+	job.Status = JobStatePending
+
+	if err := js.StoreJob(ctx, job); err != nil {
+		return 0, fmt.Errorf("store job: %w", err)
+	}
+
+	js.log.Infof("job %s prepared for retry %d (backoff: %v)", jobID, job.Attempts, backoff)
+	return backoff, nil
+}
+
+// GetJobsByTenant retrieves all jobs for a tenant
+func (js *JobStore) GetJobsByTenant(ctx context.Context, tenantID string) ([]*JobRecord, error) {
+	prefix := "ares:jobs:"
+
+	resp, err := js.etcdClient.Get(ctx, prefix, clientv3.WithPrefix())
+	if err != nil {
+		return nil, fmt.Errorf("get jobs: %w", err)
+	}
+
+	var jobs []*JobRecord
+	for _, kv := range resp.Kvs {
+		var job JobRecord
+		if err := json.Unmarshal(kv.Value, &job); err != nil {
+			js.log.Warnf("failed to unmarshal job: %v", err)
+			continue
+		}
+
+		if job.TenantID == tenantID {
+			jobs = append(jobs, &job)
+		}
+	}
+
+	return jobs, nil
+}
+
+// GetJobsByStatus retrieves all jobs with a given status
+func (js *JobStore) GetJobsByStatus(ctx context.Context, status JobState) ([]*JobRecord, error) {
+	prefix := "ares:jobs:"
+
+	resp, err := js.etcdClient.Get(ctx, prefix, clientv3.WithPrefix())
+	if err != nil {
+		return nil, fmt.Errorf("get jobs: %w", err)
+	}
+
+	var jobs []*JobRecord
+	for _, kv := range resp.Kvs {
+		var job JobRecord
+		if err := json.Unmarshal(kv.Value, &job); err != nil {
+			js.log.Warnf("failed to unmarshal job: %v", err)
+			continue
+		}
+
+		if job.Status == status {
+			jobs = append(jobs, &job)
+		}
+	}
+
+	return jobs, nil
+}
+
+// DeleteJob deletes a job (for cleanup after completion)
+func (js *JobStore) DeleteJob(ctx context.Context, jobID string) error {
+	js.mu.Lock()
+	defer js.mu.Unlock()
+
+	jobKey := fmt.Sprintf("ares:jobs:%s", jobID)
+	_, err := js.etcdClient.Delete(ctx, jobKey)
+	if err != nil {
+		return fmt.Errorf("delete job: %w", err)
+	}
 
 	return nil
 }
 
 // ============================================================================
-// LEASE VERIFICATION
+// REQUEST DEDUPLICATION (Feature #18: Idempotent Job Submission)
 // ============================================================================
 
-// GetLeaseInfo: Get information about a job's lease
-// Returns the lease value and how much time is left
-func (lm *LeaseManager) GetLeaseInfo(
-	ctx context.Context,
-	jobID string,
-) (string, time.Duration, error) {
+// RequestDeduplicator handles idempotent job submission using request IDs
+// If client submits same jobID twice, we return the cached result
+type RequestDeduplicator struct {
+	etcdClient *clientv3.Client
+	log        Logger
+	mu         sync.RWMutex
+}
 
-	leaseKey := fmt.Sprintf("%s/%s", lm.leaseKeyPrefix, jobID)
-	leaseValue, err := lm.etcd.Get(ctx, leaseKey)
+// NewRequestDeduplicator creates a new request deduplicator
+func NewRequestDeduplicator(etcdClient *clientv3.Client, log Logger) *RequestDeduplicator {
+	return &RequestDeduplicator{
+		etcdClient: etcdClient,
+		log:        log,
+	}
+}
+
+// CacheResult stores the result of a job submission for deduplication
+// If same jobID is submitted again, we return this cached result
+func (rd *RequestDeduplicator) CacheResult(ctx context.Context, jobID string, result interface{}) error {
+	rd.mu.Lock()
+	defer rd.mu.Unlock()
+
+	cacheKey := fmt.Sprintf("ares:results:%s", jobID)
+	cacheValue, _ := json.Marshal(result)
+
+	// Store with 7-day TTL so old results eventually expire
+	resp, err := rd.etcdClient.Grant(ctx, 7*24*60*60)
 	if err != nil {
-		return "", 0, fmt.Errorf("failed to get lease: %w", err)
+		return fmt.Errorf("grant lease: %w", err)
 	}
 
-	if leaseValue == "" {
-		return "", 0, fmt.Errorf("lease not found for job %s", jobID)
-	}
-
-	// Try to get TTL from etcd (simplified - just return leaseTTL)
-	timeLeft := time.Duration(lm.leaseTTL) * time.Second
-
-	return leaseValue, timeLeft, nil
+	_, err = rd.etcdClient.Put(ctx, cacheKey, string(cacheValue), clientv3.WithLease(resp.ID))
+	return err
 }
 
-// ValidateToken: Check if a fencing token is valid
-//
-// Use this to make sure a stale executor doesn't re-run
-// If token doesn't match the one we have, reject the execution
-func (lm *LeaseManager) ValidateToken(
-	ctx context.Context,
-	jobID string,
-	providedToken string,
-) (bool, error) {
+// GetCachedResult retrieves cached result if it exists
+// Returns (result, true) if found, (nil, false) if not found, (nil, err) on error
+func (rd *RequestDeduplicator) GetCachedResult(ctx context.Context, jobID string) (interface{}, bool, error) {
+	cacheKey := fmt.Sprintf("ares:results:%s", jobID)
 
-	leaseValue, _, err := lm.GetLeaseInfo(ctx, jobID)
+	resp, err := rd.etcdClient.Get(ctx, cacheKey)
 	if err != nil {
-		return false, fmt.Errorf("failed to validate token: %w", err)
+		return nil, false, fmt.Errorf("get cache: %w", err)
 	}
 
-	// Parse: "jobID|executorID|token|leaseID|timestamp"
-	parts := parseLeaseValue(leaseValue)
-	if len(parts) < 3 {
-		return false, fmt.Errorf("invalid lease format")
+	if len(resp.Kvs) == 0 {
+		return nil, false, nil // Not cached
 	}
 
-	storedToken := parts[2]
-	isValid := storedToken == providedToken
-
-	if !isValid {
-		lm.log.Warn("Token mismatch for job %s: got %s, expected %s",
-			jobID, providedToken[:8], storedToken[:8])
+	var result interface{}
+	if err := json.Unmarshal(resp.Kvs[0].Value, &result); err != nil {
+		return nil, false, fmt.Errorf("unmarshal result: %w", err)
 	}
 
-	return isValid, nil
+	rd.log.Infof("returning cached result for job %s", jobID)
+	return result, true, nil
 }
 
 // ============================================================================
-// BACKGROUND MAINTENANCE
+// LOGGER INTERFACE (for dependency injection)
 // ============================================================================
 
-// StartLeaseRenewalLoop: Start background goroutine to renew active leases
-//
-// This runs in the background and:
-// 1. Keeps all active leases alive
-// 2. Removes completed jobs from tracking
-// 3. Logs any renewal failures
-//
-// Call this once at startup: go lm.StartLeaseRenewalLoop(ctx, activeJobs)
-// Where activeJobs is a channel that receives jobs to track
-func (lm *LeaseManager) StartLeaseRenewalLoop(
-	ctx context.Context,
-	jobUpdates <-chan *common.Job,
-) {
-
-	ticker := time.NewTicker(lm.renewalInterval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			// Context cancelled, stop renewal loop
-			lm.log.Info("Lease renewal loop stopped")
-			return
-
-		case <-ticker.C:
-			// Time to renew all active leases
-			lm.renewAllLeases(ctx)
-
-		case job := <-jobUpdates:
-			// Track new job or clean up completed job
-			if job == nil {
-				continue
-			}
-
-			if job.IsCompleted() {
-				// Job is done, remove from active leases
-				delete(lm.activeLeases, job.ID)
-				lm.log.Debug("Removed completed job from lease tracking: %s", job.ID)
-			}
-		}
-	}
-}
-
-// renewAllLeases: Renew all active leases
-// Called periodically by renewal loop
-func (lm *LeaseManager) renewAllLeases(ctx context.Context) {
-	for jobID, leaseID := range lm.activeLeases {
-		err := lm.RenewLease(ctx, leaseID, jobID)
-		if err != nil {
-			lm.log.Warn("Failed to renew lease for job %s: %v", jobID, err)
-			// Don't delete from activeLeases, will retry next interval
-		}
-	}
-}
-
-// ============================================================================
-// UTILITY FUNCTIONS
-// ============================================================================
-
-// generateFencingToken: Generate a unique token for this execution attempt
-// This proves that WE are the current executor, not a stale one
-func generateFencingToken() string {
-	// In production, use uuid.NewString() from github.com/google/uuid
-	// For now, simple implementation using timestamp + random
-	return fmt.Sprintf("token-%d-%x", time.Now().UnixNano(), time.Now().UnixNano()%65536)
-}
-
-// parseLeaseValue: Parse lease value string
-// Format: "jobID|executorID|token|leaseID|timestamp"
-func parseLeaseValue(leaseValue string) []string {
-	// Simple parsing - in production use strings.Split with error handling
-	parts := make([]string, 0)
-	if leaseValue == "" {
-		return parts
-	}
-	return stringToSlice(leaseValue, '|')
-}
-
-// stringToSlice: Split string by delimiter (helper)
-func stringToSlice(s string, delimiter rune) []string {
-	result := make([]string, 0)
-	current := ""
-	for _, r := range s {
-		if r == delimiter {
-			result = append(result, current)
-			current = ""
-		} else {
-			current += string(r)
-		}
-	}
-	if current != "" {
-		result = append(result, current)
-	}
-	return result
-}
-
-// GetActiveLeaseCount: Return number of active leases being tracked
-func (lm *LeaseManager) GetActiveLeaseCount() int {
-	return len(lm.activeLeases)
-}
-
-// GetActiveLease: Get the lease ID for a specific job
-func (lm *LeaseManager) GetActiveLease(jobID string) (int64, bool) {
-	leaseID, exists := lm.activeLeases[jobID]
-	return leaseID, exists
+type Logger interface {
+	Infof(format string, args ...interface{})
+	Warnf(format string, args ...interface{})
+	Errorf(format string, args ...interface{})
 }
