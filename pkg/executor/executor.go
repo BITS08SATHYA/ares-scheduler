@@ -391,7 +391,7 @@ func (ex *Executor) createPodSpec(
 		GPUIndices:      decision.GPUIndices,
 		Timeout:         ex.config.DefaultTimeout,
 		RestartPolicy:   ex.config.RestartPolicy,
-		NodeID:          decision.NodeID, // CORRECTED: NodeID not NodeName
+		NodeID:          decision.NodeID,
 		Labels:          labels,
 	}
 

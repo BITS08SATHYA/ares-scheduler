@@ -1,0 +1,161 @@
+package global
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"time"
+
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/logger"
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler/common"
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler/local"
+)
+
+// ============================================================================
+// LOCAL SCHEDULER HTTP CLIENT (New integration layer)
+// ============================================================================
+// GlobalScheduler uses this to call LocalScheduler on remote cluster
+
+type LocalSchedulerClient struct {
+	httpClient *http.Client
+	log        *logger.Logger
+}
+
+// LocalScheduleRequest: Request to schedule job on local cluster
+type LocalScheduleRequest struct {
+	JobID   string          `json:"job_id"`
+	JobSpec *common.JobSpec `json:"job_spec"`
+}
+
+// LocalScheduleResponse: Response from local scheduler
+type LocalScheduleResponse struct {
+	Success  bool                           `json:"success"`
+	Decision *local.LocalSchedulingDecision `json:"decision,omitempty"`
+	Error    string                         `json:"error,omitempty"`
+}
+
+// NewLocalSchedulerClient creates new client
+func NewLocalSchedulerClient() *LocalSchedulerClient {
+	return &LocalSchedulerClient{
+		httpClient: &http.Client{
+			Timeout: 30 * time.Second,
+		},
+		log: logger.Get(),
+	}
+}
+
+// ScheduleJob calls remote LocalScheduler to schedule job
+//
+// RPC: HTTP POST to LocalScheduler
+// URL: {localSchedulerAddr}/schedule
+// Request: JobSpec
+// Response: LocalSchedulingDecision
+//
+// This is the critical integration between Layer 7 (GlobalScheduler) and Layer 6 (LocalScheduler)
+func (c *LocalSchedulerClient) ScheduleJob(
+	ctx context.Context,
+	localSchedulerAddr string,
+	jobSpec *common.JobSpec,
+) (*local.LocalSchedulingDecision, error) {
+
+	if localSchedulerAddr == "" {
+		return nil, fmt.Errorf("local scheduler address cannot be empty")
+	}
+
+	if jobSpec == nil {
+		return nil, fmt.Errorf("job spec cannot be nil")
+	}
+
+	// Prepare request
+	req := &LocalScheduleRequest{
+		JobID:   jobSpec.RequestID,
+		JobSpec: jobSpec,
+	}
+
+	reqBody, err := json.Marshal(req)
+	if err != nil {
+		c.log.Error("Failed to marshal request: %v", err)
+		return nil, fmt.Errorf("marshal failed: %w", err)
+	}
+
+	// Make HTTP POST request
+	url := fmt.Sprintf("%s/schedule", localSchedulerAddr)
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(reqBody))
+	if err != nil {
+		c.log.Error("Failed to create HTTP request: %v", err)
+		return nil, fmt.Errorf("request creation failed: %w", err)
+	}
+
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("X-Request-ID", jobSpec.RequestID)
+
+	c.log.Debug("Calling LocalScheduler: POST %s", url)
+
+	// Send request
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		c.log.Error("HTTP request failed: %v", err)
+		return nil, fmt.Errorf("http request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// Parse response
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		c.log.Error("Failed to read response body: %v", err)
+		return nil, fmt.Errorf("read response failed: %w", err)
+	}
+
+	var respData LocalScheduleResponse
+	err = json.Unmarshal(body, &respData)
+	if err != nil {
+		c.log.Error("Failed to unmarshal response: %v", err)
+		return nil, fmt.Errorf("unmarshal response failed: %w", err)
+	}
+
+	// Check response status
+	if !respData.Success {
+		c.log.Warn("LocalScheduler returned error: %s", respData.Error)
+		return nil, fmt.Errorf("local scheduling failed: %s", respData.Error)
+	}
+
+	if respData.Decision == nil {
+		c.log.Error("LocalScheduler returned no decision")
+		return nil, fmt.Errorf("local scheduler returned empty decision")
+	}
+
+	c.log.Info("✓ Local scheduling succeeded: node=%s, gpus=%v",
+		respData.Decision.NodeID, respData.Decision.GPUIndices)
+
+	return respData.Decision, nil
+}
+
+// GetClusterHealth gets cluster health status via HTTP
+func (c *LocalSchedulerClient) GetClusterHealth(
+	ctx context.Context,
+	localSchedulerAddr string,
+) (map[string]interface{}, error) {
+
+	url := fmt.Sprintf("%s/health", localSchedulerAddr)
+	httpReq, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("request creation failed: %w", err)
+	}
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("http request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var health map[string]interface{}
+	err = json.NewDecoder(resp.Body).Decode(&health)
+	if err != nil {
+		return nil, fmt.Errorf("unmarshal response failed: %w", err)
+	}
+
+	return health, nil
+}

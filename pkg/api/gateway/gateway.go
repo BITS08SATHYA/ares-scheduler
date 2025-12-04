@@ -316,7 +316,7 @@ func (ag *APIGateway) handleScheduleJob(w http.ResponseWriter, r *http.Request) 
 	// Success response
 	duration := time.Since(startTime)
 	atomic.AddUint64(&ag.totalScheduled, 1)
-
+	
 	response := &APIResponse{
 		Success:          true,
 		RequestID:        decision.JobID,

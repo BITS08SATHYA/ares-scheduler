@@ -87,6 +87,8 @@ type ClusterScore struct {
 type GlobalSchedulingDecision struct {
 	JobID              string
 	ClusterID          string // Which cluster
+	NodeID             string
+	GPUIndices         []int
 	Region             string // Which region
 	ClusterScore       float64
 	PlacementReasons   []string
@@ -487,10 +489,26 @@ func (gs *GlobalScheduler) ScheduleJob(
 		return nil, fmt.Errorf("cluster selection failed: %w", err)
 	}
 
-	// Step 2: Create decision
+	// Step 2
+	// NEW: Call LocalScheduler via HTTP
+	localClient := NewLocalSchedulerClient()
+	localDecision, err := localClient.ScheduleJob(
+		ctx,
+		bestCluster.LocalSchedulerAddr,
+		jobSpec,
+	)
+	if err != nil {
+		gs.log.Error("Local scheduling failed: %v", err)
+		gs.recordSchedulingFailure()
+		return nil, fmt.Errorf("local scheduling failed: %w", err)
+	}
+
+	// Step 3: Create decision
 	decision := &GlobalSchedulingDecision{
 		JobID:              jobSpec.RequestID,
 		ClusterID:          bestCluster.ClusterID,
+		NodeID:             localDecision.NodeID,
+		GPUIndices:         localDecision.GPUIndices,
 		Region:             bestCluster.Region,
 		ClusterScore:       clusterScore.Score,
 		PlacementReasons:   clusterScore.Reasons,
