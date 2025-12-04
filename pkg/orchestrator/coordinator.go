@@ -34,6 +34,8 @@ type SchedulingResult struct {
 	ClusterID          string
 	NodeID             string
 	GPUIndices         []int
+	ClusterScore       float64
+	PlacementReasons   []string
 	PodName            string
 	LocalSchedulerAddr string
 	CreatedAt          time.Time
@@ -152,6 +154,7 @@ func (jc *JobCoordinator) ScheduleJob(
 	// ========================================================================
 
 	globalDecision, err := jc.globalScheduler.ScheduleJob(ctx, jobSpec)
+
 	if err != nil {
 		jc.log.Error("Global scheduling failed for job %s: %v", jobID, err)
 		jobRecord.Status = common.StatusFailed
@@ -195,6 +198,8 @@ func (jc *JobCoordinator) ScheduleJob(
 		ClusterID:          globalDecision.ClusterID,
 		NodeID:             globalDecision.NodeID,
 		GPUIndices:         globalDecision.GPUIndices,
+		ClusterScore:       globalDecision.ClusterScore,
+		PlacementReasons:   globalDecision.PlacementReasons,
 		PodName:            "", // Will be set after pod creation
 		LocalSchedulerAddr: globalDecision.LocalSchedulerAddr,
 		CreatedAt:          time.Now(),

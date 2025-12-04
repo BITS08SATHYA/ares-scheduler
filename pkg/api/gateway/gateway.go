@@ -11,6 +11,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/idempotency"
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/lease"
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/orchestrator"
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/storage/etcd"
+
 	"io"
 	"net/http"
 	"strings"
@@ -22,6 +27,11 @@ import (
 
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/logger"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler/common"
+
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/executor"
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/gpu"
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/job"
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/storage/redis"
 )
 
 // ============================================================================
@@ -36,7 +46,15 @@ type APIGateway struct {
 	log             *logger.Logger
 	config          *GatewayConfig
 
-	// Metrics (atomic for thread-safety)
+	jobCoordinator *orchestrator.JobCoordinator // NEW: Layer 10
+	idempotencyMgr *idempotency.IdempotencyManager
+	leaseManager   *lease.LeaseManager
+
+	activeJobs    map[string]*executor.ExecutionContext
+	completedJobs map[string]*executor.ExecutionResult
+	podRegistry   map[string]*executor.PodInfo
+	k8sClient     executor.K8sClient
+
 	totalRequests   uint64
 	totalErrors     uint64
 	totalScheduled  uint64
@@ -161,6 +179,229 @@ func NewAPIGateway(
 	}
 
 	return gateway, nil
+}
+
+// ============================================================================
+// API GATEWAY WITH JOB COORDINATOR
+// ============================================================================
+// Enhanced API Gateway that integrates all 10 layers via Job Coordinator
+//
+// Architecture:
+//
+//   API Request (Layer 8)
+//        ↓
+//   API Gateway (Layer 8) ← YOU ARE HERE
+//        ↓
+//   Job Coordinator (Layer 10) ← ORCHESTRATES ALL
+//        ↓
+//   ┌────────────────────────────────────────┐
+//   ├─ Layer 3: Idempotency Check            │
+//   ├─ Layer 3: Lease Acquisition            │
+//   ├─ Layer 3: Job Persistence              │
+//   ├─ Layer 7: Global Scheduler             │
+//   ├─ Layer 6: Local Scheduler (per cluster)│
+//   ├─ Layer 5: GPU Topology                 │
+//   ├─ Layer 9: Executor (create Pod)        │
+//   └────────────────────────────────────────┘
+//        ↓
+//   Kubernetes Pod (executes job)
+
+// APIGatewayWithCoordinator: Enhanced gateway with full coordinator integration
+type APIGatewayWithCoordinator struct {
+	*APIGateway // Embed existing gateway
+
+	// Layer 10: Job Coordinator (orchestrates all layers)
+	jobCoordinator *orchestrator.JobCoordinator
+	log            *logger.Logger
+}
+
+// ============================================================================
+// INITIALIZATION: Wire all 10 layers
+// ============================================================================
+
+// NewAPIGatewayWithCoordinator: Initialize complete pipeline
+//
+// # Returns fully wired API Gateway with Job Coordinator managing all layers
+//
+// This function demonstrates the complete architecture:
+// - Connects to etcd for distributed coordination
+// - Connects to Redis for caching & job queuing
+// - Initializes all 10 layers in proper dependency order
+// - Returns ready-to-use gateway
+func NewAPIGatewayWithCoordinator(
+	controlPlaneAddr string,
+	etcdEndpoints []string,
+	redisAddr string,
+	config *GatewayConfig,
+) (*APIGatewayWithCoordinator, error) {
+
+	log := logger.Get()
+	log.Info("Initializing API Gateway with Job Coordinator...")
+
+	// ========================================================================
+	// LAYER 2: Connect to storage backends
+	// ========================================================================
+
+	log.Info("Layer 2: Connecting to etcd and Redis...")
+
+	// etcd: For distributed coordination, leases, state management
+	//etcdClient, err := clientv3.New(clientv3.Config{
+	//	Endpoints:   etcdEndpoints,
+	//	DialTimeout: 10 * time.Second,
+	//})
+
+	etcdClient, err := etcd.NewETCDClient(etcdEndpoints, config.RequestTimeout)
+
+	if err != nil {
+		log.Error("Failed to connect to etcd: %v", err)
+		return nil, fmt.Errorf("etcd connection failed: %w", err)
+	}
+
+	// Redis: For fast caching, queuing, deduplication
+	redisClient, err := redis.NewRedisClient(redisAddr, "", 0)
+	if err != nil {
+		log.Error("Failed to connect to Redis: %v", err)
+		redisClient.Close()
+		return nil, fmt.Errorf("redis connection failed: %w", err)
+	}
+
+	log.Info("✓ Connected to etcd and Redis")
+
+	// ========================================================================s
+	// LAYER 3: Persistence & Coordination
+	// ========================================================================
+
+	log.Info("Layer 3: Initializing persistence layer...")
+
+	// Job Store: Persists job state to etcd
+	jobStore := job.NewETCDJobStore(etcdClient)
+
+	// Lease Manager: Distributed leases for exactly-once semantics
+	leaseManager := lease.NewLeaseManager(etcdClient, controlPlaneAddr, &SimpleLogger{})
+
+	// Idempotency Manager: Request deduplication via Redis
+	idempotencyManager := idempotency.NewIdempotencyManager(redisClient)
+
+	log.Info("Layer 3 initialized: JobStore, LeaseManager, IdempotencyManager")
+
+	// ========================================================================
+	// LAYER 5: GPU Discovery & Topology
+	// ========================================================================
+
+	log.Info("Layer 5: Initializing GPU discovery and topology...")
+
+	gpuDiscovery := gpu.NewGPUDiscovery(redisClient)
+	topologyManager := gpu.NewGPUTopologyManager(redisClient, gpuDiscovery)
+
+	log.Info("✓ Layer 5 initialized: GPUDiscovery, TopologyManager", topologyManager)
+
+	// ========================================================================
+	// LAYER 9: Executor (creates Kubernetes Pods)
+	// ========================================================================
+
+	log.Info("Layer 9: Initializing Kubernetes executor...")
+
+	mockK8sClient := executor.NewMockK8sClient()
+	executorConfig := &executor.ExecutorConfig{
+		ClusterID:                "global-control-plane",
+		Namespace:                "default",
+		DefaultTimeout:           1 * time.Hour,
+		DefaultMemoryMB:          1024,
+		DefaultCPUMillis:         500,
+		HealthCheckInterval:      5 * time.Second,
+		MaxConcurrentJobs:        1000,
+		ImageRegistry:            "docker.io",
+		DefaultJobImage:          "ares-job:latest",
+		RestartPolicy:            "OnFailure",
+		ImagePullPolicy:          "IfNotPresent",
+		EnableGPUSupport:         true,
+		LogCollectionEnabled:     true,
+		MetricsCollectionEnabled: true,
+	}
+
+	executorService, err := executor.NewExecutor(
+		"global-control-plane",
+		mockK8sClient,
+		executorConfig,
+	)
+	if err != nil {
+		log.Error("Failed to create executor: %v", err)
+		redisClient.Close()
+		etcdClient.Close()
+		return nil, fmt.Errorf("executor creation failed: %w", err)
+	}
+
+	log.Info("✓ Layer 9 initialized: Executor with Mock K8s client")
+
+	// ========================================================================
+	// LAYER 7: Global Scheduler (datacenter-level decisions)
+	// ========================================================================
+
+	log.Info("Layer 7: Initializing global scheduler...")
+
+	globalScheduler := global.NewGlobalScheduler(controlPlaneAddr, redisClient)
+
+	log.Info("✓ Layer 7 initialized: GlobalScheduler")
+
+	// ========================================================================
+	// LAYER 10: Job Coordinator (orchestrates all)
+	// ========================================================================
+
+	log.Info("Layer 10: Initializing job coordinator...")
+
+	jobCoordinator := orchestrator.NewJobCoordinator(
+		idempotencyManager,
+		leaseManager,
+		jobStore,
+		globalScheduler,
+		executorService,
+	)
+
+	log.Info("✓ Layer 10 initialized: JobCoordinator")
+
+	// ========================================================================
+	// LAYER 8: API Gateway
+	// ========================================================================
+
+	log.Info("Layer 8: Initializing API gateway...")
+
+	if config == nil {
+		config = DefaultGatewayConfig
+	}
+
+	baseGateway := &APIGateway{
+		globalScheduler: globalScheduler,
+		log:             log,
+		config:          config,
+		activeJobs:      make(map[string]*executor.ExecutionContext),
+		completedJobs:   make(map[string]*executor.ExecutionResult),
+		podRegistry:     make(map[string]*executor.PodInfo),
+		k8sClient:       mockK8sClient,
+	}
+
+	gatewayWithCoordinator := &APIGatewayWithCoordinator{
+		APIGateway:     baseGateway,
+		jobCoordinator: jobCoordinator,
+		log:            log,
+	}
+
+	log.Info("✓ Layer 8 initialized: API Gateway")
+	log.Info("")
+	log.Info("✓✓✓ COMPLETE: All 10 layers initialized and wired ✓✓✓")
+	log.Info("")
+	log.Info("Architecture summary:")
+	log.Info("  Layer  1: Logger")
+	log.Info("  Layer  2: etcd + Redis")
+	log.Info("  Layer  3: JobStore + LeaseManager + IdempotencyManager")
+	log.Info("  Layer  5: GPUDiscovery + TopologyManager")
+	log.Info("  Layer  6: LocalScheduler (runs on each cluster)")
+	log.Info("  Layer  7: GlobalScheduler (datacenter-level)")
+	log.Info("  Layer  9: Executor (Kubernetes Pod creation)")
+	log.Info("  Layer 10: JobCoordinator (orchestrates all)")
+	log.Info("  Layer  8: API Gateway (entry point) ← YOU ARE HERE")
+	log.Info("")
+
+	return gatewayWithCoordinator, nil
 }
 
 // ============================================================================
@@ -316,7 +557,7 @@ func (ag *APIGateway) handleScheduleJob(w http.ResponseWriter, r *http.Request) 
 	// Success response
 	duration := time.Since(startTime)
 	atomic.AddUint64(&ag.totalScheduled, 1)
-	
+
 	response := &APIResponse{
 		Success:          true,
 		RequestID:        decision.JobID,

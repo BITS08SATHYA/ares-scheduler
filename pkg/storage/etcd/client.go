@@ -60,8 +60,8 @@ func (ec *ETCDClient) Put(ctx context.Context, key, value string) error {
 }
 
 // PutWithTTL: Store a key-value pair with expiration (TTL)
-func (ec *ETCDClient) PutWithTTL(ctx context.Context, key, value string, ttlSeconds int) error {
-	grant, err := ec.cli.Grant(ctx, int64(ttlSeconds))
+func (ec *ETCDClient) PutWithTTL(ctx context.Context, key, value string, ttlSeconds int64) error {
+	grant, err := ec.cli.Grant(ctx, ttlSeconds)
 	if err != nil {
 		return err
 	}
@@ -91,6 +91,7 @@ func (ec *ETCDClient) Get(ctx context.Context, key string) (string, error) {
 
 	ec.log.Debug("Got key: %s", key)
 	return string(resp.Kvs[0].Value), nil
+
 }
 
 // GetAll: Get all keys with prefix
@@ -143,8 +144,8 @@ func (ec *ETCDClient) WatchPrefix(ctx context.Context, prefix string) clientv3.W
 
 // GrantLease: Create a new lease for distributed locking
 // Returns LeaseID that can be renewed
-func (ec *ETCDClient) GrantLease(ctx context.Context, ttlSeconds int) (int64, error) {
-	grant, err := ec.cli.Grant(ctx, int64(ttlSeconds))
+func (ec *ETCDClient) GrantLease(ctx context.Context, ttlSeconds int64) (int64, error) {
+	grant, err := ec.cli.Grant(ctx, ttlSeconds)
 	if err != nil {
 		ec.log.Error("Failed to grant lease: %v", err)
 		return 0, err

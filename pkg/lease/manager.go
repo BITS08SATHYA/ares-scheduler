@@ -16,11 +16,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/storage/etcd"
 	"math"
 	"sync"
 	"time"
-
-	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
 // ============================================================================
@@ -72,7 +71,7 @@ type Lease struct {
 
 // LeaseManager handles distributed leases for exactly-once semantics
 type LeaseManager struct {
-	etcdClient  *clientv3.Client
+	etcdClient  *etcd.ETCDClient
 	schedulerID string
 	leaseTTL    int64
 	log         Logger
@@ -81,7 +80,7 @@ type LeaseManager struct {
 
 // JobStore handles persistent job state in etcd
 type JobStore struct {
-	etcdClient *clientv3.Client
+	etcdClient *etcd.ETCDClient
 	log        Logger
 	mu         sync.RWMutex
 }
@@ -93,7 +92,7 @@ type JobStore struct {
 // NewLeaseManager creates a new lease manager
 // schedulerID: unique identifier for this scheduler instance
 // leaseTTL: how long a lease lasts (default 30 seconds)
-func NewLeaseManager(etcdClient *clientv3.Client, schedulerID string, log Logger) *LeaseManager {
+func NewLeaseManager(etcdClient *etcd.ETCDClient, schedulerID string, log Logger) *LeaseManager {
 	return &LeaseManager{
 		etcdClient:  etcdClient,
 		schedulerID: schedulerID,
@@ -126,7 +125,7 @@ func (lm *LeaseManager) AcquireLeaseForJob(ctx context.Context, jobID string) (b
 	defer lm.mu.Unlock()
 
 	// Step 1: Create etcd lease with TTL
-	lease, err := lm.etcdClient.Lease.Grant(ctx, lm.leaseTTL)
+	lease, err := lm.etcdClient.GrantLease(ctx, lm.leaseTTL)
 	if err != nil {
 		lm.log.Errorf("failed to grant lease: %v", err)
 		return false, fmt.Errorf("grant lease: %w", err)
@@ -147,18 +146,20 @@ func (lm *LeaseManager) AcquireLeaseForJob(ctx context.Context, jobID string) (b
 	// Step 3: ATOMIC transaction
 	// If key doesn't exist (CreateRevision == 0), create it
 	// Otherwise, abort the transaction
-	txnResponse, err := lm.etcdClient.Txn(ctx).
-		If(clientv3.Compare(clientv3.CreateRevision(leaseKey), "=", 0)).
-		Then(clientv3.OpPut(leaseKey, string(leaseValue), clientv3.WithLease(lease.ID))).
-		Else(clientv3.OpGet(leaseKey)).
-		Commit()
+	//txnResponse, err := lm.etcdClient.Txn(ctx).
+	//	If(clientv3.Compare(clientv3.CreateRevision(leaseKey), "=", 0)).
+	//	Then(clientv3.OpPut(leaseKey, string(leaseValue), clientv3.WithLease(lease.ID))).
+	//	Else(clientv3.OpGet(leaseKey)).
+	//	Commit()
+
+	txnResponse, err := lm.etcdClient.LeaseCAS(ctx, leaseKey, string(leaseValue), lease)
 
 	if err != nil {
 		lm.log.Errorf("txn failed for lease: %v", err)
 		return false, fmt.Errorf("txn failed: %w", err)
 	}
 
-	if txnResponse.Succeeded {
+	if txnResponse {
 		lm.log.Infof("lease acquired for job %s", jobID)
 		return true, nil
 	}
@@ -182,13 +183,9 @@ func (lm *LeaseManager) RenewLeaseForJob(ctx context.Context, jobID string) erro
 		return fmt.Errorf("get lease: %w", err)
 	}
 
-	if len(resp.Kvs) == 0 {
-		return errors.New("lease not found")
-	}
-
 	// Parse existing lease
 	var lease Lease
-	if err := json.Unmarshal(resp.Kvs[0].Value, &lease); err != nil {
+	if err := json.Unmarshal([]byte(resp), &lease); err != nil {
 		return fmt.Errorf("unmarshal lease: %w", err)
 	}
 
@@ -198,7 +195,7 @@ func (lm *LeaseManager) RenewLeaseForJob(ctx context.Context, jobID string) erro
 	}
 
 	// Create new lease with extended TTL
-	newLease, err := lm.etcdClient.Lease.Grant(ctx, lm.leaseTTL)
+	newLease, err := lm.etcdClient.GrantLease(ctx, lm.leaseTTL)
 	if err != nil {
 		return fmt.Errorf("grant new lease: %w", err)
 	}
@@ -207,7 +204,7 @@ func (lm *LeaseManager) RenewLeaseForJob(ctx context.Context, jobID string) erro
 	lease.ExpiresAt = time.Now().Add(time.Duration(lm.leaseTTL) * time.Second)
 	leaseValue, _ := json.Marshal(lease)
 
-	_, err = lm.etcdClient.Put(ctx, leaseKey, string(leaseValue), clientv3.WithLease(newLease.ID))
+	err = lm.etcdClient.PutWithTTL(ctx, leaseKey, string(leaseValue), newLease)
 	return err
 }
 
@@ -224,13 +221,13 @@ func (lm *LeaseManager) ReleaseLeaseForJob(ctx context.Context, jobID string) er
 		return fmt.Errorf("get lease: %w", err)
 	}
 
-	if len(resp.Kvs) == 0 {
-		return nil // Already released
-	}
+	//if len(resp.Kvs) == 0 {
+	//	return nil // Already released
+	//}
 
 	// Parse and verify ownership
 	var lease Lease
-	if err := json.Unmarshal(resp.Kvs[0].Value, &lease); err != nil {
+	if err := json.Unmarshal([]byte(resp), &lease); err != nil {
 		return fmt.Errorf("unmarshal lease: %w", err)
 	}
 
@@ -239,7 +236,7 @@ func (lm *LeaseManager) ReleaseLeaseForJob(ctx context.Context, jobID string) er
 	}
 
 	// Delete the lease key
-	_, err = lm.etcdClient.Delete(ctx, leaseKey)
+	err = lm.etcdClient.Delete(ctx, leaseKey)
 	if err != nil {
 		return fmt.Errorf("delete lease: %w", err)
 	}
@@ -257,12 +254,12 @@ func (lm *LeaseManager) GetLeaseForJob(ctx context.Context, jobID string) (*Leas
 		return nil, fmt.Errorf("get lease: %w", err)
 	}
 
-	if len(resp.Kvs) == 0 {
-		return nil, errors.New("lease not found")
-	}
+	//if len(resp.Kvs) == 0 {
+	//	return nil, errors.New("lease not found")
+	//}
 
 	var lease Lease
-	if err := json.Unmarshal(resp.Kvs[0].Value, &lease); err != nil {
+	if err := json.Unmarshal([]byte(resp), &lease); err != nil {
 		return nil, fmt.Errorf("unmarshal lease: %w", err)
 	}
 
@@ -274,7 +271,7 @@ func (lm *LeaseManager) GetLeaseForJob(ctx context.Context, jobID string) (*Leas
 // ============================================================================
 
 // NewJobStore creates a new job store
-func NewJobStore(etcdClient *clientv3.Client, log Logger) *JobStore {
+func NewJobStore(etcdClient *etcd.ETCDClient, log Logger) *JobStore {
 	return &JobStore{
 		etcdClient: etcdClient,
 		log:        log,
@@ -293,7 +290,7 @@ func (js *JobStore) StoreJob(ctx context.Context, job *JobRecord) error {
 		return fmt.Errorf("marshal job: %w", err)
 	}
 
-	_, err = js.etcdClient.Put(ctx, jobKey, string(jobValue))
+	err = js.etcdClient.Put(ctx, jobKey, string(jobValue))
 	if err != nil {
 		js.log.Errorf("failed to store job %s: %v", job.JobID, err)
 		return fmt.Errorf("put job: %w", err)
@@ -312,12 +309,12 @@ func (js *JobStore) GetJob(ctx context.Context, jobID string) (*JobRecord, error
 		return nil, fmt.Errorf("get job: %w", err)
 	}
 
-	if len(resp.Kvs) == 0 {
-		return nil, errors.New("job not found")
-	}
+	//if len(resp.Kvs) == 0 {
+	//	return nil, errors.New("job not found")
+	//}
 
 	var job JobRecord
-	if err := json.Unmarshal(resp.Kvs[0].Value, &job); err != nil {
+	if err := json.Unmarshal([]byte(resp), &job); err != nil {
 		return nil, fmt.Errorf("unmarshal job: %w", err)
 	}
 
@@ -450,15 +447,15 @@ func (js *JobStore) PrepareRetry(ctx context.Context, jobID string) (time.Durati
 func (js *JobStore) GetJobsByTenant(ctx context.Context, tenantID string) ([]*JobRecord, error) {
 	prefix := "ares:jobs:"
 
-	resp, err := js.etcdClient.Get(ctx, prefix, clientv3.WithPrefix())
+	resp, err := js.etcdClient.GetAll(ctx, prefix)
 	if err != nil {
 		return nil, fmt.Errorf("get jobs: %w", err)
 	}
 
 	var jobs []*JobRecord
-	for _, kv := range resp.Kvs {
+	for _, kv := range resp {
 		var job JobRecord
-		if err := json.Unmarshal(kv.Value, &job); err != nil {
+		if err := json.Unmarshal([]byte(kv), &job); err != nil {
 			js.log.Warnf("failed to unmarshal job: %v", err)
 			continue
 		}
@@ -475,15 +472,15 @@ func (js *JobStore) GetJobsByTenant(ctx context.Context, tenantID string) ([]*Jo
 func (js *JobStore) GetJobsByStatus(ctx context.Context, status JobState) ([]*JobRecord, error) {
 	prefix := "ares:jobs:"
 
-	resp, err := js.etcdClient.Get(ctx, prefix, clientv3.WithPrefix())
+	resp, err := js.etcdClient.GetAll(ctx, prefix)
 	if err != nil {
 		return nil, fmt.Errorf("get jobs: %w", err)
 	}
 
 	var jobs []*JobRecord
-	for _, kv := range resp.Kvs {
+	for _, kv := range resp {
 		var job JobRecord
-		if err := json.Unmarshal(kv.Value, &job); err != nil {
+		if err := json.Unmarshal([]byte(kv), &job); err != nil {
 			js.log.Warnf("failed to unmarshal job: %v", err)
 			continue
 		}
@@ -502,7 +499,7 @@ func (js *JobStore) DeleteJob(ctx context.Context, jobID string) error {
 	defer js.mu.Unlock()
 
 	jobKey := fmt.Sprintf("ares:jobs:%s", jobID)
-	_, err := js.etcdClient.Delete(ctx, jobKey)
+	err := js.etcdClient.Delete(ctx, jobKey)
 	if err != nil {
 		return fmt.Errorf("delete job: %w", err)
 	}
@@ -517,13 +514,13 @@ func (js *JobStore) DeleteJob(ctx context.Context, jobID string) error {
 // RequestDeduplicator handles idempotent job submission using request IDs
 // If client submits same jobID twice, we return the cached result
 type RequestDeduplicator struct {
-	etcdClient *clientv3.Client
+	etcdClient *etcd.ETCDClient
 	log        Logger
 	mu         sync.RWMutex
 }
 
 // NewRequestDeduplicator creates a new request deduplicator
-func NewRequestDeduplicator(etcdClient *clientv3.Client, log Logger) *RequestDeduplicator {
+func NewRequestDeduplicator(etcdClient *etcd.ETCDClient, log Logger) *RequestDeduplicator {
 	return &RequestDeduplicator{
 		etcdClient: etcdClient,
 		log:        log,
@@ -540,12 +537,12 @@ func (rd *RequestDeduplicator) CacheResult(ctx context.Context, jobID string, re
 	cacheValue, _ := json.Marshal(result)
 
 	// Store with 7-day TTL so old results eventually expire
-	resp, err := rd.etcdClient.Grant(ctx, 7*24*60*60)
+	resp, err := rd.etcdClient.GrantLease(ctx, 7*24*60*60)
 	if err != nil {
 		return fmt.Errorf("grant lease: %w", err)
 	}
 
-	_, err = rd.etcdClient.Put(ctx, cacheKey, string(cacheValue), clientv3.WithLease(resp.ID))
+	err = rd.etcdClient.PutWithTTL(ctx, cacheKey, string(cacheValue), resp)
 	return err
 }
 
@@ -559,14 +556,17 @@ func (rd *RequestDeduplicator) GetCachedResult(ctx context.Context, jobID string
 		return nil, false, fmt.Errorf("get cache: %w", err)
 	}
 
-	if len(resp.Kvs) == 0 {
-		return nil, false, nil // Not cached
-	}
+	//if len(resp.Kvs) == 0 {
+	//	return nil, false, nil // Not cached
+	//}
 
 	var result interface{}
-	if err := json.Unmarshal(resp.Kvs[0].Value, &result); err != nil {
+	if err := json.Unmarshal([]byte(resp), &result); err != nil {
 		return nil, false, fmt.Errorf("unmarshal result: %w", err)
 	}
+	//if err := json.Unmarshal(resp.Kvs[0].Value, &result); err != nil {
+	//	return nil, false, fmt.Errorf("unmarshal result: %w", err)
+	//}
 
 	rd.log.Infof("returning cached result for job %s", jobID)
 	return result, true, nil
