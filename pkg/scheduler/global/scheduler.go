@@ -50,8 +50,8 @@ type ClusterInfo struct {
 	ClusterID          string
 	Region             string // us-west, eu-west, ap-south
 	Zone               string // us-west-2a, us-west-2b
-	IsHealthy          bool
-	TotalGPUs          int
+	IsHealthy          bool   // true or false
+	TotalGPUs          int    //
 	AvailableGPUs      int
 	TotalMemoryGB      float64
 	AvailableMemoryGB  float64
@@ -404,7 +404,7 @@ func (gs *GlobalScheduler) scoreCluster(
 		score.Reasons = append(score.Reasons, "insufficient-gpus")
 	}
 
-	// Factor 2: Memory availability (datacenter-level)
+	// Factor 2: Memory availability
 	requiredMemoryGB := float64(jobSpec.MemoryMB) / 1024.0
 	if cluster.AvailableMemoryGB >= requiredMemoryGB {
 		score.Score += (cluster.AvailableMemoryGB - requiredMemoryGB) * 0.05
