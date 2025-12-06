@@ -16,6 +16,8 @@ type RedisClient struct {
 
 // NewRedisClient: Create a new Redis client
 func NewRedisClient(addr, password string, db int) (*RedisClient, error) {
+	// Get logger instance
+	log := logger.Get()
 	cli := redis.NewClient(&redis.Options{
 		Addr:     addr,
 		Password: password,
@@ -28,11 +30,11 @@ func NewRedisClient(addr, password string, db int) (*RedisClient, error) {
 
 	err := cli.Ping(ctx).Err()
 	if err != nil {
-		logger.Error("Failed to connect to Redis at %s: %v", addr, err)
+		log.Error("Failed to connect to Redis at %s: %v", addr, err)
 		return nil, err
 	}
 
-	logger.Info("Connected to Redis at %s", addr)
+	log.Info("Connected to Redis at %s", addr)
 
 	return &RedisClient{
 		cli: cli,

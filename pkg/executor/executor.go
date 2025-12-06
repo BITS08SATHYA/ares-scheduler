@@ -13,12 +13,13 @@ package executor
 import (
 	"context"
 	"fmt"
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler/local"
+
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/logger"
-	"github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler/local"
 )
 
 // ============================================================================

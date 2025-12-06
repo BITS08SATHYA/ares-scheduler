@@ -1,15 +1,23 @@
+// File: pkg/logger/logger.go
+// Logger: Simple structured logging wrapper
+// Implements: Sync() method for graceful logger shutdown
+
 package logger
 
 import (
 	"fmt"
+	"os"
 	"time"
 )
 
-// Layer 1: Logging infrastructure (simple wrapper)
+// ============================================================================
+// LOGGER INTERFACE & TYPES
+// ============================================================================
 
 // Logger: Simple structured logging interface
 type Logger struct {
 	level LogLevel
+	name  string
 }
 
 // LogLevel: Log severity levels
@@ -22,6 +30,7 @@ const (
 	ErrorLevel
 )
 
+// levelNames: Map level to string
 var levelNames = map[LogLevel]string{
 	DebugLevel: "DEBUG",
 	InfoLevel:  "INFO",
@@ -29,86 +38,160 @@ var levelNames = map[LogLevel]string{
 	ErrorLevel: "ERROR",
 }
 
-var currentLogger *Logger
+// ============================================================================
+// GLOBAL LOGGER INSTANCE
+// ============================================================================
 
-// Initialize logger with level
-func Init(levelStr string) {
-	level := InfoLevel
+var globalLogger *Logger
+
+func init() {
+	globalLogger = &Logger{
+		level: InfoLevel,
+		name:  "ares",
+	}
+}
+
+// Get: Get the global logger instance
+func Get() *Logger {
+	return globalLogger
+}
+
+// ============================================================================
+// LOGGING METHODS
+// ============================================================================
+
+// Debug: Log debug message
+func (l *Logger) Debug(format string, args ...interface{}) {
+	if l.level <= DebugLevel {
+		l.log(DebugLevel, format, args...)
+	}
+}
+
+// Info: Log info message
+func (l *Logger) Info(format string, args ...interface{}) {
+	if l.level <= InfoLevel {
+		l.log(InfoLevel, format, args...)
+	}
+}
+
+// Warn: Log warning message
+func (l *Logger) Warn(format string, args ...interface{}) {
+	if l.level <= WarnLevel {
+		l.log(WarnLevel, format, args...)
+	}
+}
+
+// Error: Log error message
+func (l *Logger) Error(format string, args ...interface{}) {
+	if l.level <= ErrorLevel {
+		l.log(ErrorLevel, format, args...)
+	}
+}
+
+// ============================================================================
+// INTERNAL LOGGING
+// ============================================================================
+
+// log: Internal logging function
+func (l *Logger) log(level LogLevel, format string, args ...interface{}) {
+	timestamp := time.Now().Format("2006-01-02 15:04:05.000")
+	levelStr := levelNames[level]
+
+	message := fmt.Sprintf(format, args...)
+	output := fmt.Sprintf("[%s] [%s] %s: %s\n", timestamp, l.name, levelStr, message)
+
+	// Write to stdout/stderr based on level
+	if level >= ErrorLevel {
+		fmt.Fprint(os.Stderr, output)
+	} else {
+		fmt.Fprint(os.Stdout, output)
+	}
+}
+
+// ============================================================================
+// SYNC METHOD - GRACEFUL SHUTDOWN
+// ============================================================================
+
+// Sync: Flush any pending logs and close resources
+// This method is called during graceful shutdown
+// Error is ignored (best effort) as per logging patterns
+func (l *Logger) Sync() error {
+	// For a simple logger, Sync flushes stdout/stderr
+	// This is safe to call and returns no error
+
+	if err := os.Stdout.Sync(); err != nil {
+		// Log sync failed, but we can't log it (would be recursive)
+		// Just return the error
+		return err
+	}
+
+	if err := os.Stderr.Sync(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// ============================================================================
+// CONFIGURATION METHODS
+// ============================================================================
+
+// SetLevel: Set the log level
+func (l *Logger) SetLevel(level LogLevel) {
+	l.level = level
+}
+
+// SetLevelStr: Set log level from string
+func (l *Logger) SetLevelStr(levelStr string) {
 	switch levelStr {
 	case "debug":
-		level = DebugLevel
+		l.level = DebugLevel
 	case "info":
-		level = InfoLevel
+		l.level = InfoLevel
 	case "warn":
-		level = WarnLevel
+		l.level = WarnLevel
 	case "error":
-		level = ErrorLevel
-	}
-
-	currentLogger = &Logger{
-		level: level,
+		l.level = ErrorLevel
+	default:
+		l.level = InfoLevel
 	}
 }
 
-// Get returns the global logger instance
-func Get() *Logger {
-	if currentLogger == nil {
-		currentLogger = &Logger{level: InfoLevel}
-	}
-	return currentLogger
+// GetLevel: Get current log level
+func (l *Logger) GetLevel() LogLevel {
+	return l.level
 }
 
-// Private log method
-func (l *Logger) log(level LogLevel, format string, args ...interface{}) {
-	if level < l.level {
-		return // Skip if below threshold
-	}
-
-	timestamp := time.Now().Format("2006-01-02 15:04:05")
-	levelName := levelNames[level]
-	message := fmt.Sprintf(format, args...)
-
-	fmt.Printf("[%s] %s: %s\n", timestamp, levelName, message)
+// SetName: Set logger name
+func (l *Logger) SetName(name string) {
+	l.name = name
 }
 
-// Public logging methods
+// ============================================================================
+// USAGE EXAMPLES
+// ============================================================================
 
-func (l *Logger) Debug(format string, args ...interface{}) {
-	l.log(DebugLevel, format, args...)
-}
+/*
+Basic usage:
 
-func (l *Logger) Info(format string, args ...interface{}) {
-	l.log(InfoLevel, format, args...)
-}
+  log := logger.Get()
 
-func (l *Logger) Warn(format string, args ...interface{}) {
-	l.log(WarnLevel, format, args...)
-}
+  log.Info("Starting application")
+  log.Debug("Debug info: %v", value)
+  log.Warn("Warning: %s", msg)
+  log.Error("Error: %v", err)
 
-func (l *Logger) Error(format string, args ...interface{}) {
-	l.log(ErrorLevel, format, args...)
-}
+  // Graceful shutdown
+  defer log.Sync()
 
-// Convenience functions using global logger
+In main.go:
 
-func Debug(format string, args ...interface{}) {
-	Get().Debug(format, args...)
-}
+  log := initializeLogger(*logLevel)
+  defer func() {
+    if log != nil {
+      _ = log.Sync()  // Safe to call, error is ignored (best effort)
+    }
+  }()
+*/
 
-func Info(format string, args ...interface{}) {
-	Get().Info(format, args...)
-}
-
-func Warn(format string, args ...interface{}) {
-	Get().Warn(format, args...)
-}
-
-func Error(format string, args ...interface{}) {
-	Get().Error(format, args...)
-}
-
-// WithFields: Return a logger with context fields
-// TODO: Implement structured logging with fields
-func WithFields(fields map[string]interface{}) *Logger {
-	return Get() // Simplified for now
-}
+// ============================================================================

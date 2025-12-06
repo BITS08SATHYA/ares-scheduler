@@ -9,7 +9,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/BITS08SATHYA/ares-scheduler/pkg/executor"
+	//"github.com/BITS08SATHYA/ares-scheduler/pkg/executor"
+
+	//"github.com/BITS08SATHYA/ares-scheduler/pkg/executor"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/gpu"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/logger"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler/common"
@@ -47,7 +49,7 @@ type LocalScheduler struct {
 	metrics   *LocalMetrics
 
 	// Executor
-	executor *executor.Executor
+	//executor *executor.Executor
 }
 
 // NodeState: Track state of single node in cluster
@@ -108,7 +110,7 @@ func NewLocalScheduler(
 	redisClient *redis.RedisClient,
 	gpuDiscovery *gpu.GPUDiscovery,
 	topologyManager *gpu.GPUTopologyManager,
-	executor *executor.Executor,
+	// executor *executor.Executor,
 ) *LocalScheduler {
 	return &LocalScheduler{
 		clusterID:       clusterID,
@@ -122,7 +124,7 @@ func NewLocalScheduler(
 			TotalJobsFailed:    0,
 			LastUpdated:        time.Now(),
 		},
-		executor: executor,
+		//executor: executor,
 	}
 }
 
@@ -473,21 +475,22 @@ func (ls *LocalScheduler) ScheduleJob(
 			fmt.Sprintf("gpu-affinity=%s", affinityScore.Reason))
 	}
 
+	// This either moved to coordinator.go or to the global.go (depends)
 	// Call Executor to create Pod
-	execCtx, err := ls.executor.ExecuteJob(ctx, decision)
-	if err != nil {
-		ls.log.Error("Pod creation failed: %v", err)
-		ls.recordSchedulingFailure()
-		return nil, fmt.Errorf("executor failed: %w", err)
-	}
-
-	ls.log.Info("Pod created: %s for job %s", execCtx.PodName, jobSpec.RequestID)
-
-	// Update the metrics (global metrics)
-	ls.recordSchedulingSuccess()
-
-	ls.log.Info("Scheduled job %s on node %s GPUs %v (node_score=%.1f, gpu_affinity=%.1f)",
-		jobSpec.RequestID, bestNode.NodeID, gpuIndices, decision.NodeScore, decision.GPUAffinityScore)
+	//execCtx, err := ls.executor.ExecuteJob(ctx, decision)
+	//if err != nil {
+	//	ls.log.Error("Pod creation failed: %v", err)
+	//	ls.recordSchedulingFailure()
+	//	return nil, fmt.Errorf("executor failed: %w", err)
+	//}
+	//
+	//ls.log.Info("Pod created: %s for job %s", execCtx.PodName, jobSpec.RequestID)
+	//
+	//// Update the metrics (global metrics)
+	//ls.recordSchedulingSuccess()
+	//
+	//ls.log.Info("Scheduled job %s on node %s GPUs %v (node_score=%.1f, gpu_affinity=%.1f)",
+	//	jobSpec.RequestID, bestNode.NodeID, gpuIndices, decision.NodeScore, decision.GPUAffinityScore)
 
 	return decision, nil
 }

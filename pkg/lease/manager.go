@@ -165,7 +165,7 @@ func (lm *LeaseManager) AcquireLeaseForJob(ctx context.Context, jobID string) (b
 	}
 
 	// Another scheduler holds the lease
-	lm.log.Warnf("lease already held for job %s (by another scheduler)", jobID)
+	lm.log.Warnf("lease already held for job %s (by another scheduler %s)", jobID, leaseRecord.SchedulerID)
 	return false, nil
 }
 

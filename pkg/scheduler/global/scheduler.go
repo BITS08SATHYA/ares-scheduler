@@ -111,6 +111,12 @@ func NewGlobalScheduler(
 	controlPlaneName string,
 	redisClient *redis.RedisClient,
 ) *GlobalScheduler {
+
+	// Get logger instance
+	log := logger.Get()
+
+	log.Info("Layer 7: Global Scheduled Initialized")
+
 	return &GlobalScheduler{
 		controlPlaneName: controlPlaneName,
 		redisClient:      redisClient,

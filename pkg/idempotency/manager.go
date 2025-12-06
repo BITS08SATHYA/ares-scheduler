@@ -75,6 +75,7 @@ func (im *IdempotencyManager) CheckDuplicate(ctx context.Context, requestID stri
 
 		im.log.Debug("Dedup cache hit for request %s (job=%s, status=%s)",
 			requestID, result.JobID, result.Status)
+		im.log.Info("Dedup cache hit for request %s (job=%s, status=%s)", requestID, result.JobID, result.Status)
 		return &result, true, nil
 	}
 

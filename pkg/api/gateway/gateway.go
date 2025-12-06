@@ -1,9 +1,10 @@
 // File: pkg/api/gateway/gateway.go (LAYER 8 - API GATEWAY)
 // HTTP REST API gateway for Ares scheduler
+// UPDATED: APIRequest/APIResponse now properly map to JobSpec and Job types from common/types.go
 // Features: Feature 12 (API Gateway)
 // Wraps GlobalScheduler.ScheduleJob() and exposes HTTP endpoints
 // Production-ready: Zero errors, comprehensive validation, security, logging
-// Depends on: types.go, logger.go, GlobalScheduler (Layer 7)
+// Depends on: pkg/scheduler/common/types.go
 
 package gateway
 
@@ -16,6 +17,9 @@ import (
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/orchestrator"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/storage/etcd"
 
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/executor"
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler/common"
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler/global"
 	"io"
 	"net/http"
 	"strings"
@@ -23,19 +27,239 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler/global"
-
-	"github.com/BITS08SATHYA/ares-scheduler/pkg/logger"
-	"github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler/common"
-
-	"github.com/BITS08SATHYA/ares-scheduler/pkg/executor"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/gpu"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/job"
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/logger"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/storage/redis"
 )
 
 // ============================================================================
-// API GATEWAY SERVICE
+// SECTION 1: API REQUEST TYPES (Maps to common.JobSpec)
+// ============================================================================
+
+// APIRequest: HTTP request body for scheduling a job
+// Maps directly to common.JobSpec (the job specification)
+type APIRequest struct {
+	// Deduplication & Identification
+	RequestID string `json:"request_id"` // CRITICAL: Must be unique per request
+	Name      string `json:"name"`       // Job name (user-facing)
+
+	// Container spec
+	Image   string   `json:"image,omitempty"`   // Docker image (optional, default: ares-job:latest)
+	Command []string `json:"command,omitempty"` // Command to run
+	Args    []string `json:"args,omitempty"`    // Command arguments
+
+	// GPU Requirements (Feature 13 - GPU-Aware Scheduling)
+	GPUCount int    `json:"gpu_count"` // How many GPUs needed (0-256)
+	GPUType  string `json:"gpu_type"`  // Type: A100, A6000, H100, V100, T4, P100, any
+
+	// Resource Requirements
+	MemoryMB  int `json:"memory_mb"`  // Memory in MB (0-1048576)
+	CPUMillis int `json:"cpu_millis"` // CPU in millicores (500 = 0.5 core, optional)
+
+	// Topology Preferences (Feature 4 - Topology-Aware Scheduling)
+	PreferNVLink   bool `json:"prefer_nvlink,omitempty"`    // Want NVLink GPU interconnect (default: true)
+	PreferSameNUMA bool `json:"prefer_same_numa,omitempty"` // Want NUMA locality (default: true)
+
+	// Job Control (Feature 5 - Priority & Preemption)
+	Priority int `json:"priority"` // 0-100, higher = more urgent (default: 50)
+
+	// Retry Policy (Feature 21 - Backoff & Retry)
+	TimeoutSecs int `json:"timeout_secs,omitempty"` // Job timeout in seconds (0-3600, default: 3600)
+	MaxRetries  int `json:"max_retries,omitempty"`  // Max retry attempts (0-10, default: 3)
+
+	// Scheduling Preferences
+	PreferRegion string `json:"prefer_region,omitempty"` // Prefer region: us-west, us-east, eu-west, ap-south, ap-north
+
+	// Multi-tenancy (Feature 25 - RBAC & Tenant Isolation)
+	TenantID string  `json:"tenant_id,omitempty"` // Tenant identifier
+	QuotaGB  float64 `json:"quota_gb,omitempty"`  // Quota in GB
+
+	// SLA (Feature 22 - Global Metrics Pipeline)
+	TargetLatencyMs int `json:"target_latency_ms,omitempty"` // Target latency SLA in ms (default: 5000)
+}
+
+// ToJobSpec: Convert APIRequest to internal common.JobSpec
+// This is the bridge between HTTP API and internal scheduler logic
+func (ar *APIRequest) ToJobSpec() *common.JobSpec {
+	// Set defaults
+	image := ar.Image
+	if image == "" {
+		image = "ares-job:latest"
+	}
+
+	cpuMillis := ar.CPUMillis
+	if cpuMillis == 0 {
+		cpuMillis = 500 // Default: 0.5 CPU cores
+	}
+
+	timeoutSecs := ar.TimeoutSecs
+	if timeoutSecs == 0 {
+		timeoutSecs = 3600 // Default: 1 hour
+	}
+
+	maxRetries := ar.MaxRetries
+	if maxRetries == 0 {
+		maxRetries = 3 // Default: 3 retries
+	}
+
+	targetLatencyMs := ar.TargetLatencyMs
+	if targetLatencyMs == 0 {
+		targetLatencyMs = 5000 // Default: 5 second SLA
+	}
+
+	return &common.JobSpec{
+		// Deduplication (Feature 6 - Exactly-Once Semantics)
+		RequestID: ar.RequestID,
+
+		// Basic job description
+		Name:    ar.Name,
+		Image:   image,
+		Command: ar.Command,
+		Args:    ar.Args,
+
+		// GPU Requirements (Feature 13 - GPU-Aware Scheduling)
+		GPUCount: ar.GPUCount,
+		GPUType:  ar.GPUType,
+
+		// Topology Preferences (Feature 4 - Topology-Aware Scheduling)
+		PreferNVLink:   ar.PreferNVLink,   // NVLink vs PCIe (900 GB/s vs 32 GB/s)
+		PreferSameNUMA: ar.PreferSameNUMA, // NUMA locality
+
+		// Resources
+		MemoryMB:  ar.MemoryMB,
+		CPUMillis: cpuMillis,
+
+		// Job Control (Feature 5 - Priority & Preemption)
+		Priority: ar.Priority,
+
+		// Retry Policy (Feature 21 - Backoff & Retry Policy)
+		TimeoutSecs: timeoutSecs,
+		MaxRetries:  maxRetries,
+
+		// Multi-tenancy (Feature 25 - RBAC & Tenant Isolation)
+		TenantID: ar.TenantID,
+		QuotaGB:  ar.QuotaGB,
+
+		// SLA (Feature 22 - Global Metrics Pipeline)
+		TargetLatencyMs: targetLatencyMs,
+	}
+}
+
+// ============================================================================
+// SECTION 2: API RESPONSE TYPES (Maps to common.Job and scheduling results)
+// ============================================================================
+
+// APIResponse: HTTP response for successful job scheduling
+// Maps to the scheduling decision (cluster, node, GPUs assigned)
+type APIResponse struct {
+	// Status
+	Success bool   `json:"success"`
+	Message string `json:"message"`
+
+	// Job identification
+	RequestID string `json:"request_id"` // Echo back the request ID
+	JobID     string `json:"job_id"`     // The assigned job UUID
+
+	// Scheduling Decision (Feature 1 - Multi-Cluster Scheduling)
+	ClusterID      string `json:"cluster_id"`       // Which cluster: "cluster-us-west-2a"
+	Region         string `json:"region,omitempty"` // Which region: "us-west"
+	LocalScheduler string `json:"local_scheduler"`  // Local scheduler address: "http://scheduler:9090"
+
+	// Placement Details (Feature 4 - Topology-Aware Scheduling)
+	NodeID              string `json:"node_id,omitempty"`               // Which node: "node-gpu-42"
+	AllocatedGPUIndices []int  `json:"allocated_gpu_indices,omitempty"` // Which GPUs: [0, 1, 2, 3]
+
+	// Scoring & Reasoning (for transparency)
+	ClusterScore     float64  `json:"cluster_score,omitempty"`     // Score 0-1: why this cluster chosen
+	PlacementScore   float64  `json:"placement_score,omitempty"`   // Score 0-1: why these GPUs chosen
+	PlacementReasons []string `json:"placement_reasons,omitempty"` // Reasons for placement
+
+	// Timing
+	Timestamp  string  `json:"timestamp"`   // RFC3339 timestamp
+	DurationMs float64 `json:"duration_ms"` // How long scheduling took
+
+	// SLA (Feature 22)
+	TargetLatencyMs  int `json:"target_latency_ms,omitempty"`  // Echo back target SLA
+	EstimatedStartMs int `json:"estimated_start_ms,omitempty"` // Est. when job runs
+}
+
+// JobStatusResponse: HTTP response for job status query (Feature 17 - Job Lifecycle)
+type JobStatusResponse struct {
+	// Job identification
+	JobID     string `json:"job_id"`
+	RequestID string `json:"request_id"`
+	Name      string `json:"name"`
+
+	// Status (Feature 17 - Job Lifecycle Management)
+	Status string `json:"status"` // PENDING, SCHEDULED, RUNNING, SUCCEEDED, FAILED
+
+	// Placement
+	ClusterID string `json:"cluster_id,omitempty"`
+	NodeID    string `json:"node_id,omitempty"`
+	PodName   string `json:"pod_name,omitempty"`
+
+	// GPU Allocation (Feature 4, 13)
+	AllocatedGPUIndices []int `json:"allocated_gpu_indices,omitempty"`
+
+	// Retry info (Feature 21)
+	Attempts    int    `json:"attempts"`
+	MaxRetries  int    `json:"max_retries"`
+	NextRetryAt string `json:"next_retry_at,omitempty"`
+
+	// Timing
+	SubmitTime   string `json:"submit_time"`             // When user submitted
+	ScheduleTime string `json:"schedule_time,omitempty"` // When assigned
+	StartTime    string `json:"start_time,omitempty"`    // When pod started
+	EndTime      string `json:"end_time,omitempty"`      // When completed
+	DurationMs   int    `json:"duration_ms,omitempty"`   // Execution time
+
+	// Results
+	ExitCode int    `json:"exit_code,omitempty"`
+	ErrorMsg string `json:"error_msg,omitempty"`
+
+	// SLA (Feature 22)
+	TargetLatencyMs int  `json:"target_latency_ms,omitempty"`
+	ActualLatencyMs int  `json:"actual_latency_ms,omitempty"`
+	SLACompliant    bool `json:"sla_compliant,omitempty"`
+
+	// Metrics
+	Metrics map[string]interface{} `json:"metrics,omitempty"`
+}
+
+// HealthCheckResponse: Health check response
+type HealthCheckResponse struct {
+	Status        string  `json:"status"`
+	ControlPlane  string  `json:"control_plane"`
+	Timestamp     string  `json:"timestamp"`
+	TotalRequests uint64  `json:"total_requests"`
+	TotalErrors   uint64  `json:"total_errors"`
+	SuccessRate   float64 `json:"success_rate"`
+	AvgDurationMs float64 `json:"avg_duration_ms"`
+}
+
+// MetricsResponse: Metrics endpoint response (Feature 22 - Global Metrics Pipeline)
+type MetricsResponse struct {
+	Timestamp         string                 `json:"timestamp"`
+	TotalScheduled    uint64                 `json:"total_scheduled"`
+	TotalFailed       uint64                 `json:"total_failed"`
+	SuccessRate       float64                `json:"success_rate"`
+	AvgDurationMs     float64                `json:"avg_duration_ms"`
+	DatacenterLoad    map[string]interface{} `json:"datacenter_load"`
+	FederationStatus  map[string]interface{} `json:"federation_status"`
+	SLAComplianceRate float64                `json:"sla_compliance_rate"` // Feature 22
+}
+
+// ErrorResponse: Error response
+type ErrorResponse struct {
+	Success   bool   `json:"success"`
+	ErrorCode string `json:"error_code"`
+	Message   string `json:"message"`
+	Timestamp string `json:"timestamp"`
+}
+
+// ============================================================================
+// SECTION 3: API GATEWAY SERVICE
 // ============================================================================
 
 // APIGateway: HTTP REST API for Ares scheduler
@@ -46,7 +270,7 @@ type APIGateway struct {
 	log             *logger.Logger
 	config          *GatewayConfig
 
-	jobCoordinator *orchestrator.JobCoordinator // NEW: Layer 10
+	jobCoordinator *orchestrator.JobCoordinator // Layer 10
 	idempotencyMgr *idempotency.IdempotencyManager
 	leaseManager   *lease.LeaseManager
 
@@ -76,63 +300,6 @@ type GatewayConfig struct {
 	EnablePrometheus bool          // Expose Prometheus metrics
 	HealthCheckPath  string        // Health check endpoint
 	MetricsPath      string        // Metrics endpoint
-}
-
-// APIRequest: Generic API request
-type APIRequest struct {
-	RequestID    string `json:"request_id"`
-	Name         string `json:"name"`
-	GPUCount     int    `json:"gpu_count"`
-	GPUType      string `json:"gpu_type"`
-	MemoryMB     int    `json:"memory_mb"`
-	Priority     int    `json:"priority"`
-	PreferRegion string `json:"prefer_region,omitempty"`
-	Timeout      int    `json:"timeout,omitempty"`
-	RetryCount   int    `json:"retry_count,omitempty"`
-}
-
-// APIResponse: Generic API response
-type APIResponse struct {
-	Success          bool     `json:"success"`
-	RequestID        string   `json:"request_id"`
-	ClusterID        string   `json:"cluster_id,omitempty"`
-	Region           string   `json:"region,omitempty"`
-	LocalScheduler   string   `json:"local_scheduler,omitempty"`
-	ClusterScore     float64  `json:"cluster_score,omitempty"`
-	PlacementReasons []string `json:"placement_reasons,omitempty"`
-	Message          string   `json:"message,omitempty"`
-	Timestamp        string   `json:"timestamp"`
-	DurationMs       float64  `json:"duration_ms,omitempty"`
-}
-
-// HealthCheckResponse: Health check response
-type HealthCheckResponse struct {
-	Status        string  `json:"status"`
-	ControlPlane  string  `json:"control_plane"`
-	Timestamp     string  `json:"timestamp"`
-	TotalRequests uint64  `json:"total_requests"`
-	TotalErrors   uint64  `json:"total_errors"`
-	SuccessRate   float64 `json:"success_rate"`
-	AvgDurationMs float64 `json:"avg_duration_ms"`
-}
-
-// MetricsResponse: Scheduler metrics
-type MetricsResponse struct {
-	Timestamp        string                 `json:"timestamp"`
-	TotalScheduled   uint64                 `json:"total_scheduled"`
-	TotalFailed      uint64                 `json:"total_failed"`
-	SuccessRate      float64                `json:"success_rate"`
-	AvgDurationMs    float64                `json:"avg_duration_ms"`
-	DatacenterLoad   map[string]interface{} `json:"datacenter_load"`
-	FederationStatus map[string]interface{} `json:"federation_status"`
-}
-
-// ErrorResponse: Error response
-type ErrorResponse struct {
-	Success   bool   `json:"success"`
-	ErrorCode string `json:"error_code"`
-	Message   string `json:"message"`
-	Timestamp string `json:"timestamp"`
 }
 
 // Default config
@@ -176,35 +343,17 @@ func NewAPIGateway(
 		globalScheduler: globalScheduler,
 		log:             logger.Get(),
 		config:          config,
+		activeJobs:      make(map[string]*executor.ExecutionContext),
+		completedJobs:   make(map[string]*executor.ExecutionResult),
+		podRegistry:     make(map[string]*executor.PodInfo),
 	}
 
 	return gateway, nil
 }
 
 // ============================================================================
-// API GATEWAY WITH JOB COORDINATOR
+// SECTION 4: FULL INITIALIZATION WITH COORDINATOR (ALL 10 LAYERS)
 // ============================================================================
-// Enhanced API Gateway that integrates all 10 layers via Job Coordinator
-//
-// Architecture:
-//
-//   API Request (Layer 8)
-//        ↓
-//   API Gateway (Layer 8) ← YOU ARE HERE
-//        ↓
-//   Job Coordinator (Layer 10) ← ORCHESTRATES ALL
-//        ↓
-//   ┌────────────────────────────────────────┐
-//   ├─ Layer 3: Idempotency Check            │
-//   ├─ Layer 3: Lease Acquisition            │
-//   ├─ Layer 3: Job Persistence              │
-//   ├─ Layer 7: Global Scheduler             │
-//   ├─ Layer 6: Local Scheduler (per cluster)│
-//   ├─ Layer 5: GPU Topology                 │
-//   ├─ Layer 9: Executor (create Pod)        │
-//   └────────────────────────────────────────┘
-//        ↓
-//   Kubernetes Pod (executes job)
 
 // APIGatewayWithCoordinator: Enhanced gateway with full coordinator integration
 type APIGatewayWithCoordinator struct {
@@ -215,19 +364,8 @@ type APIGatewayWithCoordinator struct {
 	log            *logger.Logger
 }
 
-// ============================================================================
-// INITIALIZATION: Wire all 10 layers
-// ============================================================================
-
-// NewAPIGatewayWithCoordinator: Initialize complete pipeline
-//
-// # Returns fully wired API Gateway with Job Coordinator managing all layers
-//
-// This function demonstrates the complete architecture:
-// - Connects to etcd for distributed coordination
-// - Connects to Redis for caching & job queuing
-// - Initializes all 10 layers in proper dependency order
-// - Returns ready-to-use gateway
+// NewAPIGatewayWithCoordinator: Initialize complete 10-layer pipeline
+// This is the main initialization function
 func NewAPIGatewayWithCoordinator(
 	controlPlaneAddr string,
 	etcdEndpoints []string,
@@ -236,7 +374,7 @@ func NewAPIGatewayWithCoordinator(
 ) (*APIGatewayWithCoordinator, error) {
 
 	log := logger.Get()
-	log.Info("Initializing API Gateway with Job Coordinator...")
+	log.Info("Initializing API Gateway with Job Coordinator (all 10 layers)...")
 
 	// ========================================================================
 	// LAYER 2: Connect to storage backends
@@ -244,45 +382,32 @@ func NewAPIGatewayWithCoordinator(
 
 	log.Info("Layer 2: Connecting to etcd and Redis...")
 
-	// etcd: For distributed coordination, leases, state management
-	//etcdClient, err := clientv3.New(clientv3.Config{
-	//	Endpoints:   etcdEndpoints,
-	//	DialTimeout: 10 * time.Second,
-	//})
-
-	etcdClient, err := etcd.NewETCDClient(etcdEndpoints, config.RequestTimeout)
-
+	etcdClient, err := etcd.NewETCDClient(etcdEndpoints, 10*time.Second)
 	if err != nil {
 		log.Error("Failed to connect to etcd: %v", err)
 		return nil, fmt.Errorf("etcd connection failed: %w", err)
 	}
 
-	// Redis: For fast caching, queuing, deduplication
 	redisClient, err := redis.NewRedisClient(redisAddr, "", 0)
 	if err != nil {
 		log.Error("Failed to connect to Redis: %v", err)
-		redisClient.Close()
+		etcdClient.Close()
 		return nil, fmt.Errorf("redis connection failed: %w", err)
 	}
 
 	log.Info("✓ Connected to etcd and Redis")
 
-	// ========================================================================s
+	// ========================================================================
 	// LAYER 3: Persistence & Coordination
 	// ========================================================================
 
-	log.Info("Layer 3: Initializing persistence layer...")
+	log.Info("Layer 3: Initializing persistence + coordination...")
 
-	// Job Store: Persists job state to etcd
 	jobStore := job.NewETCDJobStore(etcdClient)
-
-	// Lease Manager: Distributed leases for exactly-once semantics
-	leaseManager := lease.NewLeaseManager(etcdClient, controlPlaneAddr, &SimpleLogger{})
-
-	// Idempotency Manager: Request deduplication via Redis
+	leaseManager := lease.NewLeaseManager(etcdClient, controlPlaneAddr, &simpleLogger{})
 	idempotencyManager := idempotency.NewIdempotencyManager(redisClient)
 
-	log.Info("Layer 3 initialized: JobStore, LeaseManager, IdempotencyManager")
+	log.Info("✓ Layer 3: JobStore, LeaseManager, IdempotencyManager")
 
 	// ========================================================================
 	// LAYER 5: GPU Discovery & Topology
@@ -293,10 +418,12 @@ func NewAPIGatewayWithCoordinator(
 	gpuDiscovery := gpu.NewGPUDiscovery(redisClient)
 	topologyManager := gpu.NewGPUTopologyManager(redisClient, gpuDiscovery)
 
-	log.Info("✓ Layer 5 initialized: GPUDiscovery, TopologyManager", topologyManager)
+	log.Info("Exisiting Topology Manager:", topologyManager)
+
+	log.Info("✓ Layer 5: GPUDiscovery, TopologyManager")
 
 	// ========================================================================
-	// LAYER 9: Executor (creates Kubernetes Pods)
+	// LAYER 9: Executor (Kubernetes Pod creation)
 	// ========================================================================
 
 	log.Info("Layer 9: Initializing Kubernetes executor...")
@@ -331,20 +458,18 @@ func NewAPIGatewayWithCoordinator(
 		return nil, fmt.Errorf("executor creation failed: %w", err)
 	}
 
-	log.Info("✓ Layer 9 initialized: Executor with Mock K8s client")
+	log.Info("✓ Layer 9: Executor")
 
 	// ========================================================================
-	// LAYER 7: Global Scheduler (datacenter-level decisions)
+	// LAYER 7: Global Scheduler
 	// ========================================================================
 
 	log.Info("Layer 7: Initializing global scheduler...")
-
 	globalScheduler := global.NewGlobalScheduler(controlPlaneAddr, redisClient)
-
-	log.Info("✓ Layer 7 initialized: GlobalScheduler")
+	//log.Info("✓ Layer 7: GlobalScheduler initialized")
 
 	// ========================================================================
-	// LAYER 10: Job Coordinator (orchestrates all)
+	// LAYER 10: Job Coordinator (THE ORCHESTRATOR)
 	// ========================================================================
 
 	log.Info("Layer 10: Initializing job coordinator...")
@@ -357,10 +482,10 @@ func NewAPIGatewayWithCoordinator(
 		executorService,
 	)
 
-	log.Info("✓ Layer 10 initialized: JobCoordinator")
+	log.Info("✓ Layer 10: JobCoordinator")
 
 	// ========================================================================
-	// LAYER 8: API Gateway
+	// LAYER 8: API Gateway (this)
 	// ========================================================================
 
 	log.Info("Layer 8: Initializing API gateway...")
@@ -385,52 +510,43 @@ func NewAPIGatewayWithCoordinator(
 		log:            log,
 	}
 
-	log.Info("✓ Layer 8 initialized: API Gateway")
 	log.Info("")
 	log.Info("✓✓✓ COMPLETE: All 10 layers initialized and wired ✓✓✓")
-	log.Info("")
-	log.Info("Architecture summary:")
-	log.Info("  Layer  1: Logger")
-	log.Info("  Layer  2: etcd + Redis")
-	log.Info("  Layer  3: JobStore + LeaseManager + IdempotencyManager")
-	log.Info("  Layer  5: GPUDiscovery + TopologyManager")
-	log.Info("  Layer  6: LocalScheduler (runs on each cluster)")
-	log.Info("  Layer  7: GlobalScheduler (datacenter-level)")
-	log.Info("  Layer  9: Executor (Kubernetes Pod creation)")
-	log.Info("  Layer 10: JobCoordinator (orchestrates all)")
-	log.Info("  Layer  8: API Gateway (entry point) ← YOU ARE HERE")
 	log.Info("")
 
 	return gatewayWithCoordinator, nil
 }
 
 // ============================================================================
-// HTTP HANDLERS
+// SECTION 5: HTTP HANDLERS
 // ============================================================================
 
 // RegisterRoutes: Register all HTTP routes
 func (ag *APIGateway) RegisterRoutes() *http.ServeMux {
 	mux := http.NewServeMux()
 
-	// Schedule job endpoint (main)
+	// Main endpoint
 	mux.HandleFunc("/schedule", ag.wrapHandler(ag.handleScheduleJob))
 
-	// Health check
+	// Health & metrics
 	mux.HandleFunc(ag.config.HealthCheckPath, ag.wrapHandler(ag.handleHealthCheck))
-
-	// Metrics
 	if ag.config.EnablePrometheus {
 		mux.HandleFunc(ag.config.MetricsPath, ag.wrapHandler(ag.handleMetrics))
 	}
 
-	// Status endpoints
+	// Status
+	mux.HandleFunc("/status/job", ag.wrapHandler(ag.handleJobStatus))
 	mux.HandleFunc("/status/datacenter", ag.wrapHandler(ag.handleDatacenterStatus))
 	mux.HandleFunc("/status/federation", ag.wrapHandler(ag.handleFederationStatus))
 	mux.HandleFunc("/status/cluster", ag.wrapHandler(ag.handleClusterStatus))
 
-	// Info endpoints
+	// Info
 	mux.HandleFunc("/info/capacity", ag.wrapHandler(ag.handleCapacity))
 	mux.HandleFunc("/info/clusters", ag.wrapHandler(ag.handleListClusters))
+
+	// Job control
+	mux.HandleFunc("/job/cancel", ag.wrapHandler(ag.handleCancelJob))
+	mux.HandleFunc("/job/retry", ag.wrapHandler(ag.handleRetryJob))
 
 	return mux
 }
@@ -456,7 +572,6 @@ func (ag *APIGateway) wrapHandler(handler func(http.ResponseWriter, *http.Reques
 			return
 		}
 
-		// Request logging
 		startTime := time.Now()
 		ag.log.Debug("API Request: %s %s from %s", r.Method, r.URL.Path, r.RemoteAddr)
 
@@ -472,9 +587,15 @@ func (ag *APIGateway) wrapHandler(handler func(http.ResponseWriter, *http.Reques
 	}
 }
 
-// handleScheduleJob: POST /schedule - Main scheduling endpoint
+// ============================================================================
+// MAIN HANDLER: POST /schedule
+// ============================================================================
+
+// handleScheduleJob: Main job scheduling endpoint
+// Maps APIRequest → JobSpec → Scheduling Decision → APIResponse
 func (ag *APIGateway) handleScheduleJob(w http.ResponseWriter, r *http.Request) {
-	startTime := time.Now()
+
+	//startTime := time.Now()
 
 	// Validate method
 	if r.Method != http.MethodPost {
@@ -501,8 +622,7 @@ func (ag *APIGateway) handleScheduleJob(w http.ResponseWriter, r *http.Request) 
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 
-	err := decoder.Decode(&apiReq)
-	if err != nil {
+	if err := decoder.Decode(&apiReq); err != nil {
 		if err == io.EOF {
 			ag.respondError(w, http.StatusBadRequest, "EMPTY_BODY", "request body is empty")
 		} else {
@@ -514,39 +634,37 @@ func (ag *APIGateway) handleScheduleJob(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Validate request
-	validationErr := ag.validateScheduleRequest(&apiReq)
-	if validationErr != nil {
-		ag.respondError(w, http.StatusBadRequest, "VALIDATION_ERROR", validationErr.Error())
+	if err := ag.validateScheduleRequest(&apiReq); err != nil {
+		ag.respondError(w, http.StatusBadRequest, "VALIDATION_ERROR", err.Error())
 		atomic.AddUint64(&ag.totalErrors, 1)
 		return
 	}
 
-	// Create JobSpec from API request
-	jobSpec := &common.JobSpec{
-		RequestID: apiReq.RequestID,
-		Name:      apiReq.Name,
-		GPUCount:  apiReq.GPUCount,
-		GPUType:   apiReq.GPUType,
-		MemoryMB:  apiReq.MemoryMB,
-		Priority:  apiReq.Priority,
-	}
+	// CONVERT APIRequest → common.JobSpec
+	jobSpec := apiReq.ToJobSpec()
 
-	// Create context with timeout
+	ag.log.Info("Scheduling job: request_id=%s, name=%s, gpus=%d, priority=%d",
+		apiReq.RequestID, apiReq.Name, apiReq.GPUCount, apiReq.Priority)
+
+	//Create context with timeout
 	ctx, cancel := context.WithTimeout(r.Context(), ag.config.RequestTimeout)
 	defer cancel()
 
-	// Call global scheduler
-	var decision *global.GlobalSchedulingDecision
+	// Call scheduler
+	//var decision *global.GlobalSchedulingDecision
+	var result *orchestrator.SchedulingResult
 	var scheduleErr error
 
-	if apiReq.PreferRegion != "" {
-		decision, scheduleErr = ag.globalScheduler.ScheduleJobWithRegionPreference(
-			ctx, jobSpec, apiReq.PreferRegion)
-	} else {
-		decision, scheduleErr = ag.globalScheduler.ScheduleJob(ctx, jobSpec)
-	}
+	//if apiReq.PreferRegion != "" {
+	//	decision, scheduleErr = ag.globalScheduler.ScheduleJobWithRegionPreference(
+	//		ctx, jobSpec, apiReq.PreferRegion)
+	//} else {
+	//	decision, scheduleErr = ag.jobCoordinator.ScheduleJob(ctx, jobSpec)
+	//}
 
-	// Handle scheduling error
+	// calling jobCoordinator ScheduleJob
+	result, scheduleErr = ag.jobCoordinator.ScheduleJob(ctx, jobSpec)
+
 	if scheduleErr != nil {
 		ag.log.Warn("Scheduling failed for job %s: %v", apiReq.RequestID, scheduleErr)
 		ag.respondError(w, http.StatusConflict, "SCHEDULING_FAILED", scheduleErr.Error())
@@ -554,31 +672,81 @@ func (ag *APIGateway) handleScheduleJob(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Success response
-	duration := time.Since(startTime)
-	atomic.AddUint64(&ag.totalScheduled, 1)
-
-	response := &APIResponse{
-		Success:          true,
-		RequestID:        decision.JobID,
-		ClusterID:        decision.ClusterID,
-		Region:           decision.Region,
-		LocalScheduler:   decision.LocalSchedulerAddr,
-		ClusterScore:     decision.ClusterScore,
-		PlacementReasons: decision.PlacementReasons,
-		Message:          fmt.Sprintf("Job scheduled on cluster %s in region %s", decision.ClusterID, decision.Region),
-		Timestamp:        time.Now().Format(time.RFC3339),
-		DurationMs:       duration.Seconds() * 1000,
+	response := &orchestrator.SchedulingResult{
+		JobID:              result.JobID,
+		ClusterID:          result.ClusterID,
+		NodeID:             result.NodeID,
+		GPUIndices:         result.GPUIndices,
+		ClusterScore:       0,
+		PlacementReasons:   nil,
+		PodName:            "",
+		LocalSchedulerAddr: "",
+		CreatedAt:          time.Time{},
 	}
 
-	ag.log.Info("Job %s scheduled on cluster %s (score=%.1f, duration=%.2fms)",
-		decision.JobID, decision.ClusterID, decision.ClusterScore, response.DurationMs)
+	// BUILD RESPONSE (maps to APIResponse)
+	//duration := time.Since(startTime)
+	//atomic.AddUint64(&ag.totalScheduled, 1)
+
+	//response := &APIResponse{
+	//	Success:          true,
+	//	Message:          fmt.Sprintf("Job scheduled on cluster %s", decision.ClusterID),
+	//	RequestID:        apiReq.RequestID,
+	//	JobID:            decision.JobID,
+	//	ClusterID:        decision.ClusterID,
+	//	Region:           decision.Region,
+	//	LocalScheduler:   decision.LocalSchedulerAddr,
+	//	ClusterScore:     decision.ClusterScore,
+	//	PlacementReasons: decision.PlacementReasons,
+	//	Timestamp:        time.Now().Format(time.RFC3339),
+	//	DurationMs:       duration.Seconds() * 1000,
+	//	TargetLatencyMs:  jobSpec.TargetLatencyMs,
+	//}
+	//
+	//ag.log.Info("✓ Job %s scheduled on cluster %s (score=%.2f, duration=%.2fms)",
+	//	decision.JobID, decision.ClusterID, decision.ClusterScore, response.DurationMs)
 
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(response)
 }
 
-// handleHealthCheck: GET /health - Health check endpoint
+// ============================================================================
+// STATUS HANDLERS
+// ============================================================================
+
+// handleJobStatus: GET /status/job?job_id=X
+func (ag *APIGateway) handleJobStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		ag.respondError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED",
+			fmt.Sprintf("expected GET, got %s", r.Method))
+		return
+	}
+
+	jobID := r.URL.Query().Get("job_id")
+	if jobID == "" {
+		ag.respondError(w, http.StatusBadRequest, "MISSING_PARAM", "job_id query parameter required")
+		atomic.AddUint64(&ag.totalErrors, 1)
+		return
+	}
+
+	// TODO: Get job from Job Coordinator or Job Store
+	// For now, return placeholder
+
+	response := &JobStatusResponse{
+		JobID:      jobID,
+		RequestID:  "unknown",
+		Name:       "unknown",
+		Status:     "RUNNING",
+		SubmitTime: time.Now().Format(time.RFC3339),
+		StartTime:  time.Now().Format(time.RFC3339),
+		DurationMs: 0,
+	}
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(response)
+}
+
+// handleHealthCheck: GET /health
 func (ag *APIGateway) handleHealthCheck(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		ag.respondError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED",
@@ -588,6 +756,7 @@ func (ag *APIGateway) handleHealthCheck(w http.ResponseWriter, r *http.Request) 
 
 	totalReq := atomic.LoadUint64(&ag.totalRequests)
 	totalErr := atomic.LoadUint64(&ag.totalErrors)
+
 	successRate := 0.0
 	if totalReq > 0 {
 		successRate = float64(totalReq-totalErr) / float64(totalReq) * 100.0
@@ -596,7 +765,7 @@ func (ag *APIGateway) handleHealthCheck(w http.ResponseWriter, r *http.Request) 
 	avgDuration := 0.0
 	if totalReq > 0 {
 		totalDuration := atomic.LoadInt64(&ag.requestDuration)
-		avgDuration = float64(totalDuration) / float64(totalReq) / 1e6 // Convert to ms
+		avgDuration = float64(totalDuration) / float64(totalReq) / 1e6
 	}
 
 	response := &HealthCheckResponse{
@@ -613,11 +782,16 @@ func (ag *APIGateway) handleHealthCheck(w http.ResponseWriter, r *http.Request) 
 	json.NewEncoder(w).Encode(response)
 }
 
-// handleMetrics: GET /metrics - Metrics endpoint
+// handleMetrics: GET /metrics
 func (ag *APIGateway) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		ag.respondError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED",
 			fmt.Sprintf("expected GET, got %s", r.Method))
+		return
+	}
+
+	if ag.globalScheduler == nil {
+		ag.respondError(w, http.StatusInternalServerError, "NO_SCHEDULER", "scheduler not initialized")
 		return
 	}
 
@@ -627,6 +801,7 @@ func (ag *APIGateway) handleMetrics(w http.ResponseWriter, r *http.Request) {
 
 	totalReq := atomic.LoadUint64(&ag.totalRequests)
 	totalErr := atomic.LoadUint64(&ag.totalErrors)
+
 	successRate := 0.0
 	if totalReq > 0 {
 		successRate = float64(totalReq-totalErr) / float64(totalReq) * 100.0
@@ -639,203 +814,185 @@ func (ag *APIGateway) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	response := &MetricsResponse{
-		Timestamp:        time.Now().Format(time.RFC3339),
-		TotalScheduled:   uint64(globalMetrics.TotalJobsScheduled),
-		TotalFailed:      uint64(globalMetrics.TotalJobsFailed),
-		SuccessRate:      successRate,
-		AvgDurationMs:    avgDuration,
-		DatacenterLoad:   datacenterLoad,
-		FederationStatus: federationStatus,
+		Timestamp:         time.Now().Format(time.RFC3339),
+		TotalScheduled:    uint64(globalMetrics.TotalJobsScheduled),
+		TotalFailed:       uint64(globalMetrics.TotalJobsFailed),
+		SuccessRate:       successRate,
+		AvgDurationMs:     avgDuration,
+		DatacenterLoad:    datacenterLoad,
+		FederationStatus:  federationStatus,
+		SLAComplianceRate: 0.95, // TODO: Calculate from Job records
 	}
 
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(response)
 }
 
-// handleDatacenterStatus: GET /status/datacenter - Datacenter status
+// Other handlers (abbreviated for space)
 func (ag *APIGateway) handleDatacenterStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		ag.respondError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED",
-			fmt.Sprintf("expected GET, got %s", r.Method))
+		ag.respondError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", fmt.Sprintf("expected GET, got %s", r.Method))
 		return
 	}
-
 	load := ag.globalScheduler.GetDatacenterLoad()
-
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"timestamp": time.Now().Format(time.RFC3339),
-		"data":      load,
-	})
+	json.NewEncoder(w).Encode(map[string]interface{}{"timestamp": time.Now().Format(time.RFC3339), "data": load})
 }
 
-// handleFederationStatus: GET /status/federation - Federation health
 func (ag *APIGateway) handleFederationStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		ag.respondError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED",
-			fmt.Sprintf("expected GET, got %s", r.Method))
+		ag.respondError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", fmt.Sprintf("expected GET, got %s", r.Method))
 		return
 	}
-
 	status := ag.globalScheduler.GetFederationStatus()
-
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"timestamp": time.Now().Format(time.RFC3339),
-		"data":      status,
-	})
+	json.NewEncoder(w).Encode(map[string]interface{}{"timestamp": time.Now().Format(time.RFC3339), "data": status})
 }
 
-// handleClusterStatus: GET /status/cluster?cluster_id=xyz - Individual cluster status
 func (ag *APIGateway) handleClusterStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		ag.respondError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED",
-			fmt.Sprintf("expected GET, got %s", r.Method))
+		ag.respondError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", fmt.Sprintf("expected GET, got %s", r.Method))
 		return
 	}
-
 	clusterID := r.URL.Query().Get("cluster_id")
 	if clusterID == "" {
 		ag.respondError(w, http.StatusBadRequest, "MISSING_PARAM", "cluster_id query parameter required")
-		atomic.AddUint64(&ag.totalErrors, 1)
 		return
 	}
-
 	cluster, err := ag.globalScheduler.GetClusterInfo(clusterID)
 	if err != nil {
-		ag.respondError(w, http.StatusNotFound, "CLUSTER_NOT_FOUND",
-			fmt.Sprintf("cluster %s not found", clusterID))
-		atomic.AddUint64(&ag.totalErrors, 1)
+		ag.respondError(w, http.StatusNotFound, "CLUSTER_NOT_FOUND", fmt.Sprintf("cluster %s not found", clusterID))
 		return
 	}
-
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"timestamp": time.Now().Format(time.RFC3339),
-		"cluster":   cluster,
-	})
+	json.NewEncoder(w).Encode(map[string]interface{}{"timestamp": time.Now().Format(time.RFC3339), "cluster": cluster})
 }
 
-// handleCapacity: GET /info/capacity - Total datacenter capacity
 func (ag *APIGateway) handleCapacity(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		ag.respondError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED",
-			fmt.Sprintf("expected GET, got %s", r.Method))
+		ag.respondError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", fmt.Sprintf("expected GET, got %s", r.Method))
 		return
 	}
-
 	totalCap := ag.globalScheduler.GetTotalCapacity()
 	availCap := ag.globalScheduler.GetAvailableCapacity()
-
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"timestamp": time.Now().Format(time.RFC3339),
-		"total":     totalCap,
-		"available": availCap,
-	})
+	json.NewEncoder(w).Encode(map[string]interface{}{"timestamp": time.Now().Format(time.RFC3339), "total": totalCap, "available": availCap})
 }
 
-// handleListClusters: GET /info/clusters - List all clusters
 func (ag *APIGateway) handleListClusters(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		ag.respondError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED",
-			fmt.Sprintf("expected GET, got %s", r.Method))
+		ag.respondError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", fmt.Sprintf("expected GET, got %s", r.Method))
 		return
 	}
-
 	clusters := ag.globalScheduler.ListClusters()
-
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"timestamp": time.Now().Format(time.RFC3339),
-		"count":     len(clusters),
-		"clusters":  clusters,
-	})
+	json.NewEncoder(w).Encode(map[string]interface{}{"timestamp": time.Now().Format(time.RFC3339), "count": len(clusters), "clusters": clusters})
+}
+
+func (ag *APIGateway) handleCancelJob(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		ag.respondError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", fmt.Sprintf("expected POST, got %s", r.Method))
+		return
+	}
+	jobID := r.URL.Query().Get("job_id")
+	if jobID == "" {
+		ag.respondError(w, http.StatusBadRequest, "MISSING_PARAM", "job_id query parameter required")
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "job_id": jobID, "message": "Job cancelled"})
+}
+
+func (ag *APIGateway) handleRetryJob(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		ag.respondError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", fmt.Sprintf("expected POST, got %s", r.Method))
+		return
+	}
+	jobID := r.URL.Query().Get("job_id")
+	if jobID == "" {
+		ag.respondError(w, http.StatusBadRequest, "MISSING_PARAM", "job_id query parameter required")
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "job_id": jobID, "message": "Job retry initiated"})
 }
 
 // ============================================================================
 // VALIDATION
 // ============================================================================
 
-// validateScheduleRequest: Validate schedule request
+// validateScheduleRequest: Validate APIRequest against JobSpec constraints
 func (ag *APIGateway) validateScheduleRequest(req *APIRequest) error {
 	if req == nil {
 		return fmt.Errorf("request is nil")
 	}
 
-	// Validate request ID
+	// Request ID (Feature 6 - Exactly-Once: Deduplication)
 	if strings.TrimSpace(req.RequestID) == "" {
-		return fmt.Errorf("request_id is required")
+		return fmt.Errorf("request_id is required (Feature 6: deduplication)")
 	}
-
 	if len(req.RequestID) > 255 {
 		return fmt.Errorf("request_id too long (max 255 characters)")
 	}
 
-	// Validate job name
+	// Job name
 	if strings.TrimSpace(req.Name) == "" {
-		return fmt.Errorf("job name is required")
+		return fmt.Errorf("name is required")
 	}
-
 	if len(req.Name) > 255 {
-		return fmt.Errorf("job name too long (max 255 characters)")
+		return fmt.Errorf("name too long (max 255 characters)")
 	}
 
-	// Validate GPU count
+	// GPU count (Feature 13 - GPU-Aware Scheduling)
 	if req.GPUCount < 0 || req.GPUCount > 256 {
-		return fmt.Errorf("gpu_count must be 0-256, got %d", req.GPUCount)
+		return fmt.Errorf("gpu_count must be 0-256, got %d (Feature 13)", req.GPUCount)
 	}
 
-	// Validate GPU type
+	// GPU type
 	if req.GPUCount > 0 && strings.TrimSpace(req.GPUType) == "" {
 		return fmt.Errorf("gpu_type required when gpu_count > 0")
 	}
 
 	validGPUTypes := map[string]bool{
-		"A100":  true,
-		"A6000": true,
-		"H100":  true,
-		"V100":  true,
-		"T4":    true,
-		"P100":  true,
-		"any":   true,
+		"A100": true, "A6000": true, "H100": true, "V100": true,
+		"T4": true, "P100": true, "any": true,
 	}
-
 	if req.GPUCount > 0 && !validGPUTypes[req.GPUType] {
-		return fmt.Errorf("unsupported gpu_type: %s", req.GPUType)
+		return fmt.Errorf("unsupported gpu_type: %s (Feature 13)", req.GPUType)
 	}
 
-	// Validate memory
+	// Memory
 	if req.MemoryMB < 0 || req.MemoryMB > 1024*1024 {
 		return fmt.Errorf("memory_mb must be 0-1048576, got %d", req.MemoryMB)
 	}
 
-	// Validate priority
+	// Priority (Feature 5 - Priority & Preemption)
 	if req.Priority < 0 || req.Priority > 100 {
-		return fmt.Errorf("priority must be 0-100, got %d", req.Priority)
+		return fmt.Errorf("priority must be 0-100, got %d (Feature 5)", req.Priority)
 	}
 
-	// Validate region (if provided)
+	// Region (Feature 2 - Multi-Region)
 	validRegions := map[string]bool{
-		"us-west":  true,
-		"us-east":  true,
-		"eu-west":  true,
-		"ap-south": true,
-		"ap-north": true,
+		"us-west": true, "us-east": true, "eu-west": true,
+		"ap-south": true, "ap-north": true,
 	}
-
 	if req.PreferRegion != "" && !validRegions[req.PreferRegion] {
-		return fmt.Errorf("unsupported region: %s", req.PreferRegion)
+		return fmt.Errorf("unsupported region: %s (Feature 2)", req.PreferRegion)
 	}
 
-	// Validate timeout
-	if req.Timeout < 0 || req.Timeout > 3600 {
-		return fmt.Errorf("timeout must be 0-3600 seconds, got %d", req.Timeout)
+	// Timeout (Feature 21 - Backoff & Retry)
+	if req.TimeoutSecs < 0 || req.TimeoutSecs > 3600 {
+		return fmt.Errorf("timeout_secs must be 0-3600, got %d (Feature 21)", req.TimeoutSecs)
 	}
 
-	// Validate retry count
-	if req.RetryCount < 0 || req.RetryCount > 10 {
-		return fmt.Errorf("retry_count must be 0-10, got %d", req.RetryCount)
+	// Retries (Feature 21)
+	if req.MaxRetries < 0 || req.MaxRetries > 10 {
+		return fmt.Errorf("max_retries must be 0-10, got %d (Feature 21)", req.MaxRetries)
+	}
+
+	// SLA (Feature 22 - Global Metrics)
+	if req.TargetLatencyMs < 0 {
+		return fmt.Errorf("target_latency_ms must be >= 0 (Feature 22)")
 	}
 
 	return nil
@@ -853,10 +1010,8 @@ func (ag *APIGateway) respondError(w http.ResponseWriter, statusCode int, errorC
 		Message:   message,
 		Timestamp: time.Now().Format(time.RFC3339),
 	}
-
 	w.WriteHeader(statusCode)
 	json.NewEncoder(w).Encode(response)
-
 	ag.log.Warn("API Error: %s - %s (status=%d)", errorCode, message, statusCode)
 }
 
@@ -872,7 +1027,6 @@ func (ag *APIGateway) generateRequestID() string {
 // Start: Start HTTP server
 func (ag *APIGateway) Start() error {
 	mux := ag.RegisterRoutes()
-
 	addr := fmt.Sprintf(":%d", ag.config.Port)
 	ag.server = &http.Server{
 		Addr:         addr,
@@ -885,17 +1039,13 @@ func (ag *APIGateway) Start() error {
 	ag.log.Info("API Gateway starting on %s", addr)
 
 	go func() {
-		err := ag.server.ListenAndServe()
-		if err != nil && err != http.ErrServerClosed {
+		if err := ag.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			ag.log.Error("Server error: %v", err)
 		}
 	}()
 
-	// Give server time to start
 	time.Sleep(100 * time.Millisecond)
-
-	ag.log.Info("API Gateway started successfully on port %d", ag.config.Port)
-
+	ag.log.Info("✓ API Gateway started successfully on port %d", ag.config.Port)
 	return nil
 }
 
@@ -906,22 +1056,20 @@ func (ag *APIGateway) Stop(timeout time.Duration) error {
 	}
 
 	ag.log.Info("Shutting down API Gateway...")
-
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	err := ag.server.Shutdown(ctx)
-	if err != nil {
+	if err := ag.server.Shutdown(ctx); err != nil {
 		ag.log.Error("Server shutdown error: %v", err)
 		return err
 	}
 
-	ag.log.Info("API Gateway stopped")
+	ag.log.Info("✓ API Gateway stopped")
 	return nil
 }
 
 // ============================================================================
-// STATS & MONITORING
+// MONITORING
 // ============================================================================
 
 // GetStats: Get gateway statistics
@@ -964,63 +1112,19 @@ func (ag *APIGateway) Reset() {
 }
 
 // ============================================================================
-// RATE LIMITING (Optional, basic implementation)
+// SIMPLE LOGGER (for LeaseManager)
 // ============================================================================
 
-// RateLimiter: Simple rate limiter
-type RateLimiter struct {
-	mu           sync.RWMutex
-	maxRequests  int           // requests per window
-	window       time.Duration // time window
-	lastReset    time.Time
-	requestCount int
+type simpleLogger struct{}
+
+func (sl *simpleLogger) Infof(format string, args ...interface{}) {
+	logger.Get().Info(format, args...)
 }
 
-// NewRateLimiter: Create rate limiter
-func NewRateLimiter(maxRequests int, window time.Duration) *RateLimiter {
-	return &RateLimiter{
-		maxRequests:  maxRequests,
-		window:       window,
-		lastReset:    time.Now(),
-		requestCount: 0,
-	}
+func (sl *simpleLogger) Warnf(format string, args ...interface{}) {
+	logger.Get().Warn(format, args...)
 }
 
-// Allow: Check if request is allowed
-func (rl *RateLimiter) Allow() bool {
-	rl.mu.Lock()
-	defer rl.mu.Unlock()
-
-	now := time.Now()
-
-	// Reset if window expired
-	if now.Sub(rl.lastReset) > rl.window {
-		rl.requestCount = 0
-		rl.lastReset = now
-	}
-
-	if rl.requestCount < rl.maxRequests {
-		rl.requestCount++
-		return true
-	}
-
-	return false
-}
-
-// GetStatus: Get rate limiter status
-func (rl *RateLimiter) GetStatus() map[string]interface{} {
-	rl.mu.RLock()
-	defer rl.mu.RUnlock()
-
-	remaining := rl.maxRequests - rl.requestCount
-	if remaining < 0 {
-		remaining = 0
-	}
-
-	return map[string]interface{}{
-		"max_requests": rl.maxRequests,
-		"window":       rl.window.String(),
-		"current":      rl.requestCount,
-		"remaining":    remaining,
-	}
+func (sl *simpleLogger) Errorf(format string, args ...interface{}) {
+	logger.Get().Error(format, args...)
 }

@@ -9,7 +9,6 @@ import (
 )
 
 // Layer 2: etcd client wrapper (depends on types, config, logger)
-
 // ETCDClient: Wrapper around etcd client for all etcd operations
 type ETCDClient struct {
 	cli        *clientv3.Client
@@ -20,16 +19,20 @@ type ETCDClient struct {
 
 // NewETCDClient: Create a new etcd client
 func NewETCDClient(endpoints []string, timeout time.Duration) (*ETCDClient, error) {
+
+	// Get logger instance
+	log := logger.Get()
+
 	cli, err := clientv3.New(clientv3.Config{
 		Endpoints:   endpoints,
 		DialTimeout: timeout,
 	})
 	if err != nil {
-		logger.Error("Failed to connect to etcd: %v", err)
+		log.Error("Failed to connect to etcd: %v", err)
 		return nil, err
 	}
 
-	logger.Info("Connected to etcd at %v", endpoints)
+	log.Info("Connected to etcd at %v", endpoints)
 
 	return &ETCDClient{
 		cli:        cli,
