@@ -152,7 +152,7 @@ func (lm *LeaseManager) AcquireLeaseForJob(ctx context.Context, jobID string) (b
 	lm.log.Infof("lease acquired for job %s (leaseID=%d)", jobID, leaseID)
 
 	// ========================================================================
-	// CRITICAL: Start heartbeat goroutine (THIS WAS MISSING!)
+	// Created Cancellable context instead of context.Background()
 	// ========================================================================
 	leaseInfo := &LeaseInfo{
 		LeaseID:       leaseID,
@@ -165,8 +165,12 @@ func (lm *LeaseManager) AcquireLeaseForJob(ctx context.Context, jobID string) (b
 
 	lm.activeLeases[jobID] = leaseInfo
 
+	// Create cancellable context for hearbeat
+	heartbeatCtx, cancel := context.WithCancel(context.Background())
+	lm.heartbeatContexts[jobID] = cancel
+
 	// Start background heartbeat goroutine
-	go lm.runHeartbeat(context.Background(), jobID, leaseID, leaseKey)
+	go lm.runHeartbeat(heartbeatCtx, jobID, leaseID, leaseKey)
 
 	return true, leaseID, nil
 }
@@ -199,7 +203,7 @@ func (lm *LeaseManager) runHeartbeat(
 	for {
 		select {
 		case <-ctx.Done():
-			// Context cancelled, release lease
+			// Context cancelled, (from ReleaseLeaseForJob) -- fixed
 			lm.log.Infof("heartbeat stopping for job %s (context cancelled)", jobID)
 			lm.releaseLease(context.Background(), jobID, leaseID, leaseKey)
 			return
@@ -257,29 +261,42 @@ func (lm *LeaseManager) runHeartbeat(
 // If we lost the lease, another executor claimed the job
 // Return error to ABORT the write (prevent split-brain)
 func (lm *LeaseManager) CheckLeaseOwnership(ctx context.Context, jobID string, leaseID int64) error {
-	// Quick check: is lease in our active list?
-	lm.mu.RLock()
-	leaseInfo, exists := lm.activeLeases[jobID]
-	lm.mu.RUnlock()
+	leaseKey := fmt.Sprintf("ares:leases:%s", jobID)
 
-	if !exists {
-		return fmt.Errorf("fencing error: lease not found in active leases (job %s)", jobID)
+	// Step 1: Check if lease key exists in etcd (source of truth)
+	leaseData, err := lm.etcdClient.Get(ctx, leaseKey)
+	if err != nil {
+		lm.log.Errorf("FENCING: Failed to check lease in etcd: %v", err)
+		return fmt.Errorf("fencing error: failed to check etcd: %w", err)
 	}
 
-	// Check: has lease expired?
-	if time.Now().After(leaseInfo.ExpiresAt) {
-		lm.log.Errorf("FENCING: Lease expired for job %s (lost ownership)", jobID)
-		return fmt.Errorf("fencing error: lease expired (split-brain prevented!)")
+	if leaseData == "" {
+		// Lease key not found in etcd - we lost ownership
+		lm.log.Errorf("FENCING: Lease key not found in etcd (job=%s) - split-brain prevented!", jobID)
+		return fmt.Errorf("fencing error: lease not found in etcd (split-brain prevented!)")
 	}
 
-	// Check: is it still our leaseID?
-	if leaseInfo.LeaseID != leaseID {
-		lm.log.Errorf("FENCING: LeaseID mismatch for job %s (expected %d, got %d)",
-			jobID, leaseInfo.LeaseID, leaseID)
-		return fmt.Errorf("fencing error: lease ID mismatch")
+	// Step 2: Verify it's still our lease (parse and check SchedulerID)
+	var lease Lease
+	err = json.Unmarshal([]byte(leaseData), &lease)
+	if err != nil {
+		lm.log.Errorf("FENCING: Failed to parse lease: %v", err)
+		return fmt.Errorf("fencing error: failed to parse lease: %w", err)
 	}
 
-	lm.log.Debugf("fencing check passed for job %s (lease still ours)", jobID)
+	if lease.SchedulerID != lm.schedulerID {
+		lm.log.Errorf("FENCING: Lease owned by different scheduler (expected %s, got %s)",
+			lm.schedulerID, lease.SchedulerID)
+		return fmt.Errorf("fencing error: lease owned by another scheduler (split-brain prevented!)")
+	}
+
+	// Step 3: Verify leaseID matches (extra safety check)
+	if lease.JobID != jobID {
+		lm.log.Errorf("FENCING: JobID mismatch in lease")
+		return fmt.Errorf("fencing error: job ID mismatch")
+	}
+
+	lm.log.Debugf("fencing check passed for job %s (lease still ours in etcd)", jobID)
 	return nil
 }
 
@@ -290,13 +307,25 @@ func (lm *LeaseManager) CheckLeaseOwnership(ctx context.Context, jobID string, l
 func (lm *LeaseManager) ReleaseLeaseForJob(ctx context.Context, jobID string) error {
 	lm.mu.Lock()
 	info, exists := lm.activeLeases[jobID]
+	cancel, hasCancel := lm.heartbeatContexts[jobID]
+
 	if exists {
 		delete(lm.activeLeases, jobID)
+	}
+	if hasCancel {
+		delete(lm.heartbeatContexts, jobID)
 	}
 	lm.mu.Unlock()
 
 	if !exists {
 		return fmt.Errorf("lease not found for job %s", jobID)
+	}
+
+	// FIX: Stop heartbeat goroutine before releasing lease
+	if hasCancel {
+		cancel()                           // Signals context.Done() in runHeartbeat
+		time.Sleep(100 * time.Millisecond) // Give goroutine time to exit
+		lm.log.Debugf("heartbeat stopped for job %s", jobID)
 	}
 
 	return lm.releaseLease(ctx, jobID, info.LeaseID, fmt.Sprintf("ares:leases:%s", jobID))
