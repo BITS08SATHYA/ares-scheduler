@@ -340,14 +340,15 @@ func (lm *LeaseManager) releaseLease(
 	// Delete the lease key first
 	err := lm.etcdClient.Delete(ctx, leaseKey)
 	if err != nil {
-		lm.log.Warnf("failed to delete lease key: %v", err)
+		lm.log.Errorf("failed to delete lease key: %v", err)
+		return fmt.Errorf("delete lease key failed: %w", err) // FIX: Return error
 	}
 
 	// Revoke the lease (forces auto-expiration)
 	err = lm.etcdClient.RevokeLease(ctx, leaseID)
 	if err != nil {
-		lm.log.Warnf("failed to revoke lease %d: %v", leaseID, err)
-		return err
+		lm.log.Errorf("failed to revoke lease %d: %v", leaseID, err)
+		return fmt.Errorf("revoke lease failed: %w", err) // FIX: Better error message
 	}
 
 	lm.log.Infof("lease released for job %s", jobID)
@@ -410,21 +411,24 @@ func NewJobStore(etcdClient *etcd.ETCDClient, log Logger) *JobStore {
 // - Lease expires after 30 seconds
 // - Job automatically deleted from etcd (no stale jobs)
 func (js *JobStore) StoreJob(ctx context.Context, job *JobRecord, leaseID int64) error {
-	js.mu.Lock()
-	defer js.mu.Unlock()
 
+	// FIX: Serialize job OUTSIDE lock (avoid blocking during marshaling)
 	jobKey := fmt.Sprintf("ares:jobs:%s", job.JobID)
 	jobValue, err := json.Marshal(job)
 	if err != nil {
 		return fmt.Errorf("marshal job: %w", err)
 	}
 
-	// Store with lease attachment for auto-cleanup
+	// FIX: Network operation OUTSIDE lock (don't block other operations)
 	err = js.etcdClient.PutWithLease(ctx, jobKey, string(jobValue), leaseID)
 	if err != nil {
 		js.log.Errorf("failed to store job %s: %v", job.JobID, err)
 		return fmt.Errorf("put job: %w", err)
 	}
+
+	// Only lock for internal state updates (if needed)
+	js.mu.Lock()
+	defer js.mu.Unlock()
 
 	js.log.Infof("job stored with lease: %s (state=%s, leaseID=%d)", job.JobID, job.Status, leaseID)
 	return nil
