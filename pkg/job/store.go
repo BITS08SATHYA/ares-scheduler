@@ -17,13 +17,14 @@ import (
 // Abstraction so we can swap implementations later
 type JobStore interface {
 	// SaveJob: Save or update a job
-	SaveJob(ctx context.Context, job *common.Job) error
+	SaveJob(ctx context.Context, job *common.Job, leaseId int64) error
 
 	// GetJob: Retrieve a job by ID
 	GetJob(ctx context.Context, jobID string) (*common.Job, error)
 
 	// UpdateJobStatus: Update only the status of a job
-	UpdateJobStatus(ctx context.Context, jobID string, status common.JobStatus) error
+	UpdateJobStatus(ctx context.Context, jobID string, status common.JobStatus,
+		leaseID int64) error
 
 	// DeleteJob: Delete a job
 	DeleteJob(ctx context.Context, jobID string) error
@@ -71,7 +72,7 @@ func NewETCDJobStore(etcd *etcd.ETCDClient) *ETCDJobStore {
 // Stores as JSON:
 // Key: /ares/jobs/{jobID}
 // Value: {entire job as JSON}
-func (store *ETCDJobStore) SaveJob(ctx context.Context, job *common.Job) error {
+func (store *ETCDJobStore) SaveJob(ctx context.Context, job *common.Job, leaseID int64) error {
 	if job == nil {
 		return fmt.Errorf("cannot save nil job")
 	}
@@ -87,9 +88,9 @@ func (store *ETCDJobStore) SaveJob(ctx context.Context, job *common.Job) error {
 		return fmt.Errorf("marshal failed: %w", err)
 	}
 
-	// Save to etcd
+	// Store the job with lease for auto-cleanup
 	key := fmt.Sprintf("%s/%s", store.keyPrefix, job.ID)
-	err = store.etcd.Put(ctx, key, string(jobData))
+	err = store.etcd.PutWithLease(ctx, key, string(jobData), leaseID)
 	if err != nil {
 		store.log.Error("Failed to save job %s to etcd: %v", job.ID, err)
 		return fmt.Errorf("save to etcd failed: %w", err)
@@ -138,6 +139,7 @@ func (store *ETCDJobStore) UpdateJobStatus(
 	ctx context.Context,
 	jobID string,
 	status common.JobStatus,
+	leaseID int64,
 ) error {
 
 	// Get current job
@@ -154,7 +156,7 @@ func (store *ETCDJobStore) UpdateJobStatus(
 	job.Status = status
 
 	// Save back
-	return store.SaveJob(ctx, job)
+	return store.SaveJob(ctx, job, leaseID)
 }
 
 // DeleteJob: Delete a job from etcd
@@ -336,16 +338,17 @@ func (store *ETCDJobStore) CountJobsByStatus(
 // BULK OPERATIONS
 // ============================================================================
 
+// need to think about it!
 // SaveJobs: Save multiple jobs at once
-func (store *ETCDJobStore) SaveJobs(ctx context.Context, jobs []*common.Job) error {
-	for _, job := range jobs {
-		if err := store.SaveJob(ctx, job); err != nil {
-			return err
-		}
-	}
-	store.log.Debug("Saved %d jobs", len(jobs))
-	return nil
-}
+//func (store *ETCDJobStore) SaveJobs(ctx context.Context, jobs []*common.Job) error {
+//	for _, job := range jobs {
+//		if err := store.SaveJob(ctx, job); err != nil {
+//			return err
+//		}
+//	}
+//	store.log.Debug("Saved %d jobs", len(jobs))
+//	return nil
+//}
 
 // DeleteJobs: Delete multiple jobs at once
 func (store *ETCDJobStore) DeleteJobs(ctx context.Context, jobIDs []string) error {

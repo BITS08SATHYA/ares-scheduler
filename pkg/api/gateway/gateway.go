@@ -498,6 +498,9 @@ func NewAPIGatewayWithCoordinator(
 		globalScheduler: globalScheduler,
 		log:             log,
 		config:          config,
+		jobCoordinator:  jobCoordinator,
+		idempotencyMgr:  idempotencyManager,
+		leaseManager:    leaseManager,
 		activeJobs:      make(map[string]*executor.ExecutionContext),
 		completedJobs:   make(map[string]*executor.ExecutionResult),
 		podRegistry:     make(map[string]*executor.PodInfo),
@@ -1119,6 +1122,10 @@ type simpleLogger struct{}
 
 func (sl *simpleLogger) Infof(format string, args ...interface{}) {
 	logger.Get().Info(format, args...)
+}
+
+func (sl *simpleLogger) Debugf(format string, args ...interface{}) {
+	logger.Get().Debug(format, args...)
 }
 
 func (sl *simpleLogger) Warnf(format string, args ...interface{}) {

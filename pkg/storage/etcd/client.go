@@ -79,6 +79,22 @@ func (ec *ETCDClient) PutWithTTL(ctx context.Context, key, value string, ttlSeco
 	return nil
 }
 
+// PutWithLease: Store a key-value pair with a lease (CRITICAL FOR AUTO-CLEANUP)
+//
+// When executor crashes, lease expires → key is automatically deleted
+// This is how jobs auto-cleanup from etcd when executor fails
+// Used by: JobStore to attach jobs to executor leases
+func (ec *ETCDClient) PutWithLease(ctx context.Context, key, value string, leaseID int64) error {
+	_, err := ec.cli.Put(ctx, key, value, clientv3.WithLease(clientv3.LeaseID(leaseID)))
+	if err != nil {
+		ec.log.Error("Failed to put key with lease %s: %v", key, err)
+		return err
+	}
+
+	ec.log.Debug("Put key with lease: %s (leaseID: %d)", key, leaseID)
+	return nil
+}
+
 // Get: Retrieve a value by key
 func (ec *ETCDClient) Get(ctx context.Context, key string) (string, error) {
 	resp, err := ec.cli.Get(ctx, key)
@@ -171,6 +187,7 @@ func (ec *ETCDClient) RevokeLease(ctx context.Context, leaseID int64) error {
 }
 
 // KeepAliveOnce: Renew a lease once (keeps it alive for another TTL period)
+// CRITICAL: Called by heartbeat goroutine every 10 seconds
 func (ec *ETCDClient) KeepAliveOnce(ctx context.Context, leaseID int64) error {
 	_, err := ec.cli.KeepAliveOnce(ctx, clientv3.LeaseID(leaseID))
 	if err != nil {
@@ -210,6 +227,7 @@ func (ec *ETCDClient) CAS(ctx context.Context, key string, expectedVersion int64
 
 // LeaseCAS: Atomic "set with lease if not exists"
 // Used for exactly-once: Only acquire lease if no one else has it
+// CRITICAL: This ensures only ONE executor claims each job
 func (ec *ETCDClient) LeaseCAS(ctx context.Context, key string, value string, leaseID int64) (bool, error) {
 	txn := ec.cli.Txn(ctx)
 
