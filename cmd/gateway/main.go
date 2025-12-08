@@ -22,6 +22,9 @@ package main
 import (
 	//"context"
 	"flag"
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/cluster"
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/storage/redis"
+
 	//"fmt"
 	"os"
 	"os/signal"
@@ -45,7 +48,7 @@ const (
 	// Storage
 	DefaultETCDEndpoint = "localhost:2379"
 	DefaultRedisAddr    = "localhost:6379"
-	DefaultControlPlane = "localhost"
+	DefaultControlPlane = "localhost:8080"
 
 	// Graceful shutdown
 	ShutdownTimeout = 10 * time.Second
@@ -74,6 +77,7 @@ var (
 		DefaultETCDEndpoint,
 		"etcd endpoint (default: localhost:2379)",
 	)
+
 	redisAddr = flag.String(
 		"redis.addr",
 		DefaultRedisAddr,
@@ -167,11 +171,21 @@ func main() {
 		log.Info("")
 
 		// Get the coordinator wrapper which embeds APIGateway
+		redisClient, err := redis.NewRedisClient("localhost:6379", "", 0)
+		
+		clusterManager := cluster.NewClusterManager(redisClient, &cluster.ClusterConfig{
+			AutoHeartbeatInterval:  10 * time.Second,
+			HealthCheckInterval:    30 * time.Second,
+			HeartbeatTimeout:       60 * time.Second,
+			AutonomyEnabled:        true,
+			MaxConsecutiveFailures: 3,
+		})
 		gatewayWithCoordinator, err := gateway.NewAPIGatewayWithCoordinator(
 			*controlPlane,
 			[]string{*etcdEndpoint},
 			*redisAddr,
 			gatewayConfig,
+			clusterManager,
 		)
 		if err != nil {
 			log.Error("Failed to initialize API Gateway with Coordinator: %v", err)

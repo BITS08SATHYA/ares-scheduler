@@ -270,12 +270,15 @@ type APIGateway struct {
 	globalScheduler *global.GlobalScheduler
 	log             *logger.Logger
 	config          *GatewayConfig
+	redisClient     *redis.RedisClient
 
 	jobCoordinator *orchestrator.JobCoordinator // Layer 10
 	idempotencyMgr *idempotency.IdempotencyManager
 	leaseManager   *lease.LeaseManager
 	clusterManager *cluster.ClusterManager // secluded cluster manager from API Gateway for management
+	globalMetrics  *cluster.GlobalMetrics
 
+	// Jobs
 	activeJobs    map[string]*executor.ExecutionContext
 	completedJobs map[string]*executor.ExecutionResult
 	podRegistry   map[string]*executor.PodInfo
@@ -363,6 +366,7 @@ type APIGatewayWithCoordinator struct {
 
 	// Layer 10: Job Coordinator (orchestrates all layers)
 	jobCoordinator *orchestrator.JobCoordinator
+	clusterManager *cluster.ClusterManager
 	log            *logger.Logger
 }
 
@@ -411,6 +415,12 @@ func NewAPIGatewayWithCoordinator(
 	idempotencyManager := idempotency.NewIdempotencyManager(redisClient)
 
 	log.Info("✓ Layer 3: JobStore, LeaseManager, IdempotencyManager")
+
+	// ========================================================================
+	// LAYER 4: Cluster Management
+	// ========================================================================
+	clusterManager = cluster.NewClusterManager(redisClient, nil)
+	log.Info("Layer 4: Cluster Manager Initialized")
 
 	// ========================================================================
 	// LAYER 5: GPU Discovery & Topology
@@ -499,6 +509,8 @@ func NewAPIGatewayWithCoordinator(
 
 	baseGateway := &APIGateway{
 		globalScheduler: globalScheduler,
+		clusterManager:  clusterManager,
+		redisClient:     redisClient,
 		log:             log,
 		config:          config,
 		jobCoordinator:  jobCoordinator,
@@ -553,6 +565,8 @@ func (ag *APIGateway) RegisterRoutes() *http.ServeMux {
 	// Job control
 	mux.HandleFunc("/job/cancel", ag.wrapHandler(ag.handleCancelJob))
 	mux.HandleFunc("/job/retry", ag.wrapHandler(ag.handleRetryJob))
+
+	ag.registerClusterRoutes(mux)
 
 	return mux
 }
@@ -865,7 +879,7 @@ func (ag *APIGateway) handleClusterStatus(w http.ResponseWriter, r *http.Request
 		ag.respondError(w, http.StatusBadRequest, "MISSING_PARAM", "cluster_id query parameter required")
 		return
 	}
-	cluster, err := ag.globalScheduler.GetClusterInfo(clusterID)
+	cluster, err := ag.clusterManager.GetCluster(clusterID)
 	if err != nil {
 		ag.respondError(w, http.StatusNotFound, "CLUSTER_NOT_FOUND", fmt.Sprintf("cluster %s not found", clusterID))
 		return

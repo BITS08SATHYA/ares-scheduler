@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/cluster"
-	"github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler/global"
 	"net/http"
 	"time"
 )
@@ -175,7 +174,7 @@ func (ag *APIGateway) handleRegisterCluster(w http.ResponseWriter, r *http.Reque
 	// ========================================================================
 
 	// Verify GlobalScheduler knows about the cluster
-	_, err = ag.globalScheduler.GetClusterInfo(regReq.ClusterID)
+	_, err = ag.clusterManager.GetClusterInfo(regReq.ClusterID)
 	if err != nil {
 		ag.log.Warn("GlobalScheduler not yet aware of cluster %s (will be after event)", regReq.ClusterID)
 	} else {
@@ -281,7 +280,7 @@ func (ag *APIGateway) handleClusterHeartbeat(w http.ResponseWriter, r *http.Requ
 	// Update GlobalScheduler's copy with same load info
 	// ========================================================================
 
-	clusterInfo, err := ag.globalScheduler.GetClusterInfo(hbReq.ClusterID)
+	clusterInfo, err := ag.clusterManager.GetClusterInfo(hbReq.ClusterID)
 	if err == nil && clusterInfo != nil {
 		clusterInfo.AvailableGPUs = clusterInfo.TotalGPUs - hbReq.GPUsInUse
 		clusterInfo.AvailableMemoryGB = clusterInfo.TotalMemoryGB - hbReq.MemGBInUse
@@ -309,28 +308,6 @@ func (ag *APIGateway) handleClusterHeartbeat(w http.ResponseWriter, r *http.Requ
 // HANDLER: GET /clusters (NEW - List all clusters)
 // ============================================================================
 
-type ListClustersResponse struct {
-	Success   bool               `json:"success"`
-	Clusters  []*ClusterListItem `json:"clusters"`
-	Count     int                `json:"count"`
-	Timestamp string             `json:"timestamp"`
-}
-
-type ClusterListItem struct {
-	ClusterID       string  `json:"cluster_id"`
-	Region          string  `json:"region"`
-	Zone            string  `json:"zone"`
-	IsHealthy       bool    `json:"is_healthy"`
-	TotalGPUs       int     `json:"total_gpus"`
-	GPUsInUse       int     `json:"gpus_in_use"`
-	AvailableGPUs   int     `json:"available_gpus"`
-	TotalMemoryGB   float64 `json:"total_memory_gb"`
-	MemGBInUse      float64 `json:"mem_gb_in_use"`
-	RunningJobs     int     `json:"running_jobs"`
-	PendingJobs     int     `json:"pending_jobs"`
-	LastHeartbeatAt string  `json:"last_heartbeat_at"`
-}
-
 func (ag *APIGateway) handleListClusters(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		ag.respondError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED",
@@ -341,9 +318,9 @@ func (ag *APIGateway) handleListClusters(w http.ResponseWriter, r *http.Request)
 	// Get clusters from ClusterManager (source of truth)
 	clusters := ag.clusterManager.ListClusters()
 
-	items := make([]*ClusterListItem, 0, len(clusters))
+	items := make([]*cluster.ClusterListItem, 0, len(clusters))
 	for _, clusterObj := range clusters {
-		item := &ClusterListItem{
+		item := &cluster.ClusterListItem{
 			ClusterID:       clusterObj.ClusterID,
 			Region:          clusterObj.Region,
 			Zone:            clusterObj.Zone,
@@ -360,7 +337,7 @@ func (ag *APIGateway) handleListClusters(w http.ResponseWriter, r *http.Request)
 		items = append(items, item)
 	}
 
-	response := &ListClustersResponse{
+	response := &cluster.ListClustersResponse{
 		Success:   true,
 		Clusters:  items,
 		Count:     len(items),
@@ -448,7 +425,7 @@ func (ag *APIGateway) registerClusterRoutes(mux *http.ServeMux) {
 	// You'd need a router like gorilla/mux or just use: /cluster-heartbeat
 	mux.HandleFunc("/cluster-heartbeat", ag.wrapHandler(ag.handleClusterHeartbeat))
 
-	ag.log.Info("✓ Registered cluster management routes:")
+	ag.log.Info("Registered cluster management routes:")
 	ag.log.Info("  POST   /clusters/register")
 	ag.log.Info("  POST   /clusters/deregister")
 	ag.log.Info("  POST   /cluster-heartbeat")

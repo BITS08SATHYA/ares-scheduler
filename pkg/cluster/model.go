@@ -14,16 +14,6 @@ import (
 // CLUSTER STATES
 // ============================================================================
 
-// Cache keys
-const (
-	CacheKeyClusterInfo     = "ares:global:cluster:%s"
-	CacheKeyGlobalMetrics   = "ares:global:metrics"
-	CacheKeyClusterRegistry = "ares:global:clusters"
-	ClusterInfoCacheTTL     = 30 * time.Second
-	MetricsCacheTTL         = 60 * time.Second
-	HeartbeatTimeout        = 60 * time.Second
-)
-
 // ClusterState: Operational state of cluster
 type ClusterState string
 
@@ -82,6 +72,9 @@ type Cluster struct {
 	MemGBInUse  float64
 	RunningJobs int
 	PendingJobs int
+
+	// Score
+	//score *ClusterScore
 
 	// Metadata
 	Labels      map[string]string // Cluster tags

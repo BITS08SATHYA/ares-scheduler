@@ -95,11 +95,11 @@ func (gs *GlobalScheduler) CheckClusterHealth() {
 
 	now := time.Now()
 
-	for _, cluster := range gs.clusters {
-		if now.Sub(cluster.LastHeartbeat) > HeartbeatTimeout {
-			cluster.IsHealthy = false
+	for _, _cluster := range gs.clusters {
+		if now.Sub(_cluster.LastHeartbeat) > gs.clusterManager.GetHeartbeatTimeout() {
+			_cluster.IsHealthy = false
 			gs.log.Warn("Cluster %s marked unhealthy: no heartbeat for %v",
-				cluster.ClusterID, now.Sub(cluster.LastHeartbeat))
+				_cluster.ClusterID, now.Sub(_cluster.LastHeartbeat))
 		}
 	}
 }
@@ -164,10 +164,12 @@ func (gs *GlobalScheduler) SelectBestCluster(
 			continue
 		}
 
-		score := gs.scoreCluster(_cluster, jobSpec, preferredRegion)
+		clusterInfo, _ := gs.clusterManager.GetClusterInfo(_cluster.ClusterID)
+
+		score := gs.scoreCluster(clusterInfo, jobSpec, preferredRegion)
 
 		if bestScore == nil || score.Score > bestScore.Score {
-			bestCluster = _cluster
+			bestCluster = clusterInfo
 			bestScore = score
 		}
 	}
@@ -184,43 +186,43 @@ func (gs *GlobalScheduler) SelectBestCluster(
 
 // scoreCluster: Calculate fitness score for a cluster
 func (gs *GlobalScheduler) scoreCluster(
-	cluster *cluster.ClusterInfo,
+	clusterInfo *cluster.ClusterInfo,
 	jobSpec *common.JobSpec,
 	preferredRegion string,
 ) *cluster.ClusterScore {
 
 	score := &cluster.ClusterScore{
-		ClusterID: cluster.ClusterID,
-		Region:    cluster.Region,
+		ClusterID: clusterInfo.ClusterID,
+		Region:    clusterInfo.Region,
 		Score:     20.0, // Base score
 		Reasons:   make([]string, 0),
 	}
 
 	// Calculate available resources
-	score.AvailableGPUs = cluster.AvailableGPUs
-	score.AvailableMemoryGB = cluster.AvailableMemoryGB
-	score.CurrentLoad = cluster.RunningJobsCount
+	score.AvailableGPUs = clusterInfo.AvailableGPUs
+	score.AvailableMemoryGB = clusterInfo.AvailableMemoryGB
+	score.CurrentLoad = clusterInfo.RunningJobsCount
 
 	// Utilization
-	if cluster.TotalGPUs > 0 {
-		score.UtilizationPercent = float64(cluster.TotalGPUs-cluster.AvailableGPUs) / float64(cluster.TotalGPUs) * 100.0
+	if clusterInfo.TotalGPUs > 0 {
+		score.UtilizationPercent = float64(clusterInfo.TotalGPUs-clusterInfo.AvailableGPUs) / float64(clusterInfo.TotalGPUs) * 100.0
 	}
 
 	// Factor 1: GPU availability (datacenter-level, coarse-grained)
-	if cluster.AvailableGPUs >= jobSpec.GPUCount {
-		score.Score += float64(cluster.AvailableGPUs) * 1.0
-		score.Reasons = append(score.Reasons, fmt.Sprintf("has-%d-gpus", cluster.AvailableGPUs))
+	if clusterInfo.AvailableGPUs >= jobSpec.GPUCount {
+		score.Score += float64(clusterInfo.AvailableGPUs) * 1.0
+		score.Reasons = append(score.Reasons, fmt.Sprintf("has-%d-gpus", clusterInfo.AvailableGPUs))
 	} else {
 		// Not enough GPUs - heavily penalize
-		score.Score -= float64(jobSpec.GPUCount-cluster.AvailableGPUs) * 8.0
+		score.Score -= float64(jobSpec.GPUCount-clusterInfo.AvailableGPUs) * 8.0
 		score.Reasons = append(score.Reasons, "insufficient-gpus")
 	}
 
 	// Factor 2: Memory availability
 	requiredMemoryGB := float64(jobSpec.MemoryMB) / 1024.0
-	if cluster.AvailableMemoryGB >= requiredMemoryGB {
-		score.Score += (cluster.AvailableMemoryGB - requiredMemoryGB) * 0.05
-		score.Reasons = append(score.Reasons, fmt.Sprintf("%.0fgb-mem", cluster.AvailableMemoryGB))
+	if clusterInfo.AvailableMemoryGB >= requiredMemoryGB {
+		score.Score += (clusterInfo.AvailableMemoryGB - requiredMemoryGB) * 0.05
+		score.Reasons = append(score.Reasons, fmt.Sprintf("%.0fgb-mem", clusterInfo.AvailableMemoryGB))
 	} else {
 		score.Score -= 20.0
 		score.Reasons = append(score.Reasons, "insufficient-memory")
@@ -237,7 +239,7 @@ func (gs *GlobalScheduler) scoreCluster(
 	}
 
 	// Factor 4: Cluster health (critical)
-	if cluster.IsHealthy {
+	if clusterInfo.IsHealthy {
 		score.HealthScore = 100.0
 		score.Score += 30.0
 	} else {
@@ -247,7 +249,7 @@ func (gs *GlobalScheduler) scoreCluster(
 	}
 
 	// Factor 5: Region preference (datacenter has multiple regions)
-	if preferredRegion != "" && cluster.Region == preferredRegion {
+	if preferredRegion != "" && clusterInfo.Region == preferredRegion {
 		score.RegionPreferenceScore = 100.0
 		score.Score += 40.0
 		score.Reasons = append(score.Reasons, fmt.Sprintf("preferred-region=%s", preferredRegion))
@@ -258,7 +260,7 @@ func (gs *GlobalScheduler) scoreCluster(
 		// Different region, slight penalty
 		score.RegionPreferenceScore = 25.0
 		score.Score -= 5.0
-		score.Reasons = append(score.Reasons, fmt.Sprintf("not-preferred-region=%s", cluster.Region))
+		score.Reasons = append(score.Reasons, fmt.Sprintf("not-preferred-region=%s", clusterInfo.Region))
 	}
 
 	// Cap score
@@ -350,7 +352,7 @@ func (gs *GlobalScheduler) ScheduleJobWithConstraints(
 	constraints *cluster.ClusterConstraints,
 ) (*cluster.GlobalSchedulingDecision, error) {
 
-	clusters := gs.ListClusters()
+	clusters := gs.clusterManager.ListClusters()
 	if len(clusters) == 0 {
 		gs.recordSchedulingFailure()
 		return nil, fmt.Errorf("no clusters available")
@@ -417,17 +419,17 @@ func (gs *GlobalScheduler) ScheduleJobWithConstraints(
 		}
 
 		// Utilization constraint
-		util := float64(cluster.TotalGPUs-cluster.AvailableGPUs) / float64(cluster.TotalGPUs) * 100.0
+		util := float64(cluster.TotalGPUs-cluster.AvailableGPUs()) / float64(cluster.TotalGPUs) * 100.0
 		if util > constraints.MaxUtilization {
 			continue
 		}
 
 		// GPU availability constraint
-		if cluster.AvailableGPUs < constraints.MinAvailableGPUs {
+		if cluster.AvailableGPUs() < constraints.MinAvailableGPUs {
 			continue
 		}
-
-		validClusters = append(validClusters, cluster)
+		cI, _ := gs.clusterManager.GetClusterInfo(cluster.ClusterID)
+		validClusters = append(validClusters, cI)
 	}
 
 	if len(validClusters) == 0 {
@@ -436,8 +438,8 @@ func (gs *GlobalScheduler) ScheduleJobWithConstraints(
 	}
 
 	// Score valid clusters with preference boost
-	var bestCluster *ClusterInfo
-	var bestScore *ClusterScore
+	var bestCluster *cluster.ClusterInfo
+	var bestScore *cluster.ClusterScore
 
 	for _, cluster := range validClusters {
 		score := gs.scoreCluster(cluster, jobSpec, "")
@@ -566,24 +568,9 @@ func (gs *GlobalScheduler) GetDatacenterLoad() map[string]interface{} {
 	}
 }
 
-// GetClustersByRegion: Get all clusters in specific region
-func (gs *GlobalScheduler) GetClustersByRegion(region string) []*ClusterInfo {
-	gs.clustersMu.RLock()
-	defer gs.clustersMu.RUnlock()
-
-	regional := make([]*cluster.ClusterInfo, 0)
-	for _, cluster := range gs.clusters {
-		if cluster.Region == region && cluster.IsHealthy {
-			regional = append(regional, cluster)
-		}
-	}
-
-	return regional
-}
-
 // GetRegionLoad: Get utilization in specific region
 func (gs *GlobalScheduler) GetRegionLoad(region string) map[string]interface{} {
-	clusters := gs.GetClustersByRegion(region)
+	clusters := gs.clusterManager.ListClustersByRegion(region)
 
 	totalGPUs := 0
 	totalMemory := 0.0
@@ -593,10 +580,10 @@ func (gs *GlobalScheduler) GetRegionLoad(region string) map[string]interface{} {
 
 	for _, cluster := range clusters {
 		totalGPUs += cluster.TotalGPUs
-		totalMemory += cluster.TotalMemoryGB
-		gpusInUse += cluster.TotalGPUs - cluster.AvailableGPUs
-		memoryInUse += cluster.TotalMemoryGB - cluster.AvailableMemoryGB
-		jobsRunning += cluster.RunningJobsCount
+		totalMemory += cluster.TotalMemGB
+		gpusInUse += cluster.TotalGPUs - cluster.AvailableGPUs()
+		memoryInUse += cluster.TotalMemGB - cluster.AvailableMemGB()
+		jobsRunning += cluster.RunningJobs
 	}
 
 	gpuUtil := 0.0
@@ -639,12 +626,12 @@ func (gs *GlobalScheduler) recordSchedulingFailure() {
 }
 
 // GetMetrics: Get current scheduler metrics
-func (gs *GlobalScheduler) GetMetrics() *GlobalMetrics {
+func (gs *GlobalScheduler) GetMetrics() *cluster.GlobalMetrics {
 	gs.metricsMu.RLock()
 	defer gs.metricsMu.RUnlock()
 
 	// Return copy
-	metrics := &GlobalMetrics{
+	metrics := &cluster.GlobalMetrics{
 		TotalJobsScheduled: gs.metrics.TotalJobsScheduled,
 		TotalJobsFailed:    gs.metrics.TotalJobsFailed,
 		TotalJobsRouted:    make(map[string]int64),
@@ -777,4 +764,157 @@ func (gs *GlobalScheduler) GetFederationStatus() map[string]interface{} {
 		"scheduling_success": gs.SuccessRate(),
 		"last_updated":       time.Now(),
 	}
+}
+
+// Cluster Registration Events
+// FILE: Add these methods to pkg/scheduler/global/scheduler.go
+// Location: At the end of the GlobalScheduler struct (before the closing brace of the file)
+// These methods implement the ClusterEventListener interface
+
+// ============================================================================
+// CLUSTER EVENT LISTENER IMPLEMENTATION
+// ============================================================================
+// GlobalScheduler implements ClusterEventListener interface
+// Receives notifications when clusters join/leave/change
+// Updates internal cluster cache accordingly
+
+// OnClusterJoin: Called when cluster joins the federation
+// Updates GlobalScheduler's cluster cache
+func (gs *GlobalScheduler) OnClusterJoin(ctx context.Context, cluster *cluster.Cluster) error {
+	if cluster == nil {
+		return fmt.Errorf("cluster cannot be nil")
+	}
+
+	gs.log.Info("GlobalScheduler: Received OnClusterJoin event for cluster %s", cluster.ClusterID)
+
+	// Convert Cluster to ClusterInfo for caching
+	clusterInfo := &cluster.ClusterInfo{
+		ClusterID:          cluster.ClusterID,
+		Name:               cluster.Name,
+		Region:             cluster.Region,
+		Zone:               cluster.Zone,
+		LocalSchedulerAddr: cluster.ControlAddr,
+		IsHealthy:          cluster.IsHealthy,
+		IsReachable:        cluster.IsReachable,
+		LastHeartbeat:      cluster.LastHeartbeatAt,
+		TotalGPUs:          cluster.TotalGPUs,
+		TotalCPUs:          cluster.TotalCPUs,
+		TotalMemoryGB:      cluster.TotalMemGB,
+		AvailableGPUs:      cluster.TotalGPUs, // Initially all available
+		AvailableMemoryGB:  cluster.TotalMemGB,
+		GPUsInUse:          0,
+		MemGBInUse:         0.0,
+		RunningJobsCount:   0,
+		PendingJobsCount:   0,
+	}
+
+	// Add to cache
+	gs.clustersMu.Lock()
+	gs.clusters[cluster.ClusterID] = clusterInfo
+	gs.clustersMu.Unlock()
+
+	gs.log.Info("GlobalScheduler: Added cluster %s to cache (region=%s, gpus=%d)",
+		cluster.ClusterID, cluster.Region, cluster.TotalGPUs)
+
+	return nil
+}
+
+// OnClusterLeave: Called when cluster leaves the federation
+// Removes cluster from GlobalScheduler's cache
+func (gs *GlobalScheduler) OnClusterLeave(ctx context.Context, clusterID string) error {
+	if clusterID == "" {
+		return fmt.Errorf("cluster ID cannot be empty")
+	}
+
+	gs.log.Info("GlobalScheduler: Received OnClusterLeave event for cluster %s", clusterID)
+
+	// Remove from cache
+	gs.clustersMu.Lock()
+	delete(gs.clusters, clusterID)
+	gs.clustersMu.Unlock()
+
+	gs.log.Info("GlobalScheduler: Removed cluster %s from cache", clusterID)
+
+	return nil
+}
+
+// OnClusterHealthChange: Called when cluster health status changes
+// Updates cluster health in cache
+func (gs *GlobalScheduler) OnClusterHealthChange(
+	ctx context.Context,
+	clusterID string,
+	health *cluster.ClusterHealth,
+) error {
+	if clusterID == "" {
+		return fmt.Errorf("cluster ID cannot be empty")
+	}
+
+	gs.clustersMu.Lock()
+	clusterInfo, err := gs.clusterManager.GetCluster(clusterID)
+	gs.clustersMu.Unlock()
+
+	if err != nil {
+		gs.log.Warn("GlobalScheduler: Received health change for unknown cluster %s", clusterID)
+		return fmt.Errorf("cluster not in cache: %s", clusterID)
+	}
+
+	// Update health status
+	if health != nil {
+		gs.clustersMu.Lock()
+		clusterInfo.IsHealthy = health.IsHealthy
+		//clusterInfo.IsReachable = health.IsReachable
+		clusterInfo.LastHeartbeatAt = health.LastHeartbeat
+		gs.clustersMu.Unlock()
+
+		gs.log.Info("GlobalScheduler: Updated health for cluster %s (healthy=%v, reachable=%v)",
+			clusterID, health.IsHealthy, clusterInfo.IsReachable)
+	}
+
+	return nil
+}
+
+// OnClusterStateChange: Called when cluster state changes
+// Updates cluster state in cache
+func (gs *GlobalScheduler) OnClusterStateChange(
+	ctx context.Context,
+	clusterID string,
+	oldState, newState cluster.ClusterState,
+) error {
+	if clusterID == "" {
+		return fmt.Errorf("cluster ID cannot be empty")
+	}
+
+	gs.clustersMu.Lock()
+	_, exists := gs.clusters[clusterID]
+	gs.clustersMu.Unlock()
+
+	if !exists {
+		gs.log.Warn("GlobalScheduler: Received state change for unknown cluster %s", clusterID)
+		return fmt.Errorf("cluster not in cache: %s", clusterID)
+	}
+
+	gs.log.Info("GlobalScheduler: Cluster %s state changed: %s → %s",
+		clusterID, oldState, newState)
+
+	// Update cluster state in cache if needed
+	// (You might want to track this in ClusterInfo struct)
+
+	return nil
+}
+
+// ============================================================================
+// HELPER: List all clusters from cache
+// ============================================================================
+
+// ListClusters: Get all clusters from cache
+func (gs *GlobalScheduler) ListClusters() []*cluster.ClusterInfo {
+	gs.clustersMu.RLock()
+	defer gs.clustersMu.RUnlock()
+
+	clusters := make([]*cluster.ClusterInfo, 0, len(gs.clusters))
+	for _, cluster := range gs.clusters {
+		clusters = append(clusters, cluster)
+	}
+
+	return clusters
 }

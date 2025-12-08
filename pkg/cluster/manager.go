@@ -15,6 +15,16 @@ import (
 	"time"
 )
 
+// Cache keys
+const (
+	CacheKeyClusterInfo     = "ares:global:cluster:%s"
+	CacheKeyGlobalMetrics   = "ares:global:metrics"
+	CacheKeyClusterRegistry = "ares:global:clusters"
+	ClusterInfoCacheTTL     = 30 * time.Second
+	MetricsCacheTTL         = 60 * time.Second
+	HeartbeatTimeout        = 60 * time.Second
+)
+
 // ============================================================================
 // CLUSTER MANAGER
 // ============================================================================
@@ -179,6 +189,31 @@ func (cm *ClusterManager) GetCluster(clusterID string) (*Cluster, error) {
 	}
 
 	return cluster, nil
+}
+
+// GetCluster: Get cluster by ID
+func (cm *ClusterManager) GetClusterInfo(clusterID string) (*ClusterInfo, error) {
+	cm.mu.RLock()
+	defer cm.mu.RUnlock()
+
+	cluster, exists := cm.clusters[clusterID]
+	if !exists {
+		return nil, fmt.Errorf("cluster not found: %s", clusterID)
+	}
+
+	return &ClusterInfo{
+		ClusterID:          cluster.ClusterID,
+		Region:             cluster.Region,
+		Zone:               cluster.Zone,
+		IsHealthy:          cluster.IsHealthy,
+		TotalGPUs:          cluster.TotalGPUs,
+		AvailableGPUs:      cluster.AvailableGPUs(),
+		TotalMemoryGB:      cluster.TotalMemGB,
+		AvailableMemoryGB:  cluster.AvailableMemGB(),
+		RunningJobsCount:   cluster.RunningJobs,
+		LastHeartbeat:      cluster.LastHeartbeatAt,
+		LocalSchedulerAddr: cluster.ControlAddr,
+	}, nil
 }
 
 // ListClusters: Get all registered clusters
