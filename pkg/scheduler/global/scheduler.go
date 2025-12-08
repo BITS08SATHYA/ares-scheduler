@@ -780,41 +780,35 @@ func (gs *GlobalScheduler) GetFederationStatus() map[string]interface{} {
 
 // OnClusterJoin: Called when cluster joins the federation
 // Updates GlobalScheduler's cluster cache
-func (gs *GlobalScheduler) OnClusterJoin(ctx context.Context, cluster *cluster.Cluster) error {
-	if cluster == nil {
+func (gs *GlobalScheduler) OnClusterJoin(ctx context.Context, clusterObj *cluster.Cluster) error {
+	if clusterObj == nil {
 		return fmt.Errorf("cluster cannot be nil")
 	}
 
-	gs.log.Info("GlobalScheduler: Received OnClusterJoin event for cluster %s", cluster.ClusterID)
+	gs.log.Info("GlobalScheduler: Received OnClusterJoin event for cluster %s", clusterObj.ClusterID)
 
 	// Convert Cluster to ClusterInfo for caching
 	clusterInfo := &cluster.ClusterInfo{
-		ClusterID:          cluster.ClusterID,
-		Name:               cluster.Name,
-		Region:             cluster.Region,
-		Zone:               cluster.Zone,
-		LocalSchedulerAddr: cluster.ControlAddr,
-		IsHealthy:          cluster.IsHealthy,
-		IsReachable:        cluster.IsReachable,
-		LastHeartbeat:      cluster.LastHeartbeatAt,
-		TotalGPUs:          cluster.TotalGPUs,
-		TotalCPUs:          cluster.TotalCPUs,
-		TotalMemoryGB:      cluster.TotalMemGB,
-		AvailableGPUs:      cluster.TotalGPUs, // Initially all available
-		AvailableMemoryGB:  cluster.TotalMemGB,
-		GPUsInUse:          0,
-		MemGBInUse:         0.0,
-		RunningJobsCount:   0,
-		PendingJobsCount:   0,
+		ClusterID:          clusterObj.ClusterID,
+		Region:             clusterObj.Region,
+		Zone:               clusterObj.Zone,
+		IsHealthy:          clusterObj.IsHealthy,
+		TotalGPUs:          clusterObj.TotalGPUs,
+		AvailableGPUs:      clusterObj.AvailableGPUs(),
+		TotalMemoryGB:      clusterObj.TotalMemGB,
+		AvailableMemoryGB:  clusterObj.AvailableMemGB(),
+		RunningJobsCount:   clusterObj.RunningJobs,
+		LastHeartbeat:      time.Time{},
+		LocalSchedulerAddr: "",
 	}
 
 	// Add to cache
 	gs.clustersMu.Lock()
-	gs.clusters[cluster.ClusterID] = clusterInfo
+	gs.clusters[clusterObj.ClusterID] = clusterInfo
 	gs.clustersMu.Unlock()
 
 	gs.log.Info("GlobalScheduler: Added cluster %s to cache (region=%s, gpus=%d)",
-		cluster.ClusterID, cluster.Region, cluster.TotalGPUs)
+		clusterObj.ClusterID, clusterObj.Region, clusterObj.TotalGPUs)
 
 	return nil
 }
