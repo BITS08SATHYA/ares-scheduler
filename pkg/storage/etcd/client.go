@@ -91,7 +91,7 @@ func (ec *ETCDClient) PutWithLease(ctx context.Context, key, value string, lease
 		return err
 	}
 
-	ec.log.Debug("Put key with lease: %s (leaseID: %d)", key, leaseID)
+	ec.log.Info("Put key with lease: %s (leaseID: %d)", key, leaseID)
 	return nil
 }
 
@@ -170,7 +170,7 @@ func (ec *ETCDClient) GrantLease(ctx context.Context, ttlSeconds int64) (int64, 
 		return 0, err
 	}
 
-	ec.log.Debug("Granted lease: %d (TTL: %d seconds)", grant.ID, ttlSeconds)
+	ec.log.Info("Granted lease: %d (TTL: %d seconds)", grant.ID, ttlSeconds)
 	return int64(grant.ID), nil
 }
 

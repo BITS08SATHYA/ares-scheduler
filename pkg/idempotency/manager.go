@@ -72,13 +72,13 @@ func (im *IdempotencyManager) CheckDuplicate(ctx context.Context, requestID stri
 			im.log.Error("Failed to unmarshal cached result: %v", err)
 			return nil, false, nil // Treat as miss on unmarshal error
 		}
-		
+
 		im.log.Info("Dedup cache hit for request %s (job=%s, status=%s)", requestID, result.JobID, result.Status)
 		return &result, true, nil
 	}
 
 	// Cache miss: this is a new request
-	im.log.Debug("Dedup cache miss for request %s", requestID)
+	im.log.Info("Dedup cache miss for request %s", requestID)
 	return nil, false, nil
 }
 
@@ -222,7 +222,7 @@ type DedupeStats struct {
 func (im *IdempotencyManager) CountCacheEntries(ctx context.Context) (int64, error) {
 	// In production: Use Redis SCAN for paging
 	// For now: Return 0 (would require Redis SCAN implementation)
-	im.log.Debug("Counting dedup cache entries (would use SCAN in production)")
+	im.log.Info("Counting dedup cache entries (would use SCAN in production)")
 	return 0, nil
 }
 

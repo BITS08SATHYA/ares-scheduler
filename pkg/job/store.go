@@ -81,8 +81,10 @@ func (store *ETCDJobStore) SaveJob(ctx context.Context, job *common.Job, leaseID
 		return fmt.Errorf("job ID cannot be empty")
 	}
 
+	store.log.Info("Job Data received: ", job)
 	// Marshal job to JSON
 	jobData, err := json.Marshal(job)
+
 	if err != nil {
 		store.log.Error("Failed to marshal job %s: %v", job.ID, err)
 		return fmt.Errorf("marshal failed: %w", err)
@@ -96,7 +98,7 @@ func (store *ETCDJobStore) SaveJob(ctx context.Context, job *common.Job, leaseID
 		return fmt.Errorf("save to etcd failed: %w", err)
 	}
 
-	store.log.Debug("Saved job %s (status: %s)", job.ID, job.Status)
+	store.log.Info("Saved job %s (status: %s)", job.ID, job.Status)
 	return nil
 }
 

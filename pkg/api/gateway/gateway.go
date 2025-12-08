@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/cluster"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/idempotency"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/lease"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/orchestrator"
@@ -273,6 +274,7 @@ type APIGateway struct {
 	jobCoordinator *orchestrator.JobCoordinator // Layer 10
 	idempotencyMgr *idempotency.IdempotencyManager
 	leaseManager   *lease.LeaseManager
+	clusterManager *cluster.ClusterManager // secluded cluster manager from API Gateway for management
 
 	activeJobs    map[string]*executor.ExecutionContext
 	completedJobs map[string]*executor.ExecutionResult
@@ -371,6 +373,7 @@ func NewAPIGatewayWithCoordinator(
 	etcdEndpoints []string,
 	redisAddr string,
 	config *GatewayConfig,
+	clusterManager *cluster.ClusterManager,
 ) (*APIGatewayWithCoordinator, error) {
 
 	log := logger.Get()
@@ -465,7 +468,7 @@ func NewAPIGatewayWithCoordinator(
 	// ========================================================================
 
 	log.Info("Layer 7: Initializing global scheduler...")
-	globalScheduler := global.NewGlobalScheduler(controlPlaneAddr, redisClient)
+	globalScheduler := global.NewGlobalScheduler(controlPlaneAddr, redisClient, clusterManager)
 	//log.Info("✓ Layer 7: GlobalScheduler initialized")
 
 	// ========================================================================
@@ -514,7 +517,7 @@ func NewAPIGatewayWithCoordinator(
 	}
 
 	log.Info("")
-	log.Info("✓✓✓ COMPLETE: All 10 layers initialized and wired ✓✓✓")
+	log.Info("COMPLETE: All 10 layers initialized and wired")
 	log.Info("")
 
 	return gatewayWithCoordinator, nil
@@ -576,7 +579,7 @@ func (ag *APIGateway) wrapHandler(handler func(http.ResponseWriter, *http.Reques
 		}
 
 		startTime := time.Now()
-		ag.log.Debug("API Request: %s %s from %s", r.Method, r.URL.Path, r.RemoteAddr)
+		ag.log.Info("API Request: %s %s from %s", r.Method, r.URL.Path, r.RemoteAddr)
 
 		// Call handler
 		handler(w, r)
@@ -586,7 +589,7 @@ func (ag *APIGateway) wrapHandler(handler func(http.ResponseWriter, *http.Reques
 		atomic.AddUint64(&ag.totalRequests, 1)
 		atomic.AddInt64(&ag.requestDuration, duration.Nanoseconds())
 
-		ag.log.Debug("API Response completed in %.2fms", duration.Seconds()*1000)
+		ag.log.Info("API Response completed in %.2fms", duration.Seconds()*1000)
 	}
 }
 
@@ -882,16 +885,6 @@ func (ag *APIGateway) handleCapacity(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{"timestamp": time.Now().Format(time.RFC3339), "total": totalCap, "available": availCap})
 }
 
-func (ag *APIGateway) handleListClusters(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		ag.respondError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", fmt.Sprintf("expected GET, got %s", r.Method))
-		return
-	}
-	clusters := ag.globalScheduler.ListClusters()
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]interface{}{"timestamp": time.Now().Format(time.RFC3339), "count": len(clusters), "clusters": clusters})
-}
-
 func (ag *APIGateway) handleCancelJob(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		ag.respondError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", fmt.Sprintf("expected POST, got %s", r.Method))
@@ -1048,7 +1041,7 @@ func (ag *APIGateway) Start() error {
 	}()
 
 	time.Sleep(100 * time.Millisecond)
-	ag.log.Info("✓ API Gateway started successfully on port %d", ag.config.Port)
+	ag.log.Info("API Gateway started successfully on port %d", ag.config.Port)
 	return nil
 }
 

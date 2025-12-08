@@ -123,7 +123,7 @@ func main() {
 
 	log.Info("")
 	log.Info("╔════════════════════════════════════════════════════════╗")
-	log.Info("║     Ares Scheduler - API Gateway                      ║")
+	log.Info("║     Ares Scheduler - API Gateway                       ║")
 	log.Info("║     Multi-Cluster GPU Scheduler with Exactly-Once      ║")
 	log.Info("╚════════════════════════════════════════════════════════╝")
 	log.Info("")
@@ -191,8 +191,8 @@ func main() {
 		}
 
 		log.Info("")
-		log.Info("✓ API Gateway initialized with Job Coordinator")
-		log.Info("✓ All 10 layers ready")
+		log.Info("API Gateway initialized with Job Coordinator")
+		log.Info("All 10 layers ready")
 
 	} else {
 		log.Info("Initializing API Gateway WITHOUT Job Coordinator (testing mode)...")
@@ -212,7 +212,7 @@ func main() {
 			os.Exit(1)
 		}
 
-		log.Info("✓ API Gateway initialized (limited features)")
+		log.Info("API Gateway initialized (limited features)")
 	}
 
 	log.Info("")
@@ -234,7 +234,7 @@ func main() {
 	log.Info("║              Ares Gateway Ready                        ║")
 	log.Info("╚════════════════════════════════════════════════════════╝")
 	log.Info("")
-	log.Info("🚀 Server listening on port %d", *gatewayPort)
+	log.Info(" Server listening on port %d", *gatewayPort)
 	log.Info("")
 	log.Info("Available Endpoints:")
 	log.Info("  POST   /schedule                - Schedule a job")
@@ -278,7 +278,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	log.Info("✓ Graceful shutdown complete")
+	log.Info("Graceful shutdown complete")
 	log.Info("Goodbye!")
 }
 

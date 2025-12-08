@@ -153,17 +153,17 @@ func (jc *JobCoordinator) ScheduleJob(
 	// STEP 4: Call global scheduler (cluster selection)
 	// ========================================================================
 
-	//globalDecision, err := jc.globalScheduler.ScheduleJob(ctx, jobSpec)
-	//if err != nil {
-	//	jc.log.Error("Global scheduling failed for job %s: %v", jobID, err)
-	//	jobRecord.Status = common.StatusFailed
-	//	jobRecord.ErrorMsg = fmt.Sprintf("scheduling failed: %v", err)
-	//	jc.jobStore.SaveJob(context.Background(), jobRecord, leaseID)
-	//	return nil, fmt.Errorf("global scheduling failed: %w", err)
-	//}
-	//
-	//jc.log.Info("Job %s scheduled to cluster %s", jobID, globalDecision.ClusterID)
-	//
+	globalDecision, err := jc.globalScheduler.ScheduleJob(ctx, jobSpec)
+	if err != nil {
+		jc.log.Error("Global scheduling failed for job %s: %v", jobID, err)
+		jobRecord.Status = common.StatusFailed
+		jobRecord.ErrorMsg = fmt.Sprintf("scheduling failed: %v", err)
+		jc.jobStore.SaveJob(context.Background(), jobRecord, leaseID)
+		return nil, fmt.Errorf("global scheduling failed: %w", err)
+	}
+
+	jc.log.Info("Job %s scheduled to cluster %s", jobID, globalDecision.ClusterID)
+
 	//// ========================================================================
 	//// STEP 5: Update job record with scheduling decision
 	//// ========================================================================

@@ -18,10 +18,6 @@ import (
 // ============================================================================
 // CLUSTER MANAGER
 // ============================================================================
-
-// ClusterManager: Manages cluster lifecycle (join, leave, state management)
-// Runs in global control plane
-// Thread-safe: Uses sync.RWMutex for cluster registry
 type ClusterManager struct {
 	log    *logger.Logger
 	redis  *redis.RedisClient
@@ -35,6 +31,10 @@ type ClusterManager struct {
 	eventListeners []ClusterEventListener
 	eventMu        sync.RWMutex
 }
+
+// ClusterManager: Manages cluster lifecycle (join, leave, state management)
+// Runs in global control plane
+// Thread-safe: Uses sync.RWMutex for cluster registry
 
 // ClusterEventListener: Callback for cluster events
 type ClusterEventListener interface {
@@ -118,7 +118,7 @@ func (cm *ClusterManager) JoinCluster(ctx context.Context, config *ClusterConfig
 	// Update state
 	cluster.State = StateReady
 
-	cm.log.Info("✓ Cluster %s joined federation (region=%s, zone=%s, addr=%s)",
+	cm.log.Info("Cluster %s joined federation (region=%s, zone=%s, addr=%s)",
 		config.ClusterID, config.Region, config.Zone, config.ControlAddr)
 
 	// Notify listeners
@@ -143,7 +143,7 @@ func (cm *ClusterManager) LeaveCluster(ctx context.Context, clusterID string) er
 	}
 
 	// Mark as leaving
-	oldState := cluster.State
+	//oldState := cluster.State
 	cluster.State = StateLeaving
 
 	// Remove from registry
@@ -156,7 +156,7 @@ func (cm *ClusterManager) LeaveCluster(ctx context.Context, clusterID string) er
 		cm.log.Warn("Failed to delete cluster from Redis (non-fatal): %v", err)
 	}
 
-	cm.log.Info("✓ Cluster %s left federation", clusterID)
+	cm.log.Info("Cluster %s left federation", clusterID)
 
 	// Notify listeners
 	cm.notifyClusterLeave(ctx, clusterID)

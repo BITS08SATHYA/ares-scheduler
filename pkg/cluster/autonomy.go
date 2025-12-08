@@ -17,6 +17,19 @@ import (
 // AUTONOMY ENGINE
 // ============================================================================
 
+// ============================================================================
+// AUTONOMY INFORMATION (Feature 8)
+// ============================================================================
+// AutonomyMode: Local scheduling when global control plane unreachable
+type AutonomyMode struct {
+	ClusterID        string
+	IsAutonomous     bool
+	ControlPlaneDown bool
+	LastControlPlane time.Time
+	LocalQueue       []string // Job IDs queued locally
+	RetryAttempts    int
+}
+
 // AutonomyEngine: Handles local scheduling when global control plane is unreachable
 // Runs on each cluster's local control plane
 // When heartbeat to global control plane fails, switches to autonomous mode

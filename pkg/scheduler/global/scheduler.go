@@ -8,15 +8,14 @@ package global
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	_ "sort"
-	"sync"
-	"time"
-
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/cluster"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/logger"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler/common"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/storage/redis"
+	_ "sort"
+	"sync"
+	"time"
 )
 
 // ============================================================================
@@ -38,78 +37,21 @@ type GlobalScheduler struct {
 
 	// Cluster registry
 	clustersMu sync.RWMutex
-	clusters   map[string]*ClusterInfo // clusterID -> cluster info
+	clusters   map[string]*cluster.ClusterInfo // clusterID -> cluster info
+
+	// Reference to ClusterManager (for event subscription)
+	clusterManager *cluster.ClusterManager
 
 	// Metrics
 	metricsMu sync.RWMutex
-	metrics   *GlobalMetrics
+	metrics   *cluster.GlobalMetrics
 }
 
-// ClusterInfo: Information about registered cluster
-type ClusterInfo struct {
-	ClusterID          string
-	Region             string // us-west, eu-west, ap-south
-	Zone               string // us-west-2a, us-west-2b
-	IsHealthy          bool   // true or false
-	TotalGPUs          int    //
-	AvailableGPUs      int
-	TotalMemoryGB      float64
-	AvailableMemoryGB  float64
-	RunningJobsCount   int
-	LastHeartbeat      time.Time
-	LocalSchedulerAddr string // URL to contact local scheduler
-}
-
-// GlobalMetrics: Scheduling metrics for entire datacenter
-type GlobalMetrics struct {
-	TotalJobsScheduled int64
-	TotalJobsFailed    int64
-	TotalJobsRouted    map[string]int64 // clusterID -> count
-	AvgSchedulingTime  time.Duration
-	LastUpdated        time.Time
-}
-
-// ClusterScore: Score for cluster selection
-type ClusterScore struct {
-	ClusterID             string
-	Region                string
-	Score                 float64 // 0-100
-	AvailableGPUs         int
-	AvailableMemoryGB     float64
-	CurrentLoad           int
-	UtilizationPercent    float64
-	HealthScore           float64
-	RegionPreferenceScore float64
-	Reasons               []string
-}
-
-// GlobalSchedulingDecision: Complete global scheduling decision
-type GlobalSchedulingDecision struct {
-	JobID              string
-	ClusterID          string // Which cluster
-	NodeID             string
-	GPUIndices         []int
-	Region             string // Which region
-	ClusterScore       float64
-	PlacementReasons   []string
-	LocalSchedulerAddr string // How to contact local scheduler
-	ScheduledAt        time.Time
-}
-
-// Cache keys
-const (
-	CacheKeyClusterInfo     = "ares:global:cluster:%s"
-	CacheKeyGlobalMetrics   = "ares:global:metrics"
-	CacheKeyClusterRegistry = "ares:global:clusters"
-	ClusterInfoCacheTTL     = 30 * time.Second
-	MetricsCacheTTL         = 60 * time.Second
-	HeartbeatTimeout        = 60 * time.Second
-)
-
-// NewGlobalScheduler: Create new global scheduler for datacenter
+// NewGlobalScheduler: Initialized GlobalScheduler with ClusterManager
 func NewGlobalScheduler(
 	controlPlaneName string,
 	redisClient *redis.RedisClient,
+	clusterManager *cluster.ClusterManager,
 ) *GlobalScheduler {
 
 	// Get logger instance
@@ -117,164 +59,28 @@ func NewGlobalScheduler(
 
 	log.Info("Layer 7: Global Scheduled Initialized")
 
-	return &GlobalScheduler{
+	gs := &GlobalScheduler{
 		controlPlaneName: controlPlaneName,
 		redisClient:      redisClient,
 		log:              logger.Get(),
-		clusters:         make(map[string]*ClusterInfo),
-		metrics: &GlobalMetrics{
+		clusters:         make(map[string]*cluster.ClusterInfo),
+		metrics: &cluster.GlobalMetrics{
 			TotalJobsScheduled: 0,
 			TotalJobsFailed:    0,
 			TotalJobsRouted:    make(map[string]int64),
 			LastUpdated:        time.Now(),
 		},
 	}
-}
 
-// ============================================================================
-// CLUSTER MANAGEMENT
-// ============================================================================
+	// Subscribe to cluster events from ClusterManager
+	// When cluster joins/leaves/changes -> GlobalScheduler gets notified
+	clusterManager.RegisterEventListener(gs)
 
-// RegisterCluster: Register cluster in federation
-// Called when cluster joins federation
-func (gs *GlobalScheduler) RegisterCluster(ctx context.Context, cluster *ClusterInfo) error {
-	if cluster == nil || cluster.ClusterID == "" {
-		return fmt.Errorf("invalid cluster: nil or empty ID")
-	}
+	log.Info("GlobalScheduler initialized")
+	log.Info("Subscribed to ClusterManager events")
+	log.Info("Will populate clusters from cluster join events")
 
-	if cluster.Region == "" || cluster.Zone == "" {
-		return fmt.Errorf("cluster must have region and zone")
-	}
-
-	if cluster.LocalSchedulerAddr == "" {
-		return fmt.Errorf("cluster must have LocalSchedulerAddr")
-	}
-
-	gs.clustersMu.Lock()
-	defer gs.clustersMu.Unlock()
-
-	cluster.LastHeartbeat = time.Now()
-	gs.clusters[cluster.ClusterID] = cluster
-
-	// Cache cluster info in Redis
-	clusterData, err := json.Marshal(cluster)
-	if err != nil {
-		return fmt.Errorf("marshal cluster failed: %w", err)
-	}
-
-	cacheKey := fmt.Sprintf(CacheKeyClusterInfo, cluster.ClusterID)
-	err = gs.redisClient.Set(ctx, cacheKey, string(clusterData), ClusterInfoCacheTTL)
-	if err != nil {
-		gs.log.Warn("Failed to cache cluster info (non-fatal): %v", err)
-	}
-
-	// Update cluster registry
-	clusterIDs := make([]string, 0, len(gs.clusters))
-	for id := range gs.clusters {
-		clusterIDs = append(clusterIDs, id)
-	}
-	registryData, _ := json.Marshal(clusterIDs)
-	gs.redisClient.Set(ctx, CacheKeyClusterRegistry, string(registryData), ClusterInfoCacheTTL)
-
-	gs.log.Info("Registered cluster %s in region %s zone %s (GPUs=%d, memory=%.0fGB, addr=%s)",
-		cluster.ClusterID, cluster.Region, cluster.Zone, cluster.TotalGPUs, cluster.TotalMemoryGB,
-		cluster.LocalSchedulerAddr)
-
-	return nil
-}
-
-// DeregisterCluster: Remove cluster from federation
-// Called when cluster leaves federation
-func (gs *GlobalScheduler) DeregisterCluster(ctx context.Context, clusterID string) error {
-	if clusterID == "" {
-		return fmt.Errorf("invalid cluster ID")
-	}
-
-	gs.clustersMu.Lock()
-	defer gs.clustersMu.Unlock()
-
-	_, exists := gs.clusters[clusterID]
-	if !exists {
-		return fmt.Errorf("cluster not registered: %s", clusterID)
-	}
-
-	delete(gs.clusters, clusterID)
-
-	// Remove from Redis cache
-	cacheKey := fmt.Sprintf(CacheKeyClusterInfo, clusterID)
-	gs.redisClient.Del(ctx, cacheKey)
-
-	// Update cluster registry
-	clusterIDs := make([]string, 0, len(gs.clusters))
-	for id := range gs.clusters {
-		clusterIDs = append(clusterIDs, id)
-	}
-	registryData, _ := json.Marshal(clusterIDs)
-	gs.redisClient.Set(ctx, CacheKeyClusterRegistry, string(registryData), ClusterInfoCacheTTL)
-
-	gs.log.Info("Deregistered cluster %s", clusterID)
-
-	return nil
-}
-
-// UpdateClusterState: Update cluster resource state
-// Called periodically by clusters via heartbeat
-func (gs *GlobalScheduler) UpdateClusterState(ctx context.Context, cluster *ClusterInfo) error {
-	if cluster == nil || cluster.ClusterID == "" {
-		return fmt.Errorf("invalid cluster")
-	}
-
-	gs.clustersMu.Lock()
-	defer gs.clustersMu.Unlock()
-
-	_, exists := gs.clusters[cluster.ClusterID]
-	if !exists {
-		gs.clustersMu.Unlock()
-		return fmt.Errorf("cluster not registered: %s", cluster.ClusterID)
-	}
-
-	cluster.LastHeartbeat = time.Now()
-	gs.clusters[cluster.ClusterID] = cluster
-
-	// Cache updated state
-	clusterData, err := json.Marshal(cluster)
-	if err != nil {
-		return fmt.Errorf("marshal failed: %w", err)
-	}
-
-	cacheKey := fmt.Sprintf(CacheKeyClusterInfo, cluster.ClusterID)
-	err = gs.redisClient.Set(ctx, cacheKey, string(clusterData), ClusterInfoCacheTTL)
-	if err != nil {
-		gs.log.Warn("Failed to update cluster cache: %v", err)
-	}
-
-	return nil
-}
-
-// GetClusterInfo: Get info about specific cluster
-func (gs *GlobalScheduler) GetClusterInfo(clusterID string) (*ClusterInfo, error) {
-	gs.clustersMu.RLock()
-	defer gs.clustersMu.RUnlock()
-
-	cluster, exists := gs.clusters[clusterID]
-	if !exists {
-		return nil, fmt.Errorf("cluster not found: %s", clusterID)
-	}
-
-	return cluster, nil
-}
-
-// ListClusters: Get all registered clusters
-func (gs *GlobalScheduler) ListClusters() []*ClusterInfo {
-	gs.clustersMu.RLock()
-	defer gs.clustersMu.RUnlock()
-
-	clusters := make([]*ClusterInfo, 0, len(gs.clusters))
-	for _, cluster := range gs.clusters {
-		clusters = append(clusters, cluster)
-	}
-
-	return clusters
+	return gs
 }
 
 // ============================================================================
@@ -342,26 +148,26 @@ func (gs *GlobalScheduler) SelectBestCluster(
 	ctx context.Context,
 	jobSpec *common.JobSpec,
 	preferredRegion string,
-) (*ClusterInfo, *ClusterScore, error) {
+) (*cluster.ClusterInfo, *cluster.ClusterScore, error) {
 
-	clusters := gs.ListClusters()
+	clusters := gs.clusterManager.ListClusters()
 	if len(clusters) == 0 {
 		return nil, nil, fmt.Errorf("no clusters available in federation")
 	}
 
-	var bestCluster *ClusterInfo
-	var bestScore *ClusterScore
+	var bestCluster *cluster.ClusterInfo
+	var bestScore *cluster.ClusterScore
 
-	for _, cluster := range clusters {
-		if !cluster.IsHealthy {
-			gs.log.Debug("Skipping unhealthy cluster %s", cluster.ClusterID)
+	for _, _cluster := range clusters {
+		if !_cluster.IsHealthy {
+			gs.log.Debug("Skipping unhealthy cluster %s", _cluster.ClusterID)
 			continue
 		}
 
-		score := gs.scoreCluster(cluster, jobSpec, preferredRegion)
+		score := gs.scoreCluster(_cluster, jobSpec, preferredRegion)
 
 		if bestScore == nil || score.Score > bestScore.Score {
-			bestCluster = cluster
+			bestCluster = _cluster
 			bestScore = score
 		}
 	}
@@ -378,12 +184,12 @@ func (gs *GlobalScheduler) SelectBestCluster(
 
 // scoreCluster: Calculate fitness score for a cluster
 func (gs *GlobalScheduler) scoreCluster(
-	cluster *ClusterInfo,
+	cluster *cluster.ClusterInfo,
 	jobSpec *common.JobSpec,
 	preferredRegion string,
-) *ClusterScore {
+) *cluster.ClusterScore {
 
-	score := &ClusterScore{
+	score := &cluster.ClusterScore{
 		ClusterID: cluster.ClusterID,
 		Region:    cluster.Region,
 		Score:     20.0, // Base score
@@ -478,7 +284,10 @@ func (gs *GlobalScheduler) scoreCluster(
 func (gs *GlobalScheduler) ScheduleJob(
 	ctx context.Context,
 	jobSpec *common.JobSpec,
-) (*GlobalSchedulingDecision, error) {
+) (*cluster.GlobalSchedulingDecision, error) {
+
+	gs.log.Info("Global Scheduler ScheduleJob entered")
+	gs.log.Info("Job Spec: %v", jobSpec)
 
 	if jobSpec == nil || jobSpec.Name == "" {
 		return nil, fmt.Errorf("Invalid job spec")
@@ -510,7 +319,7 @@ func (gs *GlobalScheduler) ScheduleJob(
 	}
 
 	// Step 3: Create decision
-	decision := &GlobalSchedulingDecision{
+	decision := &cluster.GlobalSchedulingDecision{
 		JobID:              jobSpec.RequestID,
 		ClusterID:          bestCluster.ClusterID,
 		NodeID:             localDecision.NodeID,
@@ -534,24 +343,12 @@ func (gs *GlobalScheduler) ScheduleJob(
 // ============================================================================
 // SCHEDULING WITH CONSTRAINTS
 // ============================================================================
-
-// ClusterConstraints: Additional cluster selection constraints
-type ClusterConstraints struct {
-	RequiredRegions   []string // Only these regions
-	ForbiddenRegions  []string // Never these regions
-	RequiredClusters  []string // Only these clusters
-	ForbiddenClusters []string // Never these clusters
-	MaxUtilization    float64  // Cluster util must be < this %
-	MinAvailableGPUs  int      // Cluster must have at least this
-	PreferredRegions  []string // Prefer these regions
-}
-
 // ScheduleJobWithConstraints: Schedule with additional cluster constraints
 func (gs *GlobalScheduler) ScheduleJobWithConstraints(
 	ctx context.Context,
 	jobSpec *common.JobSpec,
-	constraints *ClusterConstraints,
-) (*GlobalSchedulingDecision, error) {
+	constraints *cluster.ClusterConstraints,
+) (*cluster.GlobalSchedulingDecision, error) {
 
 	clusters := gs.ListClusters()
 	if len(clusters) == 0 {
@@ -560,7 +357,7 @@ func (gs *GlobalScheduler) ScheduleJobWithConstraints(
 	}
 
 	// Filter clusters by constraints
-	validClusters := make([]*ClusterInfo, 0)
+	validClusters := make([]*cluster.ClusterInfo, 0)
 
 	for _, cluster := range clusters {
 		if !cluster.IsHealthy {
@@ -660,7 +457,7 @@ func (gs *GlobalScheduler) ScheduleJobWithConstraints(
 	}
 
 	// Create decision
-	decision := &GlobalSchedulingDecision{
+	decision := &cluster.GlobalSchedulingDecision{
 		JobID:              jobSpec.RequestID,
 		ClusterID:          bestCluster.ClusterID,
 		Region:             bestCluster.Region,
@@ -685,7 +482,7 @@ func (gs *GlobalScheduler) ScheduleJobWithRegionPreference(
 	ctx context.Context,
 	jobSpec *common.JobSpec,
 	preferredRegion string,
-) (*GlobalSchedulingDecision, error) {
+) (*cluster.GlobalSchedulingDecision, error) {
 
 	if preferredRegion == "" {
 		return nil, fmt.Errorf("preferred region cannot be empty")
@@ -697,7 +494,7 @@ func (gs *GlobalScheduler) ScheduleJobWithRegionPreference(
 		return nil, fmt.Errorf("cluster selection failed: %w", err)
 	}
 
-	decision := &GlobalSchedulingDecision{
+	decision := &cluster.GlobalSchedulingDecision{
 		JobID:              jobSpec.RequestID,
 		ClusterID:          bestCluster.ClusterID,
 		Region:             bestCluster.Region,
@@ -774,7 +571,7 @@ func (gs *GlobalScheduler) GetClustersByRegion(region string) []*ClusterInfo {
 	gs.clustersMu.RLock()
 	defer gs.clustersMu.RUnlock()
 
-	regional := make([]*ClusterInfo, 0)
+	regional := make([]*cluster.ClusterInfo, 0)
 	for _, cluster := range gs.clusters {
 		if cluster.Region == region && cluster.IsHealthy {
 			regional = append(regional, cluster)

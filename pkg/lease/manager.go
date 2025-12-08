@@ -110,7 +110,7 @@ func NewLeaseManager(etcdClient *etcd.ETCDClient, schedulerID string, log Logger
 //
 // CRITICAL: Now includes heartbeat goroutine
 // - Without heartbeat: Lease expires after 30 seconds
-// - With heartbeat: Lease renewed every 10 seconds (stays alive indefinitely)
+// - With heartbeat: Lease renewed every 10 seconds
 func (lm *LeaseManager) AcquireLeaseForJob(ctx context.Context, jobID string) (bool, int64, error) {
 	lm.mu.Lock()
 	defer lm.mu.Unlock()
@@ -246,7 +246,7 @@ func (lm *LeaseManager) runHeartbeat(
 			}
 			lm.mu.Unlock()
 
-			lm.log.Debugf("heartbeat renewed lease for job %s (leaseID=%d)", jobID, leaseID)
+			lm.log.Infof("heartbeat renewed lease for job %s (leaseID=%d)", jobID, leaseID)
 		}
 	}
 }
@@ -296,7 +296,7 @@ func (lm *LeaseManager) CheckLeaseOwnership(ctx context.Context, jobID string, l
 		return fmt.Errorf("fencing error: job ID mismatch")
 	}
 
-	lm.log.Debugf("fencing check passed for job %s (lease still ours in etcd)", jobID)
+	lm.log.Infof("fencing check passed for job %s (lease still ours in etcd)", jobID)
 	return nil
 }
 
