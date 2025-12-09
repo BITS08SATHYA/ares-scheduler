@@ -12,6 +12,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/executor/kubernetes"
 	"os"
 	"os/signal"
 	"syscall"
@@ -20,7 +21,6 @@ import (
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/cluster"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/executor"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/gpu"
-	"github.com/BITS08SATHYA/ares-scheduler/pkg/kubernetes"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/logger"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler/local"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/storage/redis"
@@ -114,9 +114,9 @@ func main() {
 	if err != nil {
 		log.Error("Failed to create K8s client: %v", err)
 		log.Warn("Continuing with mock client (Pods won't actually be created)")
-		k8sClient = executor.NewMockK8sClient() // Fallback to mock
+		//k8sClient = executor.NewMockK8sClient() // Fallback to mock
 	} else {
-		log.Info("✓ Real K8s client initialized (using kubeconfig or in-cluster config)")
+		log.Info("Real K8s client initialized (using kubeconfig or in-cluster config)")
 	}
 
 	// ========================================================================
