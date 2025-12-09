@@ -64,6 +64,7 @@ func NewGlobalScheduler(
 		redisClient:      redisClient,
 		log:              logger.Get(),
 		clusters:         make(map[string]*cluster.ClusterInfo),
+		clusterManager:   clusterManager,
 		metrics: &cluster.GlobalMetrics{
 			TotalJobsScheduled: 0,
 			TotalJobsFailed:    0,
@@ -150,7 +151,12 @@ func (gs *GlobalScheduler) SelectBestCluster(
 	preferredRegion string,
 ) (*cluster.ClusterInfo, *cluster.ClusterScore, error) {
 
+	gs.log.Info("Selecting Best Cluster method: ")
+
 	clusters := gs.clusterManager.ListClusters()
+
+	gs.log.Info("Length of clusters: ", len(clusters))
+
 	if len(clusters) == 0 {
 		return nil, nil, fmt.Errorf("no clusters available in federation")
 	}

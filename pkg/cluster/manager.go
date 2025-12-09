@@ -218,6 +218,9 @@ func (cm *ClusterManager) GetClusterInfo(clusterID string) (*ClusterInfo, error)
 
 // ListClusters: Get all registered clusters
 func (cm *ClusterManager) ListClusters() []*Cluster {
+
+	cm.log.Info("List Cluster method: ")
+
 	cm.mu.RLock()
 	defer cm.mu.RUnlock()
 

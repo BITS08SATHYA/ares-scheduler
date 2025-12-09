@@ -164,6 +164,7 @@ func main() {
 	var err error
 
 	if *enableCoordinator {
+		log.Debug("Debug Mode Activated ....")
 		log.Info("Initializing API Gateway WITH Job Coordinator (10-layer pipeline)...")
 		log.Info("Storage backends:")
 		log.Info("  etcd: %s", *etcdEndpoint)
@@ -172,7 +173,7 @@ func main() {
 
 		// Get the coordinator wrapper which embeds APIGateway
 		redisClient, err := redis.NewRedisClient("localhost:6379", "", 0)
-		
+
 		clusterManager := cluster.NewClusterManager(redisClient, &cluster.ClusterConfig{
 			AutoHeartbeatInterval:  10 * time.Second,
 			HealthCheckInterval:    30 * time.Second,

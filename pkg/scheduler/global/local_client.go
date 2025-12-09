@@ -3,6 +3,7 @@ package global
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -38,10 +39,22 @@ type LocalScheduleResponse struct {
 }
 
 // NewLocalSchedulerClient creates new client
+// Skips TLS verification for self-signed K8s certificates (testing only)
 func NewLocalSchedulerClient() *LocalSchedulerClient {
+
+	// Create transport with TLS config that skips certificate verification
+	// This is necessary for K8s self-signed certificates
+	// FOR TESTING ONLY - Never use in production!
+	tr := &http.Transport{
+		TLSClientConfig: &tls.Config{
+			InsecureSkipVerify: true, // Skip cert verification for testing
+		},
+	}
+
 	return &LocalSchedulerClient{
 		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
+			Transport: tr,
+			Timeout:   30 * time.Second,
 		},
 		log: logger.Get(),
 	}

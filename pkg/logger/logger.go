@@ -46,8 +46,9 @@ var globalLogger *Logger
 
 func init() {
 	globalLogger = &Logger{
-		level: InfoLevel,
-		name:  "ares",
+		level: DebugLevel, // turn it on for entering into debugging mode
+		//level: InfoLevel, // turn it on for turn off debugging mode
+		name: "ares",
 	}
 }
 
