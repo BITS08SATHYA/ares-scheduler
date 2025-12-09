@@ -1,0 +1,31 @@
+# Dockerfile.local
+FROM golang:1.25-alpine AS builder
+
+WORKDIR /app
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+RUN CGO_ENABLED=0 GOOS=linux go build -o /ares-local ./cmd/local
+
+# Runtime image with nvidia-smi for GPU discovery
+FROM nvidia/cuda:12.0-base-ubuntu22.04
+
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /root/
+
+COPY --from=builder /ares-local .
+
+# Expose Local Scheduler port
+EXPOSE 9090
+
+HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
+  CMD wget --no-verbose --tries=1 --spider http://localhost:9090/health || exit 1
+
+ENTRYPOINT ["./ares-local"]
