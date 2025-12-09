@@ -791,7 +791,8 @@ func (gs *GlobalScheduler) OnClusterJoin(ctx context.Context, clusterObj *cluste
 		return fmt.Errorf("cluster cannot be nil")
 	}
 
-	gs.log.Info("GlobalScheduler: Received OnClusterJoin event for cluster %s", clusterObj.ClusterID)
+	gs.log.Info("GlobalScheduler: Cluster %s joined (region=%s, gpus=%d)",
+		clusterObj.ClusterID, clusterObj.Region, clusterObj.TotalGPUs)
 
 	// Convert Cluster to ClusterInfo for caching
 	clusterInfo := &cluster.ClusterInfo{

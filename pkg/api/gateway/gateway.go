@@ -497,6 +497,11 @@ func NewAPIGatewayWithCoordinator(
 
 	log.Info("✓ Layer 10: JobCoordinator")
 
+	// Wired Listener: GlobalScheduler listens to Cluster Events
+	log.Info("Wiring GlobalScheduler as Cluster Event listener...")
+	clusterManager.RegisterEventListener(globalScheduler)
+	log.Info("GlobalScheduler will be notified of cluster join/leaves")
+
 	// ========================================================================
 	// LAYER 8: API Gateway (this)
 	// ========================================================================

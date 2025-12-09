@@ -1,0 +1,96 @@
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: ares-local
+  namespace: ares-system
+  labels:
+    app: ares-local
+spec:
+  selector:
+    matchLabels:
+      app: ares-local
+  template:
+    metadata:
+      labels:
+        app: ares-local
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: ares-scheduler
+      hostNetwork: true  # Access host network for GPU discovery
+      hostPID: true      # Access host PID namespace
+      nodeSelector:
+        ares.ai/gpu: "true"  # Only schedule on GPU nodes
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: local-scheduler
+          image: ares-scheduler:local-latest
+          imagePullPolicy: IfNotPresent  # Change to Always if using registry
+          securityContext:
+            privileged: true  # Required for GPU access
+          ports:
+            - containerPort: 9090
+              name: http
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: REDIS_ADDR
+              value: "redis-0.redis.ares-system.svc.cluster.local:6379"
+            - name: CONTROL_PLANE_ADDR
+              value: "http://ares-global.ares-system.svc.cluster.local:8080"
+            - name: REGION
+              value: "us-east-1"  # Change based on your region
+            - name: ZONE
+              value: "us-east-1a"  # Change based on your zone
+          args:
+            - --cluster-id=$(NODE_NAME)
+            - --port=9090
+            - --redis=$(REDIS_ADDR)
+            - --control-plane=$(CONTROL_PLANE_ADDR)
+            - --region=$(REGION)
+            - --zone=$(ZONE)
+            - --log-level=info
+          volumeMounts:
+            - name: dev
+              mountPath: /dev
+            - name: sys
+              mountPath: /sys
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "200m"
+            limits:
+              memory: "1Gi"
+              cpu: "1000m"
+              nvidia.com/gpu: 0  # Don't allocate GPUs to scheduler itself
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 9090
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 9090
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+      volumes:
+        - name: dev
+          hostPath:
+            path: /dev
+        - name: sys
+          hostPath:
+            path: /sys
