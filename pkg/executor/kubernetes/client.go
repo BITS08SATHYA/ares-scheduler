@@ -3,6 +3,7 @@ package kubernetes
 import (
 	"context"
 	"fmt"
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/executor/common"
 	"io"
 	"os"
 
@@ -57,7 +58,7 @@ func NewK8sClient(namespace string) (*K8sClientImpl, error) {
 }
 
 // CreatePod: Actually create a Kubernetes Pod
-func (kc *K8sClientImpl) CreatePod(ctx context.Context, podSpec *PodSpec) (string, error) {
+func (kc *K8sClientImpl) CreatePod(ctx context.Context, podSpec *common.PodSpec) (string, error) {
 	if podSpec == nil || podSpec.PodName == "" {
 		return "", fmt.Errorf("invalid pod spec")
 	}
@@ -110,13 +111,13 @@ func (kc *K8sClientImpl) CreatePod(ctx context.Context, podSpec *PodSpec) (strin
 }
 
 // GetPod: Get Pod information
-func (kc *K8sClientImpl) GetPod(ctx context.Context, podName string) (*PodInfo, error) {
+func (kc *K8sClientImpl) GetPod(ctx context.Context, podName string) (*common.PodInfo, error) {
 	pod, err := kc.clientset.CoreV1().Pods(kc.namespace).Get(ctx, podName, metav1.GetOptions{})
 	if err != nil {
 		return "", fmt.Errorf("failed to get pod: %w", err)
 	}
 
-	return &PodInfo{
+	return &common.PodInfo{
 		PodName:   pod.Name,
 		Namespace: pod.Namespace,
 		Phase:     PodPhase(pod.Status.Phase),
@@ -131,18 +132,18 @@ func (kc *K8sClientImpl) DeletePod(ctx context.Context, podName string) error {
 }
 
 // ListPods: List all Pods in namespace
-func (kc *K8sClientImpl) ListPods(ctx context.Context) ([]*PodInfo, error) {
+func (kc *K8sClientImpl) ListPods(ctx context.Context) ([]*common.PodInfo, error) {
 	pods, err := kc.clientset.CoreV1().Pods(kc.namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to list pods: %w", err)
 	}
 
-	var podInfos []*PodInfo
+	var podInfos []*common.PodInfo
 	for _, pod := range pods.Items {
-		podInfos = append(podInfos, &PodInfo{
+		podInfos = append(podInfos, &common.PodInfo{
 			PodName:   pod.Name,
 			Namespace: pod.Namespace,
-			Phase:     PodPhase(pod.Status.Phase),
+			Phase:     &common.PodPhase(pod.Status.Phase),
 		})
 	}
 
@@ -163,7 +164,7 @@ func (kc *K8sClientImpl) GetPodLogs(ctx context.Context, podName string) (string
 }
 
 // WatchPod: Watch Pod for status changes
-func (kc *K8sClientImpl) WatchPod(ctx context.Context, podName string, callback func(*PodInfo)) error {
+func (kc *K8sClientImpl) WatchPod(ctx context.Context, podName string, callback func(*common.PodInfo)) error {
 	watcher, err := kc.clientset.CoreV1().Pods(kc.namespace).Watch(ctx, metav1.ListOptions{
 		FieldSelector: fmt.Sprintf("metadata.name=%s", podName),
 	})
@@ -174,10 +175,10 @@ func (kc *K8sClientImpl) WatchPod(ctx context.Context, podName string, callback 
 
 	for event := range watcher.ResultChan() {
 		pod := event.Object.(*corev1.Pod)
-		callback(&PodInfo{
+		callback(&common.PodInfo{
 			PodName:   pod.Name,
 			Namespace: pod.Namespace,
-			Phase:     PodPhase(pod.Status.Phase),
+			Phase:     &common.PodPhase(pod.Status.Phase),
 		})
 	}
 

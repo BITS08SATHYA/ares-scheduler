@@ -12,6 +12,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/executor/common"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/executor/kubernetes"
 	"os"
 	"os/signal"
@@ -124,7 +125,7 @@ func main() {
 	// ========================================================================
 
 	log.Info("Initializing executor...")
-	executorConfig := &executor.ExecutorConfig{
+	executorConfig := &common.ExecutorConfig{
 		ClusterID:                *clusterID,
 		Namespace:                *namespace,
 		DefaultTimeout:           1 * time.Hour,
