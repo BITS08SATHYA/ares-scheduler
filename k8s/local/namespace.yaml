@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ares-system
+  labels:
+    name: ares-system
+    app.kubernetes.io/name: ares-scheduler
+    app.kubernetes.io/component: infrastructure
