@@ -72,6 +72,8 @@ func NewJobCoordinator(
 // 4. Call global scheduler (cluster selection)
 // 5. Call local scheduler via HTTP
 // 6. Monitor job with FENCING TOKEN CHECKS (NEW)
+//
+// ✅ FIXED: Now returns proper SchedulingResult instead of nil, nil
 func (jc *JobCoordinator) ScheduleJob(
 	ctx context.Context,
 	jobSpec *common.JobSpec,
@@ -164,48 +166,48 @@ func (jc *JobCoordinator) ScheduleJob(
 
 	jc.log.Info("Job %s scheduled to cluster %s", jobID, globalDecision.ClusterID)
 
-	//// ========================================================================
-	//// STEP 5: Update job record with scheduling decision
-	//// ========================================================================
-	//
-	//jobRecord.Status = common.StatusScheduled
-	//jobRecord.ClusterID = globalDecision.ClusterID
-	//jobRecord.ScheduleTime = time.Now()
-	//
-	//err = jc.jobStore.SaveJob(ctx, jobRecord, leaseID)
-	//if err != nil {
-	//	jc.log.Warn("Failed to update job status (non-fatal): %v", err)
-	//}
-	//
-	//// ========================================================================
-	//// STEP 6: Record in idempotency cache
-	//// ========================================================================
-	//
-	//err = jc.idempotencyMgr.RecordSuccess(ctx, jobSpec.RequestID, jobID)
-	//if err != nil {
-	//	jc.log.Warn("Failed to record idempotency (non-fatal): %v", err)
-	//}
-	//
-	//// ========================================================================
-	//// STEP 7: Return scheduling result with lease ID
-	//// ========================================================================
-	//
-	//result := &SchedulingResult{
-	//	JobID:              jobID,
-	//	ClusterID:          globalDecision.ClusterID,
-	//	NodeID:             globalDecision.NodeID,
-	//	GPUIndices:         globalDecision.GPUIndices,
-	//	ClusterScore:       globalDecision.ClusterScore,
-	//	PlacementReasons:   globalDecision.PlacementReasons,
-	//	PodName:            "",
-	//	LocalSchedulerAddr: globalDecision.LocalSchedulerAddr,
-	//	LeaseID:            leaseID, // CRITICAL: Include lease ID
-	//	CreatedAt:          time.Now(),
-	//}
-	//
-	//jc.log.Info("✓ Job %s scheduled (leaseID=%d for fencing checks)", jobID, leaseID)
-	//return result, nil
-	return nil, nil
+	// ========================================================================
+	// STEP 5: Update job record with scheduling decision
+	// ========================================================================
+
+	jobRecord.Status = common.StatusScheduled
+	jobRecord.ClusterID = globalDecision.ClusterID
+	jobRecord.ScheduleTime = time.Now()
+
+	err = jc.jobStore.SaveJob(ctx, jobRecord, leaseID)
+	if err != nil {
+		jc.log.Warn("Failed to update job status (non-fatal): %v", err)
+	}
+
+	// ========================================================================
+	// STEP 6: Record in idempotency cache
+	// ========================================================================
+
+	err = jc.idempotencyMgr.RecordSuccess(ctx, jobSpec.RequestID, jobID)
+	if err != nil {
+		jc.log.Warn("Failed to record idempotency (non-fatal): %v", err)
+	}
+
+	// ========================================================================
+	// STEP 7: Return scheduling result with lease ID
+	// ========================================================================
+
+	// ✅ FIXED: Return proper SchedulingResult instead of nil, nil
+	result := &SchedulingResult{
+		JobID:              jobID,
+		ClusterID:          globalDecision.ClusterID,
+		NodeID:             globalDecision.NodeID,
+		GPUIndices:         globalDecision.GPUIndices,
+		ClusterScore:       globalDecision.ClusterScore,
+		PlacementReasons:   globalDecision.PlacementReasons,
+		PodName:            "",
+		LocalSchedulerAddr: globalDecision.LocalSchedulerAddr,
+		LeaseID:            leaseID, // CRITICAL: Include lease ID
+		CreatedAt:          time.Now(),
+	}
+
+	jc.log.Info("✓ Job %s scheduled (leaseID=%d for fencing checks)", jobID, leaseID)
+	return result, nil
 }
 
 // ============================================================================
@@ -380,6 +382,7 @@ func (jc *JobCoordinator) CompleteJob(
 // RETRY JOB
 // ============================================================================
 
+// RetryJob retries a failed job with exponential backoff
 func (jc *JobCoordinator) RetryJob(ctx context.Context, jobID string, leaseID int64) error {
 	// Fencing check before retry
 	if err := jc.checkFencingToken(ctx, jobID, leaseID); err != nil {
@@ -395,7 +398,7 @@ func (jc *JobCoordinator) RetryJob(ctx context.Context, jobID string, leaseID in
 		return fmt.Errorf("max retries exceeded (%d)", jobRecord.Spec.MaxRetries)
 	}
 
-	// Calculate backoff
+	// Calculate backoff (exponential: 1, 2, 4, 8, 16... max 300s)
 	backoffSeconds := 1 << uint(jobRecord.Attempts)
 	if backoffSeconds > 300 {
 		backoffSeconds = 300
@@ -428,6 +431,7 @@ func (jc *JobCoordinator) RetryJob(ctx context.Context, jobID string, leaseID in
 // CANCEL JOB
 // ============================================================================
 
+// CancelJob cancels a job that's pending or running
 func (jc *JobCoordinator) CancelJob(ctx context.Context, jobID string, leaseID int64) error {
 	// Fencing check before cancellation
 	if err := jc.checkFencingToken(ctx, jobID, leaseID); err != nil {
@@ -451,7 +455,7 @@ func (jc *JobCoordinator) CancelJob(ctx context.Context, jobID string, leaseID i
 
 	// Delete pod if running
 	if jobRecord.PodName != "" {
-		// CancelJob needs to be implemented ....
+		// I have to implement this
 		err = jc.executor.CancelJob(jobID)
 		if err != nil {
 			jc.log.Warn("Failed to cancel executor: %v", err)
@@ -476,6 +480,7 @@ func (jc *JobCoordinator) CancelJob(ctx context.Context, jobID string, leaseID i
 // GET JOB STATUS
 // ============================================================================
 
+// GetJobStatus retrieves the current status of a job
 func (jc *JobCoordinator) GetJobStatus(ctx context.Context, jobID string) (*common.Job, error) {
 	return jc.jobStore.GetJob(ctx, jobID)
 }
