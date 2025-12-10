@@ -13,6 +13,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/cluster"
+	common2 "github.com/BITS08SATHYA/ares-scheduler/pkg/executor/common"
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/executor/kubernetes"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/idempotency"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/lease"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/orchestrator"
@@ -279,10 +281,10 @@ type APIGateway struct {
 	globalMetrics  *cluster.GlobalMetrics
 
 	// Jobs
-	activeJobs    map[string]*executor.ExecutionContext
-	completedJobs map[string]*executor.ExecutionResult
-	podRegistry   map[string]*executor.PodInfo
-	k8sClient     executor.K8sClient
+	activeJobs    map[string]*common2.ExecutionContext
+	completedJobs map[string]*common2.ExecutionResult
+	podRegistry   map[string]*common2.PodInfo
+	k8sClient     common2.K8sClient
 
 	totalRequests   uint64
 	totalErrors     uint64
@@ -348,9 +350,9 @@ func NewAPIGateway(
 		globalScheduler: globalScheduler,
 		log:             logger.Get(),
 		config:          config,
-		activeJobs:      make(map[string]*executor.ExecutionContext),
-		completedJobs:   make(map[string]*executor.ExecutionResult),
-		podRegistry:     make(map[string]*executor.PodInfo),
+		activeJobs:      make(map[string]*common2.ExecutionContext),
+		completedJobs:   make(map[string]*common2.ExecutionResult),
+		podRegistry:     make(map[string]*common2.PodInfo),
 	}
 
 	return gateway, nil
@@ -441,8 +443,8 @@ func NewAPIGatewayWithCoordinator(
 
 	log.Info("Layer 9: Initializing Kubernetes executor...")
 
-	mockK8sClient := executor.NewMockK8sClient()
-	executorConfig := &executor.ExecutorConfig{
+	mockK8sClient := kubernetes.K8sClientImpl{}
+	executorConfig := &common2.ExecutorConfig{
 		ClusterID:                "global-control-plane",
 		Namespace:                "default",
 		DefaultTimeout:           1 * time.Hour,
@@ -521,9 +523,9 @@ func NewAPIGatewayWithCoordinator(
 		jobCoordinator:  jobCoordinator,
 		idempotencyMgr:  idempotencyManager,
 		leaseManager:    leaseManager,
-		activeJobs:      make(map[string]*executor.ExecutionContext),
-		completedJobs:   make(map[string]*executor.ExecutionResult),
-		podRegistry:     make(map[string]*executor.PodInfo),
+		activeJobs:      make(map[string]*common2.ExecutionContext),
+		completedJobs:   make(map[string]*common2.ExecutionResult),
+		podRegistry:     make(map[string]*common2.PodInfo),
 		k8sClient:       mockK8sClient,
 	}
 

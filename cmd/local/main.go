@@ -1,4 +1,4 @@
-// File: cmd/local/main.go (UPDATED WITH AUTO-REGISTRATION + REAL K8S CLIENT)
+// File: cmd/local/main.go (FIXED)
 // Local scheduler with automatic cluster registration and heartbeat
 // CRITICAL CHANGES:
 // 1. Auto-registers cluster on startup (no manual /clusters/register needed)
@@ -10,6 +10,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/executor/common"
@@ -115,9 +116,9 @@ func main() {
 	if err != nil {
 		log.Error("Failed to create K8s client: %v", err)
 		log.Warn("Continuing with mock client (Pods won't actually be created)")
-		//k8sClient = executor.NewMockK8sClient() // Fallback to mock
+		// k8sClient = executor.NewMockK8sClient() // Fallback to mock
 	} else {
-		log.Info("Real K8s client initialized (using kubeconfig or in-cluster config)")
+		log.Info("✓ Real K8s client initialized (using kubeconfig or in-cluster config)")
 	}
 
 	// ========================================================================
@@ -142,6 +143,10 @@ func main() {
 		MetricsCollectionEnabled: true,
 	}
 
+	// ✅ FIXED: executor.NewExecutor now expects 3 params:
+	//   1. clusterID (string)
+	//   2. k8sClient (common.K8sClient interface, NOT pointer to interface)
+	//   3. config (*common.ExecutorConfig)
 	_, err = executor.NewExecutor(*clusterID, k8sClient, executorConfig)
 	if err != nil {
 		log.Error("Failed to create executor: %v", err)
@@ -173,6 +178,33 @@ func main() {
 	log.Info("║    AUTO-REGISTERING CLUSTER WITH CONTROL PLANE     ║")
 	log.Info("╚─────────────────────────────────────────────────────╝")
 
+	// ✅ FIXED: Use DetectTopology() instead of non-existent GetTopologyMap()
+	//
+	// EXPLANATION:
+	// ❌ WRONG: topologyManager.GetTopologyMap() - This method doesn't exist!
+	// ✅ RIGHT: topologyManager.DetectTopology(ctx) - This returns *common.GPUTopology
+	//
+	// DetectTopology returns a structured object:
+	//   type GPUTopology struct {
+	//     NVLinkPairs: [][]int           // GPU pairs with NVLink
+	//     GPUToNUMA:   map[int]int       // GPU index -> NUMA node
+	//     PCIeGen:     map[int]int       // GPU index -> PCIe generation
+	//   }
+	//
+	// We need to convert it to map[string]interface{} for JSON transport
+	topologyData := make(map[string]interface{})
+	topology, err := topologyManager.DetectTopology(ctx)
+	if err != nil {
+		log.Warn("Failed to detect topology (non-fatal): %v", err)
+		// Continue with empty topology - cluster will still work
+	} else {
+		// Convert structured topology to map for JSON serialization
+		topologyBytes, _ := json.Marshal(topology)
+		json.Unmarshal(topologyBytes, &topologyData)
+		log.Info("✓ GPU topology detected: NVLink pairs=%d, NUMA nodes=%d",
+			len(topology.NVLinkPairs), len(topology.GPUToNUMA))
+	}
+
 	autoRegConfig := &cluster.AutoRegistrationConfig{
 		ClusterID:          *clusterID,
 		Region:             *region,
@@ -180,9 +212,9 @@ func main() {
 		LocalSchedulerAddr: fmt.Sprintf("http://localhost:%d", *localPort),
 		ControlPlaneURL:    *controlPlane,
 		TotalGPUs:          len(gpus),
-		TotalCPUs:          256,   // TODO: Get from kubelet or environment
-		TotalMemoryGB:      512.0, // TODO: Get from kubelet or environment
-		GPUTopology:        topologyManager.GetTopologyMap(),
+		TotalCPUs:          256,          // TODO: Get from kubelet or environment
+		TotalMemoryGB:      512.0,        // TODO: Get from kubelet or environment
+		GPUTopology:        topologyData, // ✅ FIX: Now properly populated
 	}
 
 	err = cluster.AutoRegisterCluster(ctx, autoRegConfig)

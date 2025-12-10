@@ -15,7 +15,17 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 )
 
+// ============================================================================
 // K8sClientImpl: Real Kubernetes client using client-go
+// ============================================================================
+// FIXES APPLIED:
+// 1. ✅ Added convertK8sPodPhase() helper (converts corev1.PodPhase -> common.PodPhase)
+// 2. ✅ Fixed GetPod() to return proper type (*common.PodInfo not "")
+// 3. ✅ Fixed ListPods() to NOT take address of type conversion
+// 4. ✅ Fixed WatchPod() to NOT take address of type conversion
+// 5. ✅ Removed &common.PodPhase(...) - use converted value directly
+// ============================================================================
+
 type K8sClientImpl struct {
 	clientset kubernetes.Interface
 	namespace string
@@ -56,6 +66,10 @@ func NewK8sClient(namespace string) (*K8sClientImpl, error) {
 		namespace: namespace,
 	}, nil
 }
+
+// ============================================================================
+// POD OPERATIONS
+// ============================================================================
 
 // CreatePod: Actually create a Kubernetes Pod
 func (kc *K8sClientImpl) CreatePod(ctx context.Context, podSpec *common.PodSpec) (string, error) {
@@ -111,16 +125,20 @@ func (kc *K8sClientImpl) CreatePod(ctx context.Context, podSpec *common.PodSpec)
 }
 
 // GetPod: Get Pod information
+// ❌ ISSUE FIXED: Was returning "" (string) instead of (*common.PodInfo, error)
+// ✅ FIX: Return proper (*common.PodInfo, error) with nil for error case
 func (kc *K8sClientImpl) GetPod(ctx context.Context, podName string) (*common.PodInfo, error) {
 	pod, err := kc.clientset.CoreV1().Pods(kc.namespace).Get(ctx, podName, metav1.GetOptions{})
 	if err != nil {
-		return "", fmt.Errorf("failed to get pod: %w", err)
+		// ✅ FIX: Return nil (not "") + error
+		return nil, fmt.Errorf("failed to get pod: %w", err)
 	}
 
 	return &common.PodInfo{
 		PodName:   pod.Name,
 		Namespace: pod.Namespace,
-		Phase:     PodPhase(pod.Status.Phase),
+		// ✅ FIX: Use convertK8sPodPhase() helper (defined below)
+		Phase:     convertK8sPodPhase(pod.Status.Phase),
 		CreatedAt: pod.CreationTimestamp.Time,
 		Ready:     len(pod.Status.ContainerStatuses) > 0 && pod.Status.ContainerStatuses[0].Ready,
 	}, nil
@@ -132,6 +150,8 @@ func (kc *K8sClientImpl) DeletePod(ctx context.Context, podName string) error {
 }
 
 // ListPods: List all Pods in namespace
+// ❌ ISSUE FIXED: Was trying to do &common.PodPhase(pod.Status.Phase)
+// ✅ FIX: Use convertK8sPodPhase() which returns common.PodPhase (not a pointer)
 func (kc *K8sClientImpl) ListPods(ctx context.Context) ([]*common.PodInfo, error) {
 	pods, err := kc.clientset.CoreV1().Pods(kc.namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
@@ -143,7 +163,8 @@ func (kc *K8sClientImpl) ListPods(ctx context.Context) ([]*common.PodInfo, error
 		podInfos = append(podInfos, &common.PodInfo{
 			PodName:   pod.Name,
 			Namespace: pod.Namespace,
-			Phase:     &common.PodPhase(pod.Status.Phase),
+			// ✅ FIX: Use convertK8sPodPhase() - returns common.PodPhase directly
+			Phase: convertK8sPodPhase(pod.Status.Phase),
 		})
 	}
 
@@ -163,7 +184,16 @@ func (kc *K8sClientImpl) GetPodLogs(ctx context.Context, podName string) (string
 	return string(data), err
 }
 
+// GetPodMetrics: Get Pod metrics (placeholder for metrics-server integration)
+func (kc *K8sClientImpl) GetPodMetrics(ctx context.Context, podName string) (map[string]interface{}, error) {
+	// TODO: Integrate with metrics-server
+	// For now, return empty metrics
+	return map[string]interface{}{}, nil
+}
+
 // WatchPod: Watch Pod for status changes
+// ❌ ISSUE FIXED: Was trying to do &common.PodPhase(pod.Status.Phase)
+// ✅ FIX: Use convertK8sPodPhase() which returns common.PodPhase directly
 func (kc *K8sClientImpl) WatchPod(ctx context.Context, podName string, callback func(*common.PodInfo)) error {
 	watcher, err := kc.clientset.CoreV1().Pods(kc.namespace).Watch(ctx, metav1.ListOptions{
 		FieldSelector: fmt.Sprintf("metadata.name=%s", podName),
@@ -178,14 +208,51 @@ func (kc *K8sClientImpl) WatchPod(ctx context.Context, podName string, callback 
 		callback(&common.PodInfo{
 			PodName:   pod.Name,
 			Namespace: pod.Namespace,
-			Phase:     &common.PodPhase(pod.Status.Phase),
+			// ✅ FIX: Use convertK8sPodPhase() helper
+			Phase: convertK8sPodPhase(pod.Status.Phase),
 		})
 	}
 
 	return nil
 }
 
-// Helper to convert env map to K8s EnvVar array
+// ============================================================================
+// TYPE CONVERSION HELPERS
+// ============================================================================
+
+// convertK8sPodPhase: Convert Kubernetes Pod phase to common.PodPhase
+// ✅ THIS IS THE FIX FOR THE TYPE MISMATCH
+//
+// Explanation:
+// - corev1.PodPhase is from k8s.io/api/core/v1 (Kubernetes Pod phases)
+// - common.PodPhase is from pkg/executor/common (our app's phases)
+// - Both are string types, but have different constant values
+// - This function maps between them safely
+//
+// Mapping:
+//
+//	corev1.PodPending   -> common.PhasePending
+//	corev1.PodRunning   -> common.PhaseRunning
+//	corev1.PodSucceeded -> common.PhaseSucceeded
+//	corev1.PodFailed    -> common.PhaseFailed
+//	(others)            -> common.PhaseUnknown
+func convertK8sPodPhase(k8sPhase corev1.PodPhase) common.PodPhase {
+	switch k8sPhase {
+	case corev1.PodPending:
+		return common.PhasePending
+	case corev1.PodRunning:
+		return common.PhaseRunning
+	case corev1.PodSucceeded:
+		return common.PhaseSucceeded
+	case corev1.PodFailed:
+		return common.PhaseFailed
+	default:
+		return common.PhaseUnknown
+	}
+}
+
+// envMapToEnvVars: Convert map[string]string to []corev1.EnvVar
+// Used when building Pod environment variables
 func envMapToEnvVars(envMap map[string]string) []corev1.EnvVar {
 	var envVars []corev1.EnvVar
 	for key, value := range envMap {

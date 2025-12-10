@@ -3,9 +3,9 @@ package orchestrator
 import (
 	"context"
 	"fmt"
+	common2 "github.com/BITS08SATHYA/ares-scheduler/pkg/executor/common"
 	"time"
 
-	"github.com/BITS08SATHYA/ares-scheduler/pkg/executor"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/idempotency"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/job"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/lease"
@@ -25,7 +25,7 @@ type JobCoordinator struct {
 	leaseManager    *lease.LeaseManager
 	jobStore        job.JobStore
 	globalScheduler *global.GlobalScheduler
-	executor        *executor.Executor
+	executor        *common2.Executor
 	log             *logger.Logger
 }
 
@@ -47,7 +47,7 @@ func NewJobCoordinator(
 	leaseManager *lease.LeaseManager,
 	jobStore job.JobStore,
 	globalScheduler *global.GlobalScheduler,
-	executor *executor.Executor,
+	executor *common2.Executor,
 ) *JobCoordinator {
 	return &JobCoordinator{
 		idempotencyMgr:  idempotencyMgr,
@@ -451,6 +451,7 @@ func (jc *JobCoordinator) CancelJob(ctx context.Context, jobID string, leaseID i
 
 	// Delete pod if running
 	if jobRecord.PodName != "" {
+		// CancelJob needs to be implemented ....
 		err = jc.executor.CancelJob(jobID)
 		if err != nil {
 			jc.log.Warn("Failed to cancel executor: %v", err)

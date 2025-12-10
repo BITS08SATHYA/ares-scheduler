@@ -10,15 +10,15 @@ import (
 
 // Scope: Single cluster (runs on each cluster's control plane)
 type Executor struct {
-	clusterID    string
-	controlPlane string
-	log          *logger.Logger
-	config       *ExecutorConfig
+	ClusterID    string
+	ControlPlane string
+	Log          *logger.Logger
+	Config       *ExecutorConfig
 
 	// Job tracking
 	jobsMu        sync.RWMutex
-	activeJobs    map[string]*ExecutionContext // JobID -> ExecutionContext
-	completedJobs map[string]*ExecutionResult  // JobID -> ExecutionResult
+	ActiveJobs    map[string]*ExecutionContext // JobID -> ExecutionContext
+	CompletedJobs map[string]*ExecutionResult  // JobID -> ExecutionResult
 
 	// Metrics (atomic for thread-safety)
 	totalJobs       uint64
@@ -29,10 +29,15 @@ type Executor struct {
 
 	// Pod management
 	podMu       sync.RWMutex
-	podRegistry map[string]*PodInfo // PodName -> PodInfo
+	PodRegistry map[string]*PodInfo // PodName -> PodInfo
 
 	// Kubernetes client (mock for now, will be real K8s client in production)
-	k8sClient K8sClient
+	K8sClient K8sClient
+}
+
+func (e Executor) CancelJob(id string) error {
+	e.Log.Info("Canceling job %v", id)
+	return nil
 }
 
 // ExecutorConfig: Configuration for executor

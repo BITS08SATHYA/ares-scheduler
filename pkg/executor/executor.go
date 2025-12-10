@@ -7,61 +7,33 @@ import (
 	"time"
 )
 
-// // File: pkg/executor/executor.go (LAYER 9 - EXECUTOR - CORRECTED)
-// // Kubernetes Pod creator and job execution manager
-// // Features: Job execution, Pod management, monitoring
-// // Production-ready: Zero errors, comprehensive error handling, logging
-// //
-// // CRITICAL FIX: This file now correctly imports and uses LocalSchedulingDecision
-// // from Layer 6 (pkg/scheduler/local/local_scheduler.go) with CORRECT field names:
-// //   - NodeID (NOT NodeName)
-// //   - GPUIndices (NOT GPUDeviceIDs)
+// ============================================================================
+// EXECUTOR SERVICE (Layer 9)
+// ============================================================================
+// FIXES APPLIED:
+// 1. ✅ Fixed NewExecutor signature: k8sClient is common.K8sClient (interface), NOT *common.K8sClient (pointer)
+// 2. ✅ Removed 'log' parameter (we create our own logger inside)
+// 3. ✅ Fixed to match 3-parameter call from cmd/local/main.go
+// 4. ✅ Fixed k8sClient field assignment (removed dereference)
 //
-// import (
+// EXPLANATION OF FIX:
+// ❌ WRONG: func NewExecutor(clusterID string, k8sClient *common.K8sClient, log logger.Logger, config...)
+// ❌ Why: Can't create *common.K8sClient (pointer to interface) - Go doesn't allow this
+// ❌ The concrete type is *kubernetes.K8sClientImpl which satisfies common.K8sClient interface
 //
-//	"context"
-//	"fmt"
-//	"github.com/BITS08SATHYA/ares-scheduler/pkg/executor/common"
-//
-//	"github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler/local"
-//	"sync"
-//	"sync/atomic"
-//	"time"
-//
-//	"github.com/BITS08SATHYA/ares-scheduler/pkg/logger"
-//
-// )
-//
-// // ============================================================================
-// // LOCALSCHEDULINGDECISION - FROM LAYER 6
-// // ============================================================================
-// // This type is defined in pkg/scheduler/local/local_scheduler.go
-// // Imported here for reference - DO NOT DUPLICATE
-//
-// // LocalSchedulingDecision: Output from Layer 6 LocalScheduler
-// // Contains node and GPU selection decision
-// //type LocalSchedulingDecision struct {
-// //	JobID            string    // Job identifier
-// //	NodeID           string    // Node selected (e.g., "node-001")
-// //	GPUIndices       []int     // GPU indices selected (e.g., [0, 1])
-// //	NodeScore        float64   // Scheduling score
-// //	GPUAffinityScore float64   // GPU affinity score
-// //	PlacementReasons []string  // Why this node was selected
-// //	ScheduledAt      time.Time // When scheduled
-// //}
-//
-// // ============================================================================
-// // EXECUTOR SERVICE
-// // ============================================================================
-//
-// // Executor: Kubernetes Pod creator and job execution manager
-// // Responsibility: Take LocalSchedulingDecision and create/monitor Kubernetes Pod
-//
-// // NewExecutor: Create new executor
+// ✅ RIGHT: func NewExecutor(clusterID string, k8sClient common.K8sClient, config...)
+// ✅ Why: Interface types don't need to be pointers
+// ✅ *kubernetes.K8sClientImpl satisfies common.K8sClient interface
+// ============================================================================
+
+// NewExecutor: Create new executor
+// ✅ FIXED SIGNATURE:
+//   - k8sClient: common.K8sClient (INTERFACE, not pointer to interface)
+//   - No log parameter (create own inside)
+//   - 3 parameters total (matches cmd/local/main.go call)
 func NewExecutor(
 	clusterID string,
-	k8sClient *common.K8sClient,
-	log logger.Logger,
+	k8sClient common.K8sClient, // ✅ FIX: Interface type, NOT *common.K8sClient
 	config *common.ExecutorConfig,
 ) (*common.Executor, error) {
 
@@ -94,14 +66,14 @@ func NewExecutor(
 	}
 
 	executor := &common.Executor{
-		clusterID:     clusterID,
-		controlPlane:  fmt.Sprintf("ares-executor-%s", clusterID),
-		log:           logger.Get(),
-		config:        config,
-		activeJobs:    make(map[string]*common.ExecutionContext),
-		completedJobs: make(map[string]*common.ExecutionResult),
-		podRegistry:   make(map[string]*common.PodInfo),
-		k8sClient:     *common.K8sClient,
+		ClusterID:     clusterID,
+		ControlPlane:  fmt.Sprintf("ares-executor-%s", clusterID),
+		Log:           logger.Get(), // ✅ Create our own logger
+		Config:        config,
+		ActiveJobs:    make(map[string]*common.ExecutionContext),
+		CompletedJobs: make(map[string]*common.ExecutionResult),
+		PodRegistry:   make(map[string]*common.PodInfo),
+		K8sClient:     k8sClient, // ✅ FIX: Direct assignment (not dereferencing)
 	}
 
 	return executor, nil
