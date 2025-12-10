@@ -35,10 +35,10 @@ type Executor struct {
 	K8sClient K8sClient
 }
 
-func (e Executor) CancelJob(id string) error {
-	e.Log.Info("Canceling job %v", id)
-	return nil
-}
+//func (e Executor) CancelJob(id string) error {
+//	e.Log.Info("Canceling job %v", id)
+//	return nil
+//}
 
 // ExecutorConfig: Configuration for executor
 type ExecutorConfig struct {

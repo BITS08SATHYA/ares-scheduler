@@ -201,7 +201,7 @@ func main() {
 		// Convert structured topology to map for JSON serialization
 		topologyBytes, _ := json.Marshal(topology)
 		json.Unmarshal(topologyBytes, &topologyData)
-		log.Info("✓ GPU topology detected: NVLink pairs=%d, NUMA nodes=%d",
+		log.Info("GPU topology detected: NVLink pairs=%d, NUMA nodes=%d",
 			len(topology.NVLinkPairs), len(topology.GPUToNUMA))
 	}
 
