@@ -160,7 +160,7 @@ func main() {
 		gpuDiscovery,
 		topologyManager,
 	)
-	log.Info("✓ Local scheduler initialized")
+	log.Info("Local scheduler initialized")
 
 	// ========================================================================
 	// STEP 6: AUTO-REGISTER CLUSTER WITH CONTROL PLANE

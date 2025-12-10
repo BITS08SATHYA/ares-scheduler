@@ -1,17 +1,24 @@
 package executor
 
-//// File: pkg/executor/executor.go (LAYER 9 - EXECUTOR - CORRECTED)
-//// Kubernetes Pod creator and job execution manager
-//// Features: Job execution, Pod management, monitoring
-//// Production-ready: Zero errors, comprehensive error handling, logging
-////
-//// CRITICAL FIX: This file now correctly imports and uses LocalSchedulingDecision
-//// from Layer 6 (pkg/scheduler/local/local_scheduler.go) with CORRECT field names:
-////   - NodeID (NOT NodeName)
-////   - GPUIndices (NOT GPUDeviceIDs)
+import (
+	"fmt"
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/executor/common"
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/logger"
+	"time"
+)
+
+// // File: pkg/executor/executor.go (LAYER 9 - EXECUTOR - CORRECTED)
+// // Kubernetes Pod creator and job execution manager
+// // Features: Job execution, Pod management, monitoring
+// // Production-ready: Zero errors, comprehensive error handling, logging
+// //
+// // CRITICAL FIX: This file now correctly imports and uses LocalSchedulingDecision
+// // from Layer 6 (pkg/scheduler/local/local_scheduler.go) with CORRECT field names:
+// //   - NodeID (NOT NodeName)
+// //   - GPUIndices (NOT GPUDeviceIDs)
 //
+// import (
 //
-//import (
 //	"context"
 //	"fmt"
 //	"github.com/BITS08SATHYA/ares-scheduler/pkg/executor/common"
@@ -22,82 +29,84 @@ package executor
 //	"time"
 //
 //	"github.com/BITS08SATHYA/ares-scheduler/pkg/logger"
-//)
 //
-//// ============================================================================
-//// LOCALSCHEDULINGDECISION - FROM LAYER 6
-//// ============================================================================
-//// This type is defined in pkg/scheduler/local/local_scheduler.go
-//// Imported here for reference - DO NOT DUPLICATE
+// )
 //
-//// LocalSchedulingDecision: Output from Layer 6 LocalScheduler
-//// Contains node and GPU selection decision
-////type LocalSchedulingDecision struct {
-////	JobID            string    // Job identifier
-////	NodeID           string    // Node selected (e.g., "node-001")
-////	GPUIndices       []int     // GPU indices selected (e.g., [0, 1])
-////	NodeScore        float64   // Scheduling score
-////	GPUAffinityScore float64   // GPU affinity score
-////	PlacementReasons []string  // Why this node was selected
-////	ScheduledAt      time.Time // When scheduled
-////}
+// // ============================================================================
+// // LOCALSCHEDULINGDECISION - FROM LAYER 6
+// // ============================================================================
+// // This type is defined in pkg/scheduler/local/local_scheduler.go
+// // Imported here for reference - DO NOT DUPLICATE
 //
-//// ============================================================================
-//// EXECUTOR SERVICE
-//// ============================================================================
+// // LocalSchedulingDecision: Output from Layer 6 LocalScheduler
+// // Contains node and GPU selection decision
+// //type LocalSchedulingDecision struct {
+// //	JobID            string    // Job identifier
+// //	NodeID           string    // Node selected (e.g., "node-001")
+// //	GPUIndices       []int     // GPU indices selected (e.g., [0, 1])
+// //	NodeScore        float64   // Scheduling score
+// //	GPUAffinityScore float64   // GPU affinity score
+// //	PlacementReasons []string  // Why this node was selected
+// //	ScheduledAt      time.Time // When scheduled
+// //}
 //
-//// Executor: Kubernetes Pod creator and job execution manager
-//// Responsibility: Take LocalSchedulingDecision and create/monitor Kubernetes Pod
+// // ============================================================================
+// // EXECUTOR SERVICE
+// // ============================================================================
 //
-//// NewExecutor: Create new executor
-//func NewExecutor(
-//	clusterID string,
-//	k8sClient *common.K8sClient,
-//	log logger.Logger,
-//	config *common.ExecutorConfig,
-//) (*common.Executor, error) {
+// // Executor: Kubernetes Pod creator and job execution manager
+// // Responsibility: Take LocalSchedulingDecision and create/monitor Kubernetes Pod
 //
-//	if clusterID == "" {
-//		return nil, fmt.Errorf("cluster ID cannot be empty")
-//	}
-//
-//	if k8sClient == nil {
-//		return nil, fmt.Errorf("kubernetes client cannot be nil")
-//	}
-//
-//	if config == nil {
-//		config = common.DefaultExecutorConfig
-//	}
-//
-//	if config.Namespace == "" {
-//		config.Namespace = "default"
-//	}
-//
-//	if config.DefaultTimeout <= 0 {
-//		config.DefaultTimeout = 1 * time.Hour
-//	}
-//
-//	if config.HealthCheckInterval <= 0 {
-//		config.HealthCheckInterval = 5 * time.Second
-//	}
-//
-//	if config.MaxConcurrentJobs <= 0 {
-//		config.MaxConcurrentJobs = 100
-//	}
-//
-//	executor := &common.Executor{
-//		clusterID:     clusterID,
-//		controlPlane:  fmt.Sprintf("ares-executor-%s", clusterID),
-//		log:           logger.Get(),
-//		config:        config,
-//		activeJobs:    make(map[string]*common.ExecutionContext),
-//		completedJobs: make(map[string]*common.ExecutionResult),
-//		podRegistry:   make(map[string]*common.PodInfo),
-//		k8sClient:     *common.K8sClient,
-//	}
-//
-//	return executor, nil
-//}
+// // NewExecutor: Create new executor
+func NewExecutor(
+	clusterID string,
+	k8sClient *common.K8sClient,
+	log logger.Logger,
+	config *common.ExecutorConfig,
+) (*common.Executor, error) {
+
+	if clusterID == "" {
+		return nil, fmt.Errorf("cluster ID cannot be empty")
+	}
+
+	if k8sClient == nil {
+		return nil, fmt.Errorf("kubernetes client cannot be nil")
+	}
+
+	if config == nil {
+		config = common.DefaultExecutorConfig
+	}
+
+	if config.Namespace == "" {
+		config.Namespace = "default"
+	}
+
+	if config.DefaultTimeout <= 0 {
+		config.DefaultTimeout = 1 * time.Hour
+	}
+
+	if config.HealthCheckInterval <= 0 {
+		config.HealthCheckInterval = 5 * time.Second
+	}
+
+	if config.MaxConcurrentJobs <= 0 {
+		config.MaxConcurrentJobs = 100
+	}
+
+	executor := &common.Executor{
+		clusterID:     clusterID,
+		controlPlane:  fmt.Sprintf("ares-executor-%s", clusterID),
+		log:           logger.Get(),
+		config:        config,
+		activeJobs:    make(map[string]*common.ExecutionContext),
+		completedJobs: make(map[string]*common.ExecutionResult),
+		podRegistry:   make(map[string]*common.PodInfo),
+		k8sClient:     *common.K8sClient,
+	}
+
+	return executor, nil
+}
+
 //
 //// ============================================================================
 //// JOB EXECUTION
