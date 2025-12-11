@@ -391,17 +391,18 @@ func NewAPIGatewayWithCoordinator(
 	etcdClient, err := etcd.NewETCDClient(etcdEndpoints, 10*time.Second)
 	if err != nil {
 		log.Error("Failed to connect to etcd: %v", err)
+		etcdClient.Close()
 		return nil, fmt.Errorf("etcd connection failed: %w", err)
 	}
 
 	redisClient, err := redis.NewRedisClient(redisAddr, "", 0)
 	if err != nil {
 		log.Error("Failed to connect to Redis: %v", err)
-		etcdClient.Close()
+		redisClient.Close()
 		return nil, fmt.Errorf("redis connection failed: %w", err)
 	}
 
-	log.Info("✓ Connected to etcd and Redis")
+	log.Info("Connected to etcd and Redis")
 
 	// ========================================================================
 	// LAYER 3: Persistence & Coordination
@@ -413,7 +414,7 @@ func NewAPIGatewayWithCoordinator(
 	leaseManager := lease.NewLeaseManager(etcdClient, controlPlaneAddr, &simpleLogger{})
 	idempotencyManager := idempotency.NewIdempotencyManager(redisClient)
 
-	log.Info("✓ Layer 3: JobStore, LeaseManager, IdempotencyManager")
+	log.Info("Layer 3: JobStore, LeaseManager, IdempotencyManager")
 
 	// ========================================================================
 	// LAYER 4: Cluster Management

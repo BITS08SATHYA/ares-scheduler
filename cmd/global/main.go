@@ -141,7 +141,7 @@ func main() {
 	log.Info("Configuration:")
 	log.Info("  Gateway Port: %d", gatewayConfig.Port)
 	log.Info("  etcd Endpoints: %v", etcdEndpointList)
-	log.Info("  Redis: %s", *redisAddr)
+	log.Info("  Redis: %s", redisAddr)
 	log.Info("  Control Plane: %s", *controlPlane)
 	log.Info("  Log Level: %s", *logLevel)
 	log.Info("  Coordinator: %v", *enableCoordinator)
@@ -157,6 +157,7 @@ func main() {
 
 		// Initialize Redis for cluster manager
 		redisClient, err := redis.NewRedisClient(*redisAddr, "", 0)
+		//redisClient, err := redis.NewRedisClient(*redisAddr, "", 0)
 		if err != nil {
 			log.Error("Failed to connect to Redis: %v", err)
 			os.Exit(1)
@@ -191,7 +192,7 @@ func main() {
 		}
 
 		apiGateway = gatewayWithCoordinator.APIGateway
-		log.Info("✓ API Gateway initialized with Job Coordinator")
+		log.Info("API Gateway initialized with Job Coordinator")
 
 	} else {
 		log.Warn("Running in coordinator-disabled mode (not recommended for production)")

@@ -53,7 +53,8 @@ spec:
           # ✅ CORRECTED: Only pass flags that exist in cmd/global/main.go
           args:
             - --gateway.port=8080
-            - --etcd.endpoints=etcd-0.etcd.ares-system.svc.cluster.local:2379,etcd-1.etcd.ares-system.svc.cluster.local:2379,etcd-2.etcd.ares-system.svc.cluster.local:2379
+            - --etcd.endpoint=etcd-0.etcd.ares-system.svc.cluster.local:2379
+            #,etcd-1.etcd.ares-system.svc.cluster.local:2379,etcd-2.etcd.ares-system.svc.cluster.local:2379
             - --redis.addr=redis-0.redis.ares-system.svc.cluster.local:6379
             - --log.level=info
 
