@@ -1,10 +1,9 @@
-// File: cmd/global/main.go (IMPROVED)
+// File: cmd/global/main.go (FINAL CORRECTED)
 // Entry point for Ares Scheduler API Gateway
-// IMPROVEMENTS:
-// 1. Environment variable support
-// 2. Plural etcd.endpoints (comma-separated)
-// 3. Better error handling
-// 4. Clearer logging
+// FIXES:
+// 1. Single etcd.endpoint (not plural)
+// 2. No comma-separated parsing needed
+// 3. Simplified configuration
 
 package main
 
@@ -13,7 +12,6 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
-	"strings"
 	"syscall"
 	"time"
 
@@ -33,10 +31,10 @@ const (
 	DefaultRequestTimeout = 30 * time.Second
 	DefaultMaxRequestSize = 1 << 20 // 1MB
 
-	// Storage
-	DefaultETCDEndpoints = "localhost:2379"
-	DefaultRedisAddr     = "localhost:6379"
-	DefaultControlPlane  = "localhost:8080"
+	// Storage - ✅ FIX: Single endpoint, not plural
+	DefaultETCDEndpoint = "localhost:2379"
+	DefaultRedisAddr    = "localhost:6379"
+	DefaultControlPlane = "localhost:8080"
 
 	// Graceful shutdown
 	ShutdownTimeout = 10 * time.Second
@@ -59,11 +57,11 @@ var (
 		"Request timeout",
 	)
 
-	// Storage flags
-	etcdEndpoints = flag.String(
-		"etcd.endpoints",
-		getEnvString("ARES_ETCD_ENDPOINTS", DefaultETCDEndpoints),
-		"etcd endpoints, comma-separated (env: ARES_ETCD_ENDPOINTS)",
+	// Storage flags - ✅ FIX: Single endpoint
+	etcdEndpoint = flag.String(
+		"etcd.endpoint",
+		getEnvString("ARES_ETCD_ENDPOINT", DefaultETCDEndpoint),
+		"etcd endpoint (env: ARES_ETCD_ENDPOINT)",
 	)
 
 	redisAddr = flag.String(
@@ -124,9 +122,6 @@ func main() {
 	log.Info("Starting Ares Gateway (all 10 layers)...")
 	log.Info("")
 
-	// Parse etcd endpoints (comma-separated)
-	etcdEndpointList := parseEndpoints(*etcdEndpoints)
-
 	// Create gateway configuration
 	gatewayConfig := &gateway.GatewayConfig{
 		Port:             *gatewayPort,
@@ -140,8 +135,8 @@ func main() {
 
 	log.Info("Configuration:")
 	log.Info("  Gateway Port: %d", gatewayConfig.Port)
-	log.Info("  etcd Endpoints: %v", etcdEndpointList)
-	log.Info("  Redis: %s", redisAddr)
+	log.Info("  etcd Endpoint: %s", *etcdEndpoint) // ✅ FIX: Singular
+	log.Info("  Redis: %s", *redisAddr)
 	log.Info("  Control Plane: %s", *controlPlane)
 	log.Info("  Log Level: %s", *logLevel)
 	log.Info("  Coordinator: %v", *enableCoordinator)
@@ -157,7 +152,6 @@ func main() {
 
 		// Initialize Redis for cluster manager
 		redisClient, err := redis.NewRedisClient(*redisAddr, "", 0)
-		//redisClient, err := redis.NewRedisClient(*redisAddr, "", 0)
 		if err != nil {
 			log.Error("Failed to connect to Redis: %v", err)
 			os.Exit(1)
@@ -172,11 +166,13 @@ func main() {
 			MaxConsecutiveFailures: 3,
 		})
 
+		// ✅ FIX: Wrap single endpoint in array (gateway expects []string)
+		etcdEndpoints := []string{*etcdEndpoint}
+
 		// Initialize gateway with coordinator
-		endpoints := strings.Split(*etcdEndpoints, ",")
 		gatewayWithCoordinator, err := gateway.NewAPIGatewayWithCoordinator(
 			*controlPlane,
-			endpoints,
+			etcdEndpoints, // Single endpoint wrapped in array
 			*redisAddr,
 			gatewayConfig,
 			clusterManager,
@@ -192,7 +188,7 @@ func main() {
 		}
 
 		apiGateway = gatewayWithCoordinator.APIGateway
-		log.Info("API Gateway initialized with Job Coordinator")
+		log.Info("✓ API Gateway initialized with Job Coordinator")
 
 	} else {
 		log.Warn("Running in coordinator-disabled mode (not recommended for production)")
@@ -277,18 +273,6 @@ func main() {
 
 func initializeLogger(logLevel string) *logger.Logger {
 	return logger.Get()
-}
-
-func parseEndpoints(endpoints string) []string {
-	parts := strings.Split(endpoints, ",")
-	result := make([]string, 0, len(parts))
-	for _, part := range parts {
-		trimmed := strings.TrimSpace(part)
-		if trimmed != "" {
-			result = append(result, trimmed)
-		}
-	}
-	return result
 }
 
 // ============================================================================
