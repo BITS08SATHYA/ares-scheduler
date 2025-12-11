@@ -43,7 +43,7 @@ spec:
       serviceAccountName: ares-scheduler
       containers:
         - name: global-scheduler
-          image: us-east4-docker.pkg.dev/ares-gpu-test/ares-scheduler/ares-scheduler-global:v1.0.0
+          image: us-east4-docker.pkg.dev/ares-gpu-test/ares-scheduler/ares-scheduler-global:latest
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080

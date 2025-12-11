@@ -172,9 +172,10 @@ func main() {
 		})
 
 		// Initialize gateway with coordinator
+		endpoints := strings.Split(*etcdEndpoints, ",")
 		gatewayWithCoordinator, err := gateway.NewAPIGatewayWithCoordinator(
 			*controlPlane,
-			etcdEndpointList,
+			endpoints,
 			*redisAddr,
 			gatewayConfig,
 			clusterManager,
