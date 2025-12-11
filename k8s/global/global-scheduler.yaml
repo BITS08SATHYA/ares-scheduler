@@ -7,12 +7,11 @@ metadata:
   labels:
     app: ares-global
 spec:
-  type: LoadBalancer  # Change to NodePort for local dev (Minikube/Kind)
+  type: LoadBalancer  # Keeping LoadBalancer
   ports:
     - port: 8080
       targetPort: 8080
       name: http
-      # nodePort: 30080  # Uncomment for NodePort
   selector:
     app: ares-global
 
@@ -25,7 +24,7 @@ metadata:
   labels:
     app: ares-global
 spec:
-  replicas: 1  # Single control plane instance
+  replicas: 3
   selector:
     matchLabels:
       app: ares-global
@@ -41,41 +40,55 @@ spec:
       serviceAccountName: ares-scheduler
       containers:
         - name: global-scheduler
-          image: ares-scheduler:global-latest
-          imagePullPolicy: IfNotPresent  # Change to Always if using registry
+          image: us-east4-docker.pkg.dev/ares-gpu-test/ares-scheduler/ares-scheduler-global:v1.0.0
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080
               name: http
-          env:
-            - name: ETCD_ENDPOINTS
-              value: "http://etcd-0.etcd.ares-system.svc.cluster.local:2379,http://etcd-1.etcd.ares-system.svc.cluster.local:2379,http://etcd-2.etcd.ares-system.svc.cluster.local:2379"
-            - name: REDIS_ADDR
-              value: "redis-0.redis.ares-system.svc.cluster.local:6379"
+
+          # ✅ FIXED: Pass arguments that match Go code exactly
           args:
-            - --port=8080
-            - --etcd=$(ETCD_ENDPOINTS)
-            - --redis=$(REDIS_ADDR)
-            - --log-level=info
+            - --gateway.port=8080
+            - --etcd.endpoint=http://etcd-0.etcd.ares-system.svc.cluster.local:2379,http://etcd-1.etcd.ares-system.svc.cluster.local:2379,http://etcd-2.etcd.ares-system.svc.cluster.local:2379
+            - --redis.addr=redis-0.redis.ares-system.svc.cluster.local:6379
+            - --control-plane.addr=ares-global.ares-system.svc.cluster.local:8080
+            - --log.level=info
+            - --enable-coordinator=true
+            - --enable-metrics=true
+
+          # Keep env vars for reference/debugging, but they're not used by the code
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+
           resources:
             requests:
               memory: "512Mi"
-              cpu: "500m"
+              cpu: "250m"
             limits:
-              memory: "2Gi"
-              cpu: "2000m"
+              memory: "1Gi"
+              cpu: "1000m"
+
           livenessProbe:
             httpGet:
               path: /health
               port: 8080
-            initialDelaySeconds: 10
+            initialDelaySeconds: 30
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 3
+
           readinessProbe:
             httpGet:
-              path: /health
+              path: /ready
               port: 8080
-            initialDelaySeconds: 5
+            initialDelaySeconds: 15
             periodSeconds: 5
             timeoutSeconds: 3
             failureThreshold: 3

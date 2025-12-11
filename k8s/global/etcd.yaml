@@ -28,7 +28,7 @@ metadata:
     app: etcd
 spec:
   serviceName: etcd
-  replicas: 3
+  replicas: 3  # Start with 1 replica for simplicity
   selector:
     matchLabels:
       app: etcd
@@ -39,53 +39,59 @@ spec:
     spec:
       containers:
         - name: etcd
-          image: quay.io/coreos/etcd:v3.5.10
+          image: registry.k8s.io/etcd:3.5.13-0
           ports:
             - containerPort: 2379
               name: client
             - containerPort: 2380
               name: peer
+          command:
+            - /usr/local/bin/etcd
+            - --name=$(ETCD_NAME)
+            - --listen-client-urls=http://0.0.0.0:2379
+            - --advertise-client-urls=http://$(ETCD_NAME).etcd.ares-system.svc.cluster.local:2379
+            - --listen-peer-urls=http://0.0.0.0:2380
+            - --initial-advertise-peer-urls=http://$(ETCD_NAME).etcd.ares-system.svc.cluster.local:2380
+            - --initial-cluster=etcd-0=http://etcd-0.etcd.ares-system.svc.cluster.local:2380,etcd-1=http://etcd-1.etcd.ares-system.svc.cluster.local:2380,etcd-2=http://etcd-2.etcd.ares-system.svc.cluster.local:2380
+            - --initial-cluster-state=new
+            - --initial-cluster-token=ares-etcd-cluster
+            - --data-dir=/var/run/etcd
+            - --log-level=info
           env:
             - name: ETCD_NAME
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.name
-            - name: ETCD_INITIAL_CLUSTER
-              value: "etcd-0=http://etcd-0.etcd.ares-system.svc.cluster.local:2380,etcd-1=http://etcd-1.etcd.ares-system.svc.cluster.local:2380,etcd-2=http://etcd-2.etcd.ares-system.svc.cluster.local:2380"
-            - name: ETCD_INITIAL_CLUSTER_STATE
-              value: "new"
-            - name: ETCD_INITIAL_CLUSTER_TOKEN
-              value: "ares-etcd-cluster"
-            - name: ETCD_LISTEN_CLIENT_URLS
-              value: "http://0.0.0.0:2379"
-            - name: ETCD_LISTEN_PEER_URLS
-              value: "http://0.0.0.0:2380"
-            - name: ETCD_ADVERTISE_CLIENT_URLS
-              value: "http://$(ETCD_NAME).etcd.ares-system.svc.cluster.local:2379"
-            - name: ETCD_INITIAL_ADVERTISE_PEER_URLS
-              value: "http://$(ETCD_NAME).etcd.ares-system.svc.cluster.local:2380"
           volumeMounts:
             - name: etcd-data
               mountPath: /var/run/etcd
           resources:
             requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
               memory: "512Mi"
               cpu: "500m"
-            limits:
-              memory: "1Gi"
-              cpu: "1000m"
           livenessProbe:
-            httpGet:
-              path: /health
-              port: 2379
-            initialDelaySeconds: 10
+            exec:
+              command:
+                - /bin/sh
+                - -ec
+                - etcdctl endpoint health --endpoints=http://localhost:2379
+            initialDelaySeconds: 30
             periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
           readinessProbe:
-            httpGet:
-              path: /health
-              port: 2379
-            initialDelaySeconds: 5
+            exec:
+              command:
+                - /bin/sh
+                - -ec
+                - etcdctl endpoint health --endpoints=http://localhost:2379
+            initialDelaySeconds: 15
             periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
   volumeClaimTemplates:
     - metadata:
         name: etcd-data
@@ -93,4 +99,4 @@ spec:
         accessModes: ["ReadWriteOnce"]
         resources:
           requests:
-            storage: 10Gi
+            storage: 1Gi  # Reduced for local dev

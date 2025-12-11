@@ -46,6 +46,8 @@ const (
 	DefaultMaxRequestSize = 1 << 20 // 1MB
 
 	// Storage
+	//DefaultETCDEndpoint = "http://etcd-0.etcd.ares-system.svc.cluster.local:2379"
+	//DefaultRedisAddr    = "redis-0.redis.ares-system.svc.cluster.local:6379"
 	DefaultETCDEndpoint = "localhost:2379"
 	DefaultRedisAddr    = "localhost:6379"
 	DefaultControlPlane = "localhost:8080"

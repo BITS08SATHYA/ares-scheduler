@@ -7,10 +7,10 @@ metadata:
   labels:
     app: redis
 spec:
-  clusterIP: None  # Headless service
+  clusterIP: None
   ports:
     - port: 6379
-      name: redis
+      name: client
       targetPort: 6379
   selector:
     app: redis
@@ -36,28 +36,26 @@ spec:
     spec:
       containers:
         - name: redis
-          image: redis:7.2-alpine
+          image: redis:7-alpine
           ports:
             - containerPort: 6379
-              name: redis
+              name: client
           command:
             - redis-server
             - --appendonly
             - "yes"
-            - --maxmemory
-            - "2gb"
-            - --maxmemory-policy
-            - "allkeys-lru"
+            - --protected-mode
+            - "no"
           volumeMounts:
             - name: redis-data
               mountPath: /data
           resources:
             requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
               memory: "256Mi"
               cpu: "200m"
-            limits:
-              memory: "2Gi"
-              cpu: "1000m"
           livenessProbe:
             exec:
               command:
@@ -65,6 +63,7 @@ spec:
                 - ping
             initialDelaySeconds: 10
             periodSeconds: 10
+            timeoutSeconds: 5
           readinessProbe:
             exec:
               command:
@@ -72,6 +71,7 @@ spec:
                 - ping
             initialDelaySeconds: 5
             periodSeconds: 5
+            timeoutSeconds: 3
   volumeClaimTemplates:
     - metadata:
         name: redis-data
@@ -79,4 +79,4 @@ spec:
         accessModes: ["ReadWriteOnce"]
         resources:
           requests:
-            storage: 5Gi
+            storage: 1Gi

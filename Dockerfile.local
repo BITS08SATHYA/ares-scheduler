@@ -11,7 +11,7 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -o /ares-local ./cmd/local
 
 # Runtime image with nvidia-smi for GPU discovery
-FROM nvidia/cuda:12.0-base-ubuntu22.04
+FROM nvidia/cuda:13.0.2-base-ubuntu22.04
 
 RUN apt-get update && apt-get install -y \
     ca-certificates \
