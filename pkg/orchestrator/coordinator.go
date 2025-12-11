@@ -192,7 +192,7 @@ func (jc *JobCoordinator) ScheduleJob(
 	// STEP 7: Return scheduling result with lease ID
 	// ========================================================================
 
-	// ✅ FIXED: Return proper SchedulingResult instead of nil, nil
+	// FIXED: Return proper SchedulingResult instead of nil, nil
 	result := &SchedulingResult{
 		JobID:              jobID,
 		ClusterID:          globalDecision.ClusterID,
@@ -206,7 +206,17 @@ func (jc *JobCoordinator) ScheduleJob(
 		CreatedAt:          time.Now(),
 	}
 
-	jc.log.Info("✓ Job %s scheduled (leaseID=%d for fencing checks)", jobID, leaseID)
+	jc.log.Info("Job %s scheduled (leaseID=%d for fencing checks)", jobID, leaseID)
+
+	// Start monitoring in background
+	go func() {
+		monitorCtx := context.Background()
+		err := jc.MonitorJob(monitorCtx, jobID, leaseID)
+		if err != nil {
+			jc.log.Error("Monitoring failed for job %s: %v", jobID, err)
+		}
+	}()
+
 	return result, nil
 }
 

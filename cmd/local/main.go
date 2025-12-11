@@ -10,7 +10,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/executor/common"
@@ -192,24 +191,21 @@ func main() {
 	//   }
 	//
 	// We need to convert it to map[string]interface{} for JSON transport
-	topologyData := make(map[string]interface{})
+	var topologyData map[string]interface{}
 	topology, err := topologyManager.DetectTopology(ctx)
-	if err != nil {
-		log.Warn("Failed to detect topology (non-fatal): %v", err)
-		// Continue with empty topology - cluster will still work
-	} else {
-		// Convert structured topology to map for JSON serialization
-		topologyBytes, _ := json.Marshal(topology)
-		json.Unmarshal(topologyBytes, &topologyData)
-		log.Info("GPU topology detected: NVLink pairs=%d, NUMA nodes=%d",
-			len(topology.NVLinkPairs), len(topology.GPUToNUMA))
+	if err == nil && topology != nil {
+		topologyData = map[string]interface{}{
+			"nvlink_pairs": topology.NVLinkPairs,
+			"gpu_to_numa":  topology.GPUToNUMA,
+			"pcie_gen":     topology.PCIeGen,
+		}
 	}
 
 	autoRegConfig := &cluster.AutoRegistrationConfig{
 		ClusterID:          *clusterID,
 		Region:             *region,
 		Zone:               *zone,
-		LocalSchedulerAddr: fmt.Sprintf("http://localhost:%d", *localPort),
+		LocalSchedulerAddr: fmt.Sprintf("http://%s:%d", getHostIPAddress(*localPort), *localPort),
 		ControlPlaneURL:    *controlPlane,
 		TotalGPUs:          len(gpus),
 		TotalCPUs:          256,          // TODO: Get from kubelet or environment
@@ -291,6 +287,20 @@ func main() {
 	}
 
 	log.Info("Shutdown complete")
+}
+
+func getHostIPAddress(port int) string {
+	// In production: Use environment variable CLUSTER_ADDRESS
+	if addr := os.Getenv("CLUSTER_ADDRESS"); addr != "" {
+		return fmt.Sprintf("http://%s:%d", addr, port)
+	}
+
+	// Fallback: Use hostname
+	hostname, err := os.Hostname()
+	if err != nil {
+		hostname = "localhost"
+	}
+	return fmt.Sprintf("http://%s:%d", hostname, port)
 }
 
 // ============================================================================

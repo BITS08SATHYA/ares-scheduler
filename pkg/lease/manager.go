@@ -229,9 +229,11 @@ func (lm *LeaseManager) runHeartbeat(
 						maxConsecutiveFailures, jobID)
 					// In production: trigger alerting system, graceful shutdown
 					// For now: continue trying
+					lm.releaseLease(ctx, jobID, leaseID, leaseKey)
+					return
 				}
 
-				continue
+				//continue
 			}
 
 			// Success: renewal worked

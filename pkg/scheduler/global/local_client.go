@@ -140,7 +140,7 @@ func (c *LocalSchedulerClient) ScheduleJob(
 		return nil, fmt.Errorf("local scheduler returned empty decision")
 	}
 
-	c.log.Info("✓ Local scheduling succeeded: node=%s, gpus=%v",
+	c.log.Info("Local scheduling succeeded: node=%s, gpus=%v",
 		respData.Decision.NodeID, respData.Decision.GPUIndices)
 
 	return respData.Decision, nil

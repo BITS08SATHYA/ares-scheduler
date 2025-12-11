@@ -7,6 +7,7 @@ import (
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/logger"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler/common"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/storage/etcd"
+	"sync"
 	"time"
 )
 
@@ -56,6 +57,7 @@ type ETCDJobStore struct {
 	etcd      *etcd.ETCDClient
 	log       *logger.Logger
 	keyPrefix string // "/ares/jobs"
+	mu        sync.Mutex
 }
 
 // NewETCDJobStore: Create a new etcd-backed job store
@@ -92,6 +94,12 @@ func (store *ETCDJobStore) SaveJob(ctx context.Context, job *common.Job, leaseID
 
 	// Store the job with lease for auto-cleanup
 	key := fmt.Sprintf("%s/%s", store.keyPrefix, job.ID)
+
+	// Use transaction with ModRevision check (optimistic locking)
+	// Add mutex to  ETCDJobStore
+	store.mu.Lock()
+	defer store.mu.Unlock()
+
 	err = store.etcd.PutWithLease(ctx, key, string(jobData), leaseID)
 	if err != nil {
 		store.log.Error("Failed to save job %s to etcd: %v", job.ID, err)
@@ -334,6 +342,24 @@ func (store *ETCDJobStore) CountJobsByStatus(
 	}
 
 	return len(jobs), nil
+}
+
+func (store *ETCDJobStore) CleanupOldJobs(ctx context.Context, olderThan time.Duration) error {
+	filter := &JobFilter{} // Get all
+	jobs, err := store.ListJobs(ctx, filter)
+	if err != nil {
+		return err
+	}
+
+	cutoff := time.Now().Add(-olderThan)
+	for _, job := range jobs {
+		if job.Status == common.StatusSucceeded || job.Status == common.StatusFailed {
+			if job.EndTime.Before(cutoff) {
+				store.DeleteJob(ctx, job.ID)
+			}
+		}
+	}
+	return nil
 }
 
 // ============================================================================
