@@ -20,20 +20,20 @@ spec:
         prometheus.io/path: "/metrics"
     spec:
       serviceAccountName: ares-scheduler
-      hostNetwork: true
-      hostPID: true
+      hostNetwork: true  # Required for GPU access
+      hostPID: true      # Required for nvidia-smi
+      dnsPolicy: ClusterFirstWithHostNet  # ✅ IMPORTANT: DNS resolution in hostNetwork mode
 
-      # Only run on GPU nodes marked by your custom label
+      # Only run on GPU nodes
       nodeSelector:
         ares.ai/gpu: "true"
 
       tolerations:
-        # Universal GPU toleration (works for ALL GPUs)
+        # Universal GPU toleration
         - key: "nvidia.com/gpu"
           operator: "Exists"
           effect: "NoSchedule"
-
-        # GKE-specific accelerator taint (T4, A100, L4, H100, etc.)
+        # GKE-specific accelerator taint
         - key: "accelerator"
           operator: "Exists"
           effect: "NoSchedule"
@@ -42,45 +42,79 @@ spec:
         - name: local-scheduler
           image: us-east4-docker.pkg.dev/ares-gpu-test/ares-scheduler/ares-scheduler-local:latest
           imagePullPolicy: IfNotPresent
+
           securityContext:
-            privileged: true
+            privileged: true  # Required for nvidia-smi and GPU access
+
           ports:
             - containerPort: 9090
               name: http
+              protocol: TCP
+
+          # ✅ ENVIRONMENT VARIABLES (preferred over args in K8s)
           env:
+            # Kubernetes-provided
             - name: NODE_NAME
               valueFrom:
                 fieldRef:
                   fieldPath: spec.nodeName
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
 
-            - name: REDIS_ADDR
+            # Ares configuration
+            - name: ARES_CLUSTER_ID
+              value: "$(NODE_NAME)"  # Use node name as cluster ID
+
+            - name: ARES_REDIS_ADDR
               value: "redis-0.redis.ares-system.svc.cluster.local:6379"
 
-            - name: CONTROL_PLANE_ADDR
+            - name: ARES_CONTROL_PLANE
               value: "http://ares-global.ares-system.svc.cluster.local:8080"
 
-            - name: REGION
-              value: "us-east-1"
+            - name: ARES_REGION
+              value: "us-east4"
 
-            - name: ZONE
-              value: "us-east-1a"
+            - name: ARES_ZONE
+              value: "us-east4-a"
 
-          args:
-            - --cluster-id=$(NODE_NAME)
-            - --port=9090
-            - --redis=$(REDIS_ADDR)
-            - --control-plane=$(CONTROL_PLANE_ADDR)
-            - --region=$(REGION)
-            - --zone=$(ZONE)
-            - --log-level=info
+            - name: ARES_LOCAL_PORT
+              value: "9090"
+
+            - name: ARES_K8S_NAMESPACE
+              value: "default"  # Where user jobs will be created
+
+            - name: ARES_LOG_LEVEL
+              value: "info"
+
+            # ✅ IMPORTANT: Tell scheduler its reachable address
+            - name: ARES_CLUSTER_ADDRESS
+              value: "$(POD_IP)"  # Control plane will call http://POD_IP:9090
+
+          # ✅ OPTIONAL: Can still use args, but env vars take precedence
+          # args:
+          #   - --cluster-id=$(NODE_NAME)
+          #   - --port=9090
 
           volumeMounts:
             - name: dev
               mountPath: /dev
             - name: sys
               mountPath: /sys
+            # ✅ Mount nvidia-smi if it's not in the container
+            - name: nvidia-smi
+              mountPath: /usr/bin/nvidia-smi
+              readOnly: true
 
-          # Ares scheduler must not consume GPUs
           resources:
             requests:
               memory: "256Mi"
@@ -88,13 +122,14 @@ spec:
             limits:
               memory: "1Gi"
               cpu: "1000m"
+              # ✅ CRITICAL: Scheduler must NOT consume GPUs
               nvidia.com/gpu: "0"
 
           livenessProbe:
             httpGet:
               path: /health
               port: 9090
-            initialDelaySeconds: 10
+            initialDelaySeconds: 30
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 3
@@ -103,7 +138,7 @@ spec:
             httpGet:
               path: /health
               port: 9090
-            initialDelaySeconds: 5
+            initialDelaySeconds: 15
             periodSeconds: 5
             timeoutSeconds: 3
             failureThreshold: 3
@@ -115,3 +150,10 @@ spec:
         - name: sys
           hostPath:
             path: /sys
+        - name: nvidia-smi
+          hostPath:
+            path: /usr/bin/nvidia-smi
+            type: FileOrCreate
+
+      # Graceful termination
+      terminationGracePeriodSeconds: 30

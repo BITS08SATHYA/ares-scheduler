@@ -1,38 +1,26 @@
-// File: cmd/gateway/main.go
+// File: cmd/global/main.go (IMPROVED)
 // Entry point for Ares Scheduler API Gateway
-// Initializes all 10 layers and starts HTTP server
-//
-// Architecture:
-//   main.go
-//      ↓
-//   (Initialize Logger)
-//      ↓
-//   (Initialize Storage: etcd + Redis)
-//      ↓
-//   (Initialize all 10 layers)
-//      ↓
-//   (Create API Gateway)
-//      ↓
-//   (Start HTTP server)
-//      ↓
-//   (Listen for HTTP requests on /schedule, /health, /metrics, etc.)
+// IMPROVEMENTS:
+// 1. Environment variable support
+// 2. Plural etcd.endpoints (comma-separated)
+// 3. Better error handling
+// 4. Clearer logging
 
 package main
 
 import (
-	//"context"
 	"flag"
-	"github.com/BITS08SATHYA/ares-scheduler/pkg/cluster"
-	"github.com/BITS08SATHYA/ares-scheduler/pkg/storage/redis"
-
-	//"fmt"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/api/gateway"
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/cluster"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/logger"
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/storage/redis"
 )
 
 // ============================================================================
@@ -46,68 +34,68 @@ const (
 	DefaultMaxRequestSize = 1 << 20 // 1MB
 
 	// Storage
-	//DefaultETCDEndpoint = "http://etcd-0.etcd.ares-system.svc.cluster.local:2379"
-	//DefaultRedisAddr    = "redis-0.redis.ares-system.svc.cluster.local:6379"
-	DefaultETCDEndpoint = "localhost:2379"
-	DefaultRedisAddr    = "localhost:6379"
-	DefaultControlPlane = "localhost:8080"
+	DefaultETCDEndpoints = "localhost:2379"
+	DefaultRedisAddr     = "localhost:6379"
+	DefaultControlPlane  = "localhost:8080"
 
 	// Graceful shutdown
 	ShutdownTimeout = 10 * time.Second
 )
 
 // ============================================================================
-// COMMAND-LINE FLAGS
+// COMMAND-LINE FLAGS (with env var fallback)
 // ============================================================================
 
 var (
 	// Gateway flags
 	gatewayPort = flag.Int(
 		"gateway.port",
-		DefaultGatewayPort,
-		"HTTP port for API gateway (default: 8080)",
+		getEnvInt("ARES_GATEWAY_PORT", DefaultGatewayPort),
+		"HTTP port for API gateway (env: ARES_GATEWAY_PORT)",
 	)
 	requestTimeout = flag.Duration(
 		"gateway.timeout",
 		DefaultRequestTimeout,
-		"Request timeout (default: 30s)",
+		"Request timeout",
 	)
 
 	// Storage flags
-	etcdEndpoint = flag.String(
-		"etcd.endpoint",
-		DefaultETCDEndpoint,
-		"etcd endpoint (default: localhost:2379)",
+	etcdEndpoints = flag.String(
+		"etcd.endpoints",
+		getEnvString("ARES_ETCD_ENDPOINTS", DefaultETCDEndpoints),
+		"etcd endpoints, comma-separated (env: ARES_ETCD_ENDPOINTS)",
 	)
 
 	redisAddr = flag.String(
 		"redis.addr",
-		DefaultRedisAddr,
-		"Redis address (default: localhost:6379)",
+		getEnvString("ARES_REDIS_ADDR", DefaultRedisAddr),
+		"Redis address (env: ARES_REDIS_ADDR)",
 	)
+
 	controlPlane = flag.String(
 		"control-plane.addr",
-		DefaultControlPlane,
-		"Control plane address (default: localhost)",
+		getEnvString("ARES_CONTROL_PLANE", DefaultControlPlane),
+		"Control plane address for lease metadata (env: ARES_CONTROL_PLANE)",
 	)
 
 	// Logging
 	logLevel = flag.String(
 		"log.level",
-		"info",
-		"Log level (debug, info, warn, error)",
+		getEnvString("ARES_LOG_LEVEL", "info"),
+		"Log level (debug, info, warn, error, env: ARES_LOG_LEVEL)",
 	)
 
 	// Feature flags
 	enableCoordinator = flag.Bool(
 		"enable-coordinator",
-		true,
-		"Enable job coordinator (exactly-once, leases, etc)",
+		getEnvBool("ARES_ENABLE_COORDINATOR", true),
+		"Enable job coordinator (env: ARES_ENABLE_COORDINATOR)",
 	)
+
 	enableMetrics = flag.Bool(
 		"enable-metrics",
-		true,
-		"Enable /metrics endpoint",
+		getEnvBool("ARES_ENABLE_METRICS", true),
+		"Enable /metrics endpoint (env: ARES_ENABLE_METRICS)",
 	)
 )
 
@@ -123,7 +111,7 @@ func main() {
 	log := initializeLogger(*logLevel)
 	defer func() {
 		if log != nil {
-			_ = log.Sync() // Sync is called but error is ignored (best effort)
+			_ = log.Sync()
 		}
 	}()
 
@@ -136,9 +124,8 @@ func main() {
 	log.Info("Starting Ares Gateway (all 10 layers)...")
 	log.Info("")
 
-	// ========================================================================
-	// INITIALIZATION PHASE
-	// ========================================================================
+	// Parse etcd endpoints (comma-separated)
+	etcdEndpointList := parseEndpoints(*etcdEndpoints)
 
 	// Create gateway configuration
 	gatewayConfig := &gateway.GatewayConfig{
@@ -151,31 +138,31 @@ func main() {
 		MetricsPath:      "/metrics",
 	}
 
-	log.Info("Gateway Config:")
-	log.Info("  Port: %d", gatewayConfig.Port)
-	log.Info("  Request Timeout: %v", gatewayConfig.RequestTimeout)
-	log.Info("  Max Request Size: %d bytes", gatewayConfig.MaxRequestSize)
-	log.Info("  CORS Enabled: %v", gatewayConfig.EnableCORS)
-	log.Info("  Metrics Enabled: %v", gatewayConfig.EnablePrometheus)
+	log.Info("Configuration:")
+	log.Info("  Gateway Port: %d", gatewayConfig.Port)
+	log.Info("  etcd Endpoints: %v", etcdEndpointList)
+	log.Info("  Redis: %s", *redisAddr)
+	log.Info("  Control Plane: %s", *controlPlane)
+	log.Info("  Log Level: %s", *logLevel)
+	log.Info("  Coordinator: %v", *enableCoordinator)
+	log.Info("  Metrics: %v", *enableMetrics)
 	log.Info("")
 
-	// Create API gateway (initializes all 10 layers)
-	// Note: NewAPIGatewayWithCoordinator returns (*APIGatewayWithCoordinator, error)
-	// which embeds *APIGateway, so it can be used as *APIGateway
+	// Initialize API gateway
 	var apiGateway *gateway.APIGateway
 	var err error
 
 	if *enableCoordinator {
-		log.Debug("Debug Mode Activated ....")
 		log.Info("Initializing API Gateway WITH Job Coordinator (10-layer pipeline)...")
-		log.Info("Storage backends:")
-		log.Info("  etcd: %s", *etcdEndpoint)
-		log.Info("  Redis: %s", *redisAddr)
-		log.Info("")
 
-		// Get the coordinator wrapper which embeds APIGateway
-		redisClient, err := redis.NewRedisClient("localhost:6379", "", 0)
+		// Initialize Redis for cluster manager
+		redisClient, err := redis.NewRedisClient(*redisAddr, "", 0)
+		if err != nil {
+			log.Error("Failed to connect to Redis: %v", err)
+			os.Exit(1)
+		}
 
+		// Initialize cluster manager
 		clusterManager := cluster.NewClusterManager(redisClient, &cluster.ClusterConfig{
 			AutoHeartbeatInterval:  10 * time.Second,
 			HealthCheckInterval:    30 * time.Second,
@@ -183,9 +170,11 @@ func main() {
 			AutonomyEnabled:        true,
 			MaxConsecutiveFailures: 3,
 		})
+
+		// Initialize gateway with coordinator
 		gatewayWithCoordinator, err := gateway.NewAPIGatewayWithCoordinator(
 			*controlPlane,
-			[]string{*etcdEndpoint},
+			etcdEndpointList,
 			*redisAddr,
 			gatewayConfig,
 			clusterManager,
@@ -195,33 +184,19 @@ func main() {
 			os.Exit(1)
 		}
 
-		if gatewayWithCoordinator == nil {
-			log.Error("API Gateway with Coordinator is nil after initialization")
+		if gatewayWithCoordinator == nil || gatewayWithCoordinator.APIGateway == nil {
+			log.Error("API Gateway initialization returned nil")
 			os.Exit(1)
 		}
 
-		// Extract the embedded APIGateway
 		apiGateway = gatewayWithCoordinator.APIGateway
-		if apiGateway == nil {
-			log.Error("Embedded API Gateway is nil")
-			os.Exit(1)
-		}
-
-		log.Info("")
-		log.Info("API Gateway initialized with Job Coordinator")
-		log.Info("All 10 layers ready")
+		log.Info("✓ API Gateway initialized with Job Coordinator")
 
 	} else {
-		log.Info("Initializing API Gateway WITHOUT Job Coordinator (testing mode)...")
-		log.Info("Note: Coordinator features (exactly-once, leases) will be disabled")
-		log.Info("")
-
-		// For testing without coordinator, we'd create a basic global scheduler
-		// This is less common in production, but useful for development
 		log.Warn("Running in coordinator-disabled mode (not recommended for production)")
 
 		apiGateway, err = gateway.NewAPIGateway(
-			nil, // No global scheduler for now (can be added if needed)
+			nil,
 			gatewayConfig,
 		)
 		if err != nil {
@@ -229,17 +204,12 @@ func main() {
 			os.Exit(1)
 		}
 
-		log.Info("API Gateway initialized (limited features)")
+		log.Info("✓ API Gateway initialized (limited features)")
 	}
 
+	// Start HTTP server
 	log.Info("")
-
-	// ========================================================================
-	// SERVER STARTUP
-	// ========================================================================
-
 	log.Info("Starting HTTP server...")
-	log.Info("")
 
 	if err := apiGateway.Start(); err != nil {
 		log.Error("Failed to start API Gateway: %v", err)
@@ -251,7 +221,7 @@ func main() {
 	log.Info("║              Ares Gateway Ready                        ║")
 	log.Info("╚════════════════════════════════════════════════════════╝")
 	log.Info("")
-	log.Info(" Server listening on port %d", *gatewayPort)
+	log.Info("Server listening on port %d", *gatewayPort)
 	log.Info("")
 	log.Info("Available Endpoints:")
 	log.Info("  POST   /schedule                - Schedule a job")
@@ -265,31 +235,31 @@ func main() {
 	log.Info("  GET    /info/clusters           - List clusters")
 	log.Info("  POST   /job/cancel              - Cancel job")
 	log.Info("  POST   /job/retry               - Retry job")
+	log.Info("  POST   /clusters/register       - Register cluster")
+	log.Info("  POST   /cluster-heartbeat       - Cluster heartbeat")
 	log.Info("")
 	log.Info("Test it:")
 	log.Info("  curl -X POST http://localhost:%d/schedule \\", *gatewayPort)
 	log.Info("    -H 'Content-Type: application/json' \\")
-	log.Info("    -d '{\"request_id\": \"test-1\", \"name\": \"job\", \"gpu_count\": 2, \"gpu_type\": \"A100\", \"memory_mb\": 8192, \"priority\": 50}'")
+	log.Info("    -d '{")
+	log.Info("      \"request_id\": \"test-1\",")
+	log.Info("      \"name\": \"test-job\",")
+	log.Info("      \"gpu_count\": 2,")
+	log.Info("      \"gpu_type\": \"A100\",")
+	log.Info("      \"memory_mb\": 8192,")
+	log.Info("      \"priority\": 50")
+	log.Info("    }'")
 	log.Info("")
 
-	// ========================================================================
-	// GRACEFUL SHUTDOWN
-	// ========================================================================
-
-	// Create signal channel for graceful shutdown
+	// Graceful shutdown
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-
-	// Wait for shutdown signal
 	sig := <-sigChan
+
 	log.Info("")
 	log.Info("Received signal: %v", sig)
 	log.Info("Initiating graceful shutdown...")
-	log.Info("")
 
-	// Attempt graceful shutdown
-	// Note: apiGateway.Stop() takes a duration directly, not a context
-	// The context would be used if we were doing multiple operations
 	if err := apiGateway.Stop(ShutdownTimeout); err != nil {
 		log.Error("Error during shutdown: %v", err)
 		os.Exit(1)
@@ -303,57 +273,47 @@ func main() {
 // HELPER FUNCTIONS
 // ============================================================================
 
-// initializeLogger: Initialize the logger based on log level
 func initializeLogger(logLevel string) *logger.Logger {
-	// This creates a global logger instance
-	// Adjust based on your logger.Logger implementation
-	log := logger.Get()
+	return logger.Get()
+}
 
-	// Set log level if your logger supports it
-	// (This depends on your logger implementation)
-	// log.SetLevel(logLevel)
-
-	return log
+func parseEndpoints(endpoints string) []string {
+	parts := strings.Split(endpoints, ",")
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed != "" {
+			result = append(result, trimmed)
+		}
+	}
+	return result
 }
 
 // ============================================================================
-// ENVIRONMENT VARIABLE SUPPORT (Optional Enhancement)
+// ENVIRONMENT VARIABLE HELPERS
 // ============================================================================
 
-// You can enhance this by reading from environment variables:
-//
-// Example usage:
-//   export ARES_GATEWAY_PORT=9090
-//   export ARES_ETCD_ENDPOINT=etcd.example.com:2379
-//   export ARES_REDIS_ADDR=redis.example.com:6379
-//   go run ./cmd/gateway/main.go
-//
-// Uncomment and use the function below if you want env var support:
-
-/*
-func initializeFromEnv() {
-	if port := os.Getenv("ARES_GATEWAY_PORT"); port != "" {
-		gatewayPort = flag.Int("gateway.port", parseInt(port), "")
+func getEnvString(key, defaultValue string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
 	}
-
-	if etcd := os.Getenv("ARES_ETCD_ENDPOINT"); etcd != "" {
-		*etcdEndpoint = etcd
-	}
-
-	if redis := os.Getenv("ARES_REDIS_ADDR"); redis != "" {
-		*redisAddr = redis
-	}
-
-	if cp := os.Getenv("ARES_CONTROL_PLANE"); cp != "" {
-		*controlPlane = cp
-	}
+	return defaultValue
 }
 
-func parseInt(s string) int {
-	val, err := strconv.Atoi(s)
-	if err != nil {
-		return DefaultGatewayPort
+func getEnvInt(key string, defaultValue int) int {
+	if value := os.Getenv(key); value != "" {
+		if intValue, err := strconv.Atoi(value); err == nil {
+			return intValue
+		}
 	}
-	return val
+	return defaultValue
 }
-*/
+
+func getEnvBool(key string, defaultValue bool) bool {
+	if value := os.Getenv(key); value != "" {
+		if boolValue, err := strconv.ParseBool(value); err == nil {
+			return boolValue
+		}
+	}
+	return defaultValue
+}
