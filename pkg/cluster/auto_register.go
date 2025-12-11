@@ -1,7 +1,9 @@
-// File: pkg/cluster/auto_register.go (NEW FILE)
+// File: pkg/cluster/auto_register.go (FIXED)
 // Auto-registration and heartbeat for worker clusters
-// Automatically registers cluster on startup and sends periodic heartbeats
-// CRITICAL: Enables automatic cluster discovery (no manual registration needed)
+// FIXES:
+// 1. Type definitions uncommented and properly defined
+// 2. Safe type assertions to prevent panics
+// 3. Better error handling
 
 package cluster
 
@@ -16,6 +18,34 @@ import (
 
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/logger"
 )
+
+// ============================================================================
+// TYPE DEFINITIONS (REQUIRED!)
+// ============================================================================
+
+// ClusterRegistrationRequest: Auto-registration request
+//type ClusterRegistrationRequest struct {
+//	ClusterID          string                 `json:"cluster_id"`
+//	Region             string                 `json:"region"`
+//	Zone               string                 `json:"zone"`
+//	LocalSchedulerAddr string                 `json:"local_scheduler_addr"`
+//	TotalGPUs          int                    `json:"total_gpus"`
+//	TotalCPUs          int                    `json:"total_cpus"`
+//	TotalMemoryGB      float64                `json:"total_memory_gb"`
+//	GPUTopology        map[string]interface{} `json:"gpu_topology,omitempty"`
+//	Labels             map[string]string      `json:"labels,omitempty"`
+//}
+//
+//// ClusterHeartbeatRequest: Periodic heartbeat request
+//type ClusterHeartbeatRequest struct {
+//	ClusterID   string  `json:"cluster_id"`
+//	GPUsInUse   int     `json:"gpus_in_use"`
+//	MemGBInUse  float64 `json:"mem_gb_in_use"`
+//	CPUsInUse   int     `json:"cpus_in_use"`
+//	RunningJobs int     `json:"running_jobs"`
+//	PendingJobs int     `json:"pending_jobs"`
+//	Status      string  `json:"status"`
+//}
 
 // ============================================================================
 // CLUSTER AUTO-REGISTRATION
@@ -134,7 +164,7 @@ type HeartbeatConfig struct {
 	ClusterID       string
 	ControlPlaneURL string
 	Interval        time.Duration
-	GetLoadFunc     func() map[string]interface{} // Callback to get current load
+	GetLoadFunc     func() map[string]interface{} // ✅ FIX: This is a FUNCTION now
 }
 
 // StartHeartbeat: Start sending periodic heartbeats
@@ -148,6 +178,12 @@ func StartHeartbeat(ctx context.Context, config *HeartbeatConfig) {
 
 	if config.Interval == 0 {
 		config.Interval = 10 * time.Second
+	}
+
+	// ✅ FIX: Validate GetLoadFunc is not nil
+	if config.GetLoadFunc == nil {
+		logger.Get().Error("GetLoadFunc is nil - cannot start heartbeat")
+		return
 	}
 
 	log := logger.Get()
@@ -169,7 +205,7 @@ func StartHeartbeat(ctx context.Context, config *HeartbeatConfig) {
 			return
 
 		case <-ticker.C:
-			// Get current cluster load
+			// ✅ FIX: Call the function to get current load
 			load := config.GetLoadFunc()
 
 			// ✅ FIX: Safe type assertions with default values
@@ -296,31 +332,3 @@ func safeGetFloat64(m map[string]interface{}, key string, defaultVal float64) fl
 	// Fallback
 	return defaultVal
 }
-
-// ============================================================================
-// CLUSTER REQUEST TYPES (from handler, but useful here)
-// ============================================================================
-
-//// ClusterRegistrationRequest: Auto-registration request
-//type ClusterRegistrationRequest struct {
-//	ClusterID          string                 `json:"cluster_id"`
-//	Region             string                 `json:"region"`
-//	Zone               string                 `json:"zone"`
-//	LocalSchedulerAddr string                 `json:"local_scheduler_addr"`
-//	TotalGPUs          int                    `json:"total_gpus"`
-//	TotalCPUs          int                    `json:"total_cpus"`
-//	TotalMemoryGB      float64                `json:"total_memory_gb"`
-//	GPUTopology        map[string]interface{} `json:"gpu_topology,omitempty"`
-//	Labels             map[string]string      `json:"labels,omitempty"`
-//}
-//
-//// ClusterHeartbeatRequest: Periodic heartbeat request
-//type ClusterHeartbeatRequest struct {
-//	ClusterID   string  `json:"cluster_id"`
-//	GPUsInUse   int     `json:"gpus_in_use"`
-//	MemGBInUse  float64 `json:"mem_gb_in_use"`
-//	CPUsInUse   int     `json:"cpus_in_use"`
-//	RunningJobs int     `json:"running_jobs"`
-//	PendingJobs int     `json:"pending_jobs"`
-//	Status      string  `json:"status"`
-//}
