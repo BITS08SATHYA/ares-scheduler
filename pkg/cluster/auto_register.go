@@ -152,7 +152,8 @@ func StartHeartbeat(ctx context.Context, config *HeartbeatConfig) {
 
 	log := logger.Get()
 
-	log.Info("Starting heartbeat for cluster %s (interval=%.0fs)", config.ClusterID, config.Interval.Seconds())
+	log.Info("Starting heartbeat for cluster %s (interval=%.0fs)",
+		config.ClusterID, config.Interval.Seconds())
 
 	ticker := time.NewTicker(config.Interval)
 	defer ticker.Stop()
@@ -171,14 +172,22 @@ func StartHeartbeat(ctx context.Context, config *HeartbeatConfig) {
 			// Get current cluster load
 			load := config.GetLoadFunc()
 
+			// ✅ FIX: Safe type assertions with default values
+			// This prevents panic if field is missing or wrong type
+			gpusInUse := safeGetInt(load, "gpus_in_use", 0)
+			memGBInUse := safeGetFloat64(load, "mem_gb_in_use", 0.0)
+			cpusInUse := safeGetInt(load, "cpus_in_use", 0)
+			runningJobs := safeGetInt(load, "running_jobs", 0)
+			pendingJobs := safeGetInt(load, "pending_jobs", 0)
+
 			// Build heartbeat request
 			hbReq := &ClusterHeartbeatRequest{
 				ClusterID:   config.ClusterID,
-				GPUsInUse:   load["gpus_in_use"].(int),
-				MemGBInUse:  load["mem_gb_in_use"].(float64),
-				CPUsInUse:   load["cpus_in_use"].(int),
-				RunningJobs: load["running_jobs"].(int),
-				PendingJobs: load["pending_jobs"].(int),
+				GPUsInUse:   gpusInUse,
+				MemGBInUse:  memGBInUse,
+				CPUsInUse:   cpusInUse,
+				RunningJobs: runningJobs,
+				PendingJobs: pendingJobs,
 				Status:      "healthy", // TODO: Check actual health
 			}
 
@@ -197,7 +206,7 @@ func StartHeartbeat(ctx context.Context, config *HeartbeatConfig) {
 				successCount++
 				failureCount = 0 // Reset failure counter
 
-				log.Debug("Heartbeat sent: jobs=%d, gpus=%d, status=%s",
+				log.Debug("✓ Heartbeat sent: jobs=%d, gpus=%d, status=%s",
 					hbReq.RunningJobs, hbReq.GPUsInUse, hbReq.Status)
 			}
 		}
@@ -232,6 +241,60 @@ func sendHeartbeatRequest(ctx context.Context, controlPlaneURL string, req *Clus
 	}
 
 	return nil
+}
+
+// ============================================================================
+// HELPER FUNCTIONS: Safe Type Assertions
+// ============================================================================
+
+// safeGetInt: Safely extract int from map with default fallback
+func safeGetInt(m map[string]interface{}, key string, defaultVal int) int {
+	if m == nil {
+		return defaultVal
+	}
+
+	val, exists := m[key]
+	if !exists {
+		return defaultVal
+	}
+
+	// Try direct int first
+	if intVal, ok := val.(int); ok {
+		return intVal
+	}
+
+	// Try float64 (JSON numbers are float64)
+	if floatVal, ok := val.(float64); ok {
+		return int(floatVal)
+	}
+
+	// Fallback
+	return defaultVal
+}
+
+// safeGetFloat64: Safely extract float64 from map with default fallback
+func safeGetFloat64(m map[string]interface{}, key string, defaultVal float64) float64 {
+	if m == nil {
+		return defaultVal
+	}
+
+	val, exists := m[key]
+	if !exists {
+		return defaultVal
+	}
+
+	// Try direct float64
+	if floatVal, ok := val.(float64); ok {
+		return floatVal
+	}
+
+	// Try int (convert to float64)
+	if intVal, ok := val.(int); ok {
+		return float64(intVal)
+	}
+
+	// Fallback
+	return defaultVal
 }
 
 // ============================================================================
