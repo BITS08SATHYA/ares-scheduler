@@ -73,7 +73,7 @@ func NewJobCoordinator(
 // 5. Call local scheduler via HTTP
 // 6. Monitor job with FENCING TOKEN CHECKS (NEW)
 //
-// ✅ FIXED: Now returns proper SchedulingResult instead of nil, nil
+// FIXED: Now returns proper SchedulingResult instead of nil, nil
 func (jc *JobCoordinator) ScheduleJob(
 	ctx context.Context,
 	jobSpec *common.JobSpec,
