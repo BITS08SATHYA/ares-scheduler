@@ -104,7 +104,7 @@ func AutoRegisterCluster(ctx context.Context, config *AutoRegistrationConfig) er
 
 		err := sendRegistrationRequest(ctx, config.ControlPlaneURL, regReq)
 		if err == nil {
-			log.Info("✓ Cluster %s successfully registered with control plane", config.ClusterID)
+			log.Info("Cluster %s successfully registered with control plane", config.ClusterID)
 			return nil
 		}
 

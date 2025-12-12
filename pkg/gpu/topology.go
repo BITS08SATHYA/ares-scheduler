@@ -630,6 +630,7 @@ func findNvidiaSMI() string {
 	log := logger.Get()
 
 	paths := []string{
+		"/host-usr/bin/nvidia-smi",
 		"/usr/bin/nvidia-smi",
 		"/usr/local/bin/nvidia-smi",
 		"/usr/local/nvidia/bin/nvidia-smi",

@@ -1,0 +1,17 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ares-global
+  namespace: ares-system
+  labels:
+    app: ares-global
+spec:
+  type: LoadBalancer  # OK for cloud environments
+  ports:
+    - port: 8080
+      targetPort: 8080
+      name: http
+      protocol: TCP  # Add explicit protocol
+  selector:
+    app: ares-global

@@ -14,39 +14,43 @@ spec:
     metadata:
       labels:
         app: ares-local
+      annotations:
+        container.apparmor.security.beta.kubernetes.io/ares-local: "unconfined"
     spec:
-      # ✅ FIX 1: Schedule ONLY on GPU nodes
       nodeSelector:
-        cloud.google.com/gke-accelerator: nvidia-tesla-t4
-      
-      # ✅ FIX 2: GPU resource request (ensures scheduled on GPU node)
+        ares.ai/gpu: "true"
+
+      # Use host network to access nvidia-smi
+      hostNetwork: false  # Keep as false for now
+      hostPID: false
+
       containers:
         - name: ares-local
           image: us-east4-docker.pkg.dev/ares-gpu-test/ares-scheduler/ares-scheduler-local:latest
           imagePullPolicy: Always
 
-          # ✅ FIX 3: Request GPU resource
           resources:
-            limits:
-              nvidia.com/gpu: 1  # Request 1 GPU
             requests:
               cpu: "500m"
               memory: "512Mi"
+            limits:
+              cpu: "2000m"
+              memory: "2Gi"
 
           env:
-            # External IPs for cross-cluster communication
             - name: ARES_REDIS_ADDR
               value: "34.86.46.217:6379"
             - name: ARES_CONTROL_PLANE
-              value: "http://34.48.68.132:8080"
+              value: "http://35.245.157.53:8080"
 
-            # ✅ FIX 4: Add NODE_NAME via Downward API
+            # ✅ FIX 1: Add external address for registration
+            - name: ARES_LOCAL_SCHEDULER_EXTERNAL_ADDR
+              value: "http://34.48.68.132:9090"  # CHANGE THIS to actual LoadBalancer IP
+
             - name: NODE_NAME
               valueFrom:
                 fieldRef:
                   fieldPath: spec.nodeName
-
-            # ✅ FIX 5: Add POD_NAME and POD_NAMESPACE
             - name: POD_NAME
               valueFrom:
                 fieldRef:
@@ -55,24 +59,23 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
-
-            # Cluster config
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
             - name: ARES_CLUSTER_ID
               value: "gke-ares-gpu-worker"
             - name: ARES_REGION
               value: "us-east4"
             - name: ARES_ZONE
               value: "us-east4-a"
-
-            # Namespace for job pods
             - name: ARES_K8S_NAMESPACE
               value: "ares-system"
 
-            # ✅ FIX 6: Add nvidia-smi path hint
+            # ✅ FIX 2: Point to host's nvidia-smi
             - name: NVIDIA_SMI_PATH
-              value: "/usr/bin/nvidia-smi"
+              value: "/host-usr/bin/nvidia-smi"
 
-            # Logging
             - name: ARES_LOG_LEVEL
               value: "info"
 
@@ -81,23 +84,20 @@ spec:
               containerPort: 9090
               protocol: TCP
 
-          # ✅ FIX 7: Mount /proc for GPU detection fallback
+          # ✅ FIX 2: Mount host /usr/bin to access nvidia-smi
           volumeMounts:
-            - name: proc
-              mountPath: /proc
-              readOnly: true
-            # ✅ FIX 8: Mount nvidia driver (if available)
-            - name: nvidia
-              mountPath: /usr/local/nvidia
+            - name: host-usr-bin
+              mountPath: /host-usr/bin
               readOnly: true
 
-          # Health checks
           livenessProbe:
             httpGet:
               path: /health
               port: 9090
             initialDelaySeconds: 30
             periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
 
           readinessProbe:
             httpGet:
@@ -105,23 +105,26 @@ spec:
               port: 9090
             initialDelaySeconds: 10
             periodSeconds: 5
-      
-      # ✅ FIX 9: Mount volumes
+            timeoutSeconds: 3
+            failureThreshold: 3
+
+      # ✅ Mount host /usr/bin directory
       volumes:
-        - name: proc
+        - name: host-usr-bin
           hostPath:
-            path: /proc
+            path: /usr/bin
             type: Directory
-        - name: nvidia
-          hostPath:
-            path: /usr/local/nvidia
-            type: DirectoryOrCreate
-      
-      # Service account for Kubernetes API access
-      serviceAccountName: ares-local-scheduler
-      
-      # ✅ FIX 10: Tolerate GPU taints
+
+      serviceAccountName: ares-scheduler
+
       tolerations:
         - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+        - key: accelerator
+          operator: Equal
+          value: t4
+          effect: NoSchedule
+        - key: cloud.google.com/gke-accelerator
           operator: Exists
           effect: NoSchedule

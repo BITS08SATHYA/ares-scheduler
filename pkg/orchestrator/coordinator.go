@@ -299,7 +299,7 @@ func (jc *JobCoordinator) ScheduleJob(
 		CreatedAt:          time.Now(),
 	}
 
-	jc.log.Info("✓ Job %s fully scheduled (Pod=%s, leaseID=%d)", jobID, createdPodName, leaseID)
+	jc.log.Info("Job %s fully scheduled (Pod=%s, leaseID=%d)", jobID, createdPodName, leaseID)
 	return result, nil
 
 }

@@ -1,22 +1,4 @@
 ---
-apiVersion: v1
-kind: Service
-metadata:
-  name: ares-global
-  namespace: ares-system
-  labels:
-    app: ares-global
-spec:
-  type: LoadBalancer  # ✅ OK for cloud environments
-  ports:
-    - port: 8080
-      targetPort: 8080
-      name: http
-      protocol: TCP  # ✅ Add explicit protocol
-  selector:
-    app: ares-global
-
----
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -44,7 +26,7 @@ spec:
       containers:
         - name: global-scheduler
           image: us-east4-docker.pkg.dev/ares-gpu-test/ares-scheduler/ares-scheduler-global:latest
-          imagePullPolicy: IfNotPresent
+          imagePullPolicy: Always
           ports:
             - containerPort: 8080
               name: http

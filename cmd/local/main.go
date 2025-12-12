@@ -404,28 +404,18 @@ func initializeLogger(logLevel string) *logger.Logger {
 
 // getClusterAddress determines how the control plane will reach this scheduler
 func getClusterAddress(port int, override string) string {
-	// 1. Use explicit override if provided
-	if override != "" {
-		return fmt.Sprintf("http://%s:%d", override, port)
+	// First try to get external address from env var
+	if externalAddr := os.Getenv("ARES_LOCAL_SCHEDULER_EXTERNAL_ADDR"); externalAddr != "" {
+		return externalAddr
 	}
 
-	// 2. In Kubernetes, try to get pod IP
+	// Fallback to pod IP (for single-cluster testing)
 	if podIP := os.Getenv("POD_IP"); podIP != "" {
-		return fmt.Sprintf("http://%s:%d", podIP, port)
+		return fmt.Sprintf("http://%s:9090", podIP)
 	}
 
-	// 3. Try to detect host IP
-	if hostIP := getHostIP(); hostIP != "" {
-		return fmt.Sprintf("http://%s:%d", hostIP, port)
-	}
-
-	// 4. Fallback to hostname
-	hostname, err := os.Hostname()
-	if err != nil {
-		hostname = "localhost"
-	}
-
-	return fmt.Sprintf("http://%s:%d", hostname, port)
+	// Last resort: localhost
+	return "http://localhost:9090"
 }
 
 // getHostIP attempts to get the host's primary IP address
