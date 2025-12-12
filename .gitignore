@@ -28,3 +28,5 @@ Thumbs.db
 .env
 *.pem
 *.key
+
+k8s
