@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/executor/common"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/logger"
+	_ "k8s.io/client-go/kubernetes"
 	"time"
 )
 

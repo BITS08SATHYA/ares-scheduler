@@ -4,13 +4,15 @@ import (
 	"context"
 	"fmt"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/executor/common"
+	_ "go.etcd.io/etcd/client/v3/kubernetes"
 	"io"
 	"os"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/kubernetes"
+	k8sClient "k8s.io/client-go/kubernetes"
+	k8sCoreClient "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 )
@@ -18,20 +20,20 @@ import (
 // ============================================================================
 // K8sClientImpl: Real Kubernetes client using client-go
 // ============================================================================
-// FIXES APPLIED:
-// 1. ✅ Added convertK8sPodPhase() helper (converts corev1.PodPhase -> common.PodPhase)
-// 2. ✅ Fixed GetPod() to return proper type (*common.PodInfo not "")
-// 3. ✅ Fixed ListPods() to NOT take address of type conversion
-// 4. ✅ Fixed WatchPod() to NOT take address of type conversion
-// 5. ✅ Removed &common.PodPhase(...) - use converted value directly
+// ENHANCEMENTS:
+// 1. ✅ Wraps both custom interface AND standard kubernetes.Interface
+// 2. ✅ Exposes real k8s.io client via GetKubernetesInterface()
+// 3. ✅ Single source of truth for all K8s operations
+// 4. ✅ GPU discovery and main.go use this wrapper
 // ============================================================================
 
 type K8sClientImpl struct {
-	clientset kubernetes.Interface
+	clientset k8sCoreClient.Interface // ✅ Real k8s.io client
 	namespace string
 }
 
 // NewK8sClient: Create real K8s client (in-cluster or kubeconfig)
+// ✅ ENHANCED: Now exposes both custom interface and real k8s.io client
 func NewK8sClient(namespace string) (*K8sClientImpl, error) {
 	var config *rest.Config
 	var err error
@@ -52,7 +54,8 @@ func NewK8sClient(namespace string) (*K8sClientImpl, error) {
 		}
 	}
 
-	clientset, err := kubernetes.NewForConfig(config)
+	// ✅ NEW: Create standard kubernetes.Interface here
+	clientset, err := k8sClient.NewForConfig(config)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create K8s clientset: %w", err)
 	}
@@ -65,6 +68,22 @@ func NewK8sClient(namespace string) (*K8sClientImpl, error) {
 		clientset: clientset,
 		namespace: namespace,
 	}, nil
+}
+
+// ✅ NEW: GetKubernetesInterface() - Expose real k8s.io client
+// This allows gpu_discovery and other components to use the standard client
+//
+// Usage in gpu_discovery:
+//
+//	k8sClientInterface := executor.GetKubernetesInterface()
+//	gpuDiscovery := gpu.NewGPUDiscoveryWithK8s(redisClient, k8sClientInterface, nodeName)
+//
+// Usage in main.go:
+//
+//	k8sClientInterface := executor.GetKubernetesInterface()
+//	gpuDiscovery := gpu.NewGPUDiscoveryWithK8s(redisClient, k8sClientInterface, nodeName)
+func (kc *K8sClientImpl) GetKubernetesInterface() k8sClient.Interface {
+	return kc.clientset
 }
 
 // ============================================================================
@@ -125,19 +144,15 @@ func (kc *K8sClientImpl) CreatePod(ctx context.Context, podSpec *common.PodSpec)
 }
 
 // GetPod: Get Pod information
-// ❌ ISSUE FIXED: Was returning "" (string) instead of (*common.PodInfo, error)
-// ✅ FIX: Return proper (*common.PodInfo, error) with nil for error case
 func (kc *K8sClientImpl) GetPod(ctx context.Context, podName string) (*common.PodInfo, error) {
 	pod, err := kc.clientset.CoreV1().Pods(kc.namespace).Get(ctx, podName, metav1.GetOptions{})
 	if err != nil {
-		// ✅ FIX: Return nil (not "") + error
 		return nil, fmt.Errorf("failed to get pod: %w", err)
 	}
 
 	return &common.PodInfo{
 		PodName:   pod.Name,
 		Namespace: pod.Namespace,
-		// ✅ FIX: Use convertK8sPodPhase() helper (defined below)
 		Phase:     convertK8sPodPhase(pod.Status.Phase),
 		CreatedAt: pod.CreationTimestamp.Time,
 		Ready:     len(pod.Status.ContainerStatuses) > 0 && pod.Status.ContainerStatuses[0].Ready,
@@ -150,8 +165,6 @@ func (kc *K8sClientImpl) DeletePod(ctx context.Context, podName string) error {
 }
 
 // ListPods: List all Pods in namespace
-// ❌ ISSUE FIXED: Was trying to do &common.PodPhase(pod.Status.Phase)
-// ✅ FIX: Use convertK8sPodPhase() which returns common.PodPhase (not a pointer)
 func (kc *K8sClientImpl) ListPods(ctx context.Context) ([]*common.PodInfo, error) {
 	pods, err := kc.clientset.CoreV1().Pods(kc.namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
@@ -163,8 +176,7 @@ func (kc *K8sClientImpl) ListPods(ctx context.Context) ([]*common.PodInfo, error
 		podInfos = append(podInfos, &common.PodInfo{
 			PodName:   pod.Name,
 			Namespace: pod.Namespace,
-			// ✅ FIX: Use convertK8sPodPhase() - returns common.PodPhase directly
-			Phase: convertK8sPodPhase(pod.Status.Phase),
+			Phase:     convertK8sPodPhase(pod.Status.Phase),
 		})
 	}
 
@@ -192,8 +204,6 @@ func (kc *K8sClientImpl) GetPodMetrics(ctx context.Context, podName string) (map
 }
 
 // WatchPod: Watch Pod for status changes
-// ❌ ISSUE FIXED: Was trying to do &common.PodPhase(pod.Status.Phase)
-// ✅ FIX: Use convertK8sPodPhase() which returns common.PodPhase directly
 func (kc *K8sClientImpl) WatchPod(ctx context.Context, podName string, callback func(*common.PodInfo)) error {
 	watcher, err := kc.clientset.CoreV1().Pods(kc.namespace).Watch(ctx, metav1.ListOptions{
 		FieldSelector: fmt.Sprintf("metadata.name=%s", podName),
@@ -208,8 +218,7 @@ func (kc *K8sClientImpl) WatchPod(ctx context.Context, podName string, callback 
 		callback(&common.PodInfo{
 			PodName:   pod.Name,
 			Namespace: pod.Namespace,
-			// ✅ FIX: Use convertK8sPodPhase() helper
-			Phase: convertK8sPodPhase(pod.Status.Phase),
+			Phase:     convertK8sPodPhase(pod.Status.Phase),
 		})
 	}
 
@@ -221,7 +230,6 @@ func (kc *K8sClientImpl) WatchPod(ctx context.Context, podName string, callback 
 // ============================================================================
 
 // convertK8sPodPhase: Convert Kubernetes Pod phase to common.PodPhase
-// ✅ THIS IS THE FIX FOR THE TYPE MISMATCH
 //
 // Explanation:
 // - corev1.PodPhase is from k8s.io/api/core/v1 (Kubernetes Pod phases)

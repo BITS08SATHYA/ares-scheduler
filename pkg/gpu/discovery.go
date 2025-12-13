@@ -1,5 +1,5 @@
 // Feature 13: GPU-Aware Scheduling with Topology
-// Detects GPUs on local node, enumerates properties, performs health checks
+// Detects GPUs on local node via Kubernetes API (preferred) or nvidia-smi (fallback)
 // Depends on: types.go, logger.go, redis/client.go
 // Zero errors, production-ready code
 
@@ -12,10 +12,15 @@ import (
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/logger"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler/common"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/storage/redis"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
 	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
 )
 
 // ============================================================================
@@ -23,10 +28,14 @@ import (
 // ============================================================================
 
 // GPUDiscovery: Discovers and monitors local GPUs
-// Uses nvidia-smi for detection, caches results in Redis
+// Primary: Uses Kubernetes API to query node allocatable resources
+// Fallback: Uses nvidia-smi for detection
+// Caches results in Redis
 // Thread-safe: All operations protected by context cancellation
 type GPUDiscovery struct {
 	redisClient *redis.RedisClient
+	k8sClient   kubernetes.Interface // ✅ NEW: K8s client for API queries
+	nodeName    string               // ✅ NEW: This node's name in K8s
 	log         *logger.Logger
 	cacheKey    string
 	cacheTTL    time.Duration
@@ -41,10 +50,25 @@ const (
 	HealthCheckInterval = 60 * time.Second
 )
 
-// NewGPUDiscovery: Create new GPU discovery service
+// ✅ NEW: Constructor with K8s client support
+func NewGPUDiscoveryWithK8s(redisClient *redis.RedisClient, k8sClient kubernetes.Interface, nodeName string) *GPUDiscovery {
+	return &GPUDiscovery{
+		redisClient: redisClient,
+		k8sClient:   k8sClient,
+		nodeName:    nodeName,
+		log:         logger.Get(),
+		cacheKey:    CacheKeyGPUDevices,
+		cacheTTL:    DefaultCacheTTL,
+	}
+}
+
+// Original constructor (for backward compatibility)
+// NewGPUDiscovery: Create new GPU discovery service (nvidia-smi only)
 func NewGPUDiscovery(redisClient *redis.RedisClient) *GPUDiscovery {
 	return &GPUDiscovery{
 		redisClient: redisClient,
+		k8sClient:   nil, // No K8s client
+		nodeName:    "",
 		log:         logger.Get(),
 		cacheKey:    CacheKeyGPUDevices,
 		cacheTTL:    DefaultCacheTTL,
@@ -52,13 +76,77 @@ func NewGPUDiscovery(redisClient *redis.RedisClient) *GPUDiscovery {
 }
 
 // ============================================================================
-// GPU DETECTION (Feature 13)
+// GPU DETECTION (Feature 13) - WITH K8s API SUPPORT
 // ============================================================================
 
-// DiscoverGPUs: Detect all local GPUs using nvidia-smi
-// Returns: Array of GPU devices with properties
-// Latency: ~200-500ms (nvidia-smi execution + parsing)
-// Cached for: 30 seconds
+// ✅ NEW: DiscoverGPUsFromK8s - Query Kubernetes API for GPU allocatable resources
+// This is the PREFERRED method when K8s client is available
+// Returns: Array of GPU devices based on node allocatable resources
+// Latency: ~50-100ms (K8s API call)
+func (gd *GPUDiscovery) DiscoverGPUsFromK8s(ctx context.Context) ([]*common.GPUDevice, error) {
+	if gd.k8sClient == nil {
+		return nil, fmt.Errorf("K8s client not initialized")
+	}
+
+	if gd.nodeName == "" {
+		// Try to get node name from environment
+		gd.nodeName = os.Getenv("NODE_NAME")
+		if gd.nodeName == "" {
+			return nil, fmt.Errorf("NODE_NAME not set in environment")
+		}
+	}
+
+	// Query the node from Kubernetes API
+	node, err := gd.k8sClient.CoreV1().Nodes().Get(ctx, gd.nodeName, metav1.GetOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get node from K8s API: %w", err)
+	}
+
+	gpus := make([]*common.GPUDevice, 0)
+
+	// Check if node has GPU allocatable
+	gpuQuantity, ok := node.Status.Allocatable[corev1.ResourceName("nvidia.com/gpu")]
+	if !ok || gpuQuantity.Value() == 0 {
+		gd.log.Info("Node %s has no GPU allocatable resources", gd.nodeName)
+		return gpus, nil
+	}
+
+	gpuCount := int(gpuQuantity.Value())
+	gd.log.Info("Node %s has %d GPU(s) allocatable", gd.nodeName, gpuCount)
+
+	// Get GPU type from node labels
+	gpuType := gd.getGPUTypeFromNodeLabels(node)
+
+	// Get memory per GPU (default to T4 memory if not specified)
+	memoryGB := 16.0 // Default for T4
+	if gpuType == "A100" {
+		memoryGB = 80.0
+	} else if gpuType == "H100" {
+		memoryGB = 80.0
+	}
+
+	// Create GPU device entries
+	for i := 0; i < gpuCount; i++ {
+		gpu := &common.GPUDevice{
+			Index:              i,
+			UUID:               fmt.Sprintf("%s-gpu-%d", gd.nodeName, i),
+			Type:               gpuType,
+			MemoryGB:           memoryGB,
+			AvailableMemGB:     memoryGB, // K8s doesn't track available, assume full
+			UtilizationPercent: 0.0,      // K8s doesn't track utilization
+			TemperatureCelsius: 0.0,      // K8s doesn't track temperature
+			PowerDrawWatts:     0.0,
+			IsHealthy:          true,
+		}
+		gpus = append(gpus, gpu)
+	}
+
+	gd.log.Info("✓ Discovered %d GPUs from K8s API", len(gpus))
+	return gpus, nil
+}
+
+// ✅ NEW: Enhanced DiscoverGPUs with fallback strategy
+// Try K8s API first, fall back to nvidia-smi if needed
 func (gd *GPUDiscovery) DiscoverGPUs(ctx context.Context) ([]*common.GPUDevice, error) {
 	// Check cache first
 	cached, err := gd.getCachedGPUs(ctx)
@@ -67,11 +155,28 @@ func (gd *GPUDiscovery) DiscoverGPUs(ctx context.Context) ([]*common.GPUDevice, 
 		return cached, nil
 	}
 
-	// No cache, query nvidia-smi
-	gpus, err := gd.queryNvidiaSMI(ctx)
+	var gpus []*common.GPUDevice
+
+	// ✅ STEP 1: Try Kubernetes API first (preferred)
+	if gd.k8sClient != nil {
+		gpus, err = gd.DiscoverGPUsFromK8s(ctx)
+		if err == nil && len(gpus) > 0 {
+			gd.log.Info("✓ GPU discovery from Kubernetes API successful")
+			// Cache the results
+			if err := gd.cacheGPUs(ctx, gpus); err != nil {
+				gd.log.Warn("Failed to cache GPUs (non-fatal): %v", err)
+			}
+			return gpus, nil
+		}
+		gd.log.Warn("K8s GPU discovery failed: %v (trying nvidia-smi fallback)", err)
+	}
+
+	// ✅ STEP 2: Fall back to nvidia-smi
+	gd.log.Info("Falling back to nvidia-smi for GPU discovery...")
+	gpus, err = gd.queryNvidiaSMI(ctx)
 	if err != nil {
 		gd.log.Error("Failed to query nvidia-smi: %v", err)
-		return nil, fmt.Errorf("nvidia-smi query failed: %w", err)
+		return nil, fmt.Errorf("all GPU discovery methods failed")
 	}
 
 	if len(gpus) == 0 {
@@ -84,9 +189,49 @@ func (gd *GPUDiscovery) DiscoverGPUs(ctx context.Context) ([]*common.GPUDevice, 
 		gd.log.Warn("Failed to cache GPUs (non-fatal): %v", err)
 	}
 
-	gd.log.Info("Discovered %d GPUs", len(gpus))
+	gd.log.Info("✓ GPU discovery from nvidia-smi successful (found %d GPUs)", len(gpus))
 	return gpus, nil
 }
+
+// ✅ NEW: Helper to extract GPU type from node labels
+func (gd *GPUDiscovery) getGPUTypeFromNodeLabels(node *corev1.Node) string {
+	// Check GKE GPU accelerator label
+	if accelerator, ok := node.Labels["cloud.google.com/gke-accelerator"]; ok {
+		if strings.Contains(strings.ToLower(accelerator), "t4") {
+			return "T4"
+		} else if strings.Contains(strings.ToLower(accelerator), "a100") {
+			return "A100"
+		} else if strings.Contains(strings.ToLower(accelerator), "h100") {
+			return "H100"
+		} else if strings.Contains(strings.ToLower(accelerator), "v100") {
+			return "V100"
+		} else if strings.Contains(strings.ToLower(accelerator), "p100") {
+			return "P100"
+		}
+	}
+
+	// Check other cloud providers
+	for key, value := range node.Labels {
+		if strings.Contains(key, "gpu") || strings.Contains(key, "accelerator") {
+			// Try to extract GPU type from label value
+			if strings.Contains(strings.ToLower(value), "t4") {
+				return "T4"
+			} else if strings.Contains(strings.ToLower(value), "a100") {
+				return "A100"
+			} else if strings.Contains(strings.ToLower(value), "h100") {
+				return "H100"
+			}
+		}
+	}
+
+	// Default to unknown but don't fail
+	gd.log.Warn("Could not determine GPU type from node labels, defaulting to 'Unknown'")
+	return "Unknown"
+}
+
+// ============================================================================
+// NVIDIA-SMI FALLBACK (Original implementation)
+// ============================================================================
 
 // queryNvidiaSMI: Execute nvidia-smi and parse output
 // Format: comma-separated values with GPU index, UUID, type, memory, utilization

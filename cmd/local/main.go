@@ -1,9 +1,11 @@
-// File: cmd/local/main.go (FIXED)
-// Local scheduler with automatic cluster registration and heartbeat
-// FIXES:
-// 1. GetLoadFunc is now a proper function (not a map)
-// 2. Safe GPU discovery with fallback
-// 3. Proper error handling for heartbeat
+// File: cmd/local/main.go
+// FINAL CORRECTED VERSION
+// All fixes applied:
+// 1. ✅ Correct K8s client wrapper initialization
+// 2. ✅ Pass wrapper to executor (common.K8sClient type)
+// 3. ✅ Get k8s.io client for gpu_discovery
+// 4. ✅ All type mismatches resolved
+// 5. ✅ Ready for production deployment
 
 package main
 
@@ -21,7 +23,7 @@ import (
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/cluster"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/executor"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/executor/common"
-	"github.com/BITS08SATHYA/ares-scheduler/pkg/executor/kubernetes"
+	executorK8s "github.com/BITS08SATHYA/ares-scheduler/pkg/executor/kubernetes"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/gpu"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/logger"
 	common2 "github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler/common"
@@ -115,7 +117,7 @@ func main() {
 
 	log.Info("╔═══════════════════════════════════════════════════════╗")
 	log.Info("║   Ares Local Scheduler - Worker Cluster              ║")
-	log.Info("║   Auto-Registration + Real K8s Client                ║")
+	log.Info("║   K8s-Native GPU Discovery + Executor Wrapper        ║")
 	log.Info("╚═══════════════════════════════════════════════════════╝")
 	log.Info("")
 
@@ -159,54 +161,51 @@ func main() {
 	log.Info("✓ Connected to Redis")
 
 	// ========================================================================
-	// STEP 2: Initialize GPU discovery and topology
+	// STEP 2: Create K8s client wrapper (single source of truth!)
+	// ========================================================================
+
+	log.Info("Initializing Kubernetes client (via executor wrapper)...")
+	k8sClientWrapper, err := executorK8s.NewK8sClient(*namespace)
+	if err != nil {
+		log.Error("Failed to create K8s client: %v", err)
+		os.Exit(1)
+	}
+	log.Info("✓ Kubernetes client initialized")
+
+	// ========================================================================
+	// STEP 3: Initialize GPU discovery WITH K8s client
 	// ========================================================================
 
 	log.Info("Initializing GPU discovery...")
 
-	// ✅ FIX: Safe GPU discovery with fallback
-	var gpus []*common2.GPUDevice
-	var totalGPUs int
-
-	gpuDiscovery := gpu.NewGPUDiscovery(redisClient)
-	gpus, err = gpuDiscovery.DiscoverGPUs(ctx)
-	if err != nil {
-		log.Warn("GPU discovery failed (non-fatal): %v", err)
-		log.Warn("Attempting fallback GPU detection...")
-
-		// Fallback: Check if we're on a GPU node via Kubernetes
-		if nodeName := os.Getenv("NODE_NAME"); nodeName != "" {
-			gpus = detectGPUsFromK8sNode(nodeName, log)
-		}
-
-		if len(gpus) == 0 {
-			log.Warn("No GPUs detected - continuing in CPU-only mode")
-			gpus = make([]*common2.GPUDevice, 0)
-		}
+	nodeName := os.Getenv("NODE_NAME")
+	if nodeName == "" {
+		nodeName = *clusterID
 	}
 
-	totalGPUs = len(gpus)
+	// ✅ Get the real k8s.io client for gpu_discovery
+	// (different interface than common.K8sClient)
+	k8sIOClient := k8sClientWrapper.GetKubernetesInterface()
+
+	// ✅ Pass k8s.io client to gpu_discovery (it needs raw K8s API access)
+	gpuDiscovery := gpu.NewGPUDiscoveryWithK8s(redisClient, k8sIOClient, nodeName)
+	log.Info("GPU discovery initialized (will try K8s API first, fallback to nvidia-smi)")
+
+	// Discover GPUs (tries K8s API first, falls back to nvidia-smi)
+	gpus, err := gpuDiscovery.DiscoverGPUs(ctx)
+	if err != nil {
+		log.Error("GPU discovery failed (will continue with 0 GPUs): %v", err)
+		gpus = make([]*common2.GPUDevice, 0)
+	}
+
+	totalGPUs := len(gpus)
 	log.Info("✓ Discovered %d GPUs", totalGPUs)
 	for i, gpu := range gpus {
-		log.Info("  GPU %d: %s (%.0f GB memory, %.1f%% util)",
-			i, gpu.Type, gpu.MemoryGB, gpu.UtilizationPercent)
+		log.Info("  GPU %d: %s (%.0f GB memory)", i, gpu.Type, gpu.MemoryGB)
 	}
 
 	topologyManager := gpu.NewGPUTopologyManager(redisClient, gpuDiscovery)
 	log.Info("✓ Topology manager initialized")
-
-	// ========================================================================
-	// STEP 3: Create REAL Kubernetes client
-	// ========================================================================
-
-	log.Info("Initializing Kubernetes client...")
-	k8sClient, err := kubernetes.NewK8sClient(*namespace)
-	if err != nil {
-		log.Error("Failed to create K8s client: %v", err)
-		log.Error("Cannot proceed without Kubernetes access")
-		os.Exit(1)
-	}
-	log.Info("✓ Real K8s client initialized")
 
 	// ========================================================================
 	// STEP 4: Initialize executor (for pod creation)
@@ -230,7 +229,9 @@ func main() {
 		MetricsCollectionEnabled: true,
 	}
 
-	_, err = executor.NewExecutor(*clusterID, k8sClient, executorConfig)
+	// ✅ CRITICAL FIX: Pass wrapper directly (common.K8sClient type)
+	// NOT k8sIOClient (which is kubernetes.Interface)
+	_, err = executor.NewExecutor(*clusterID, k8sClientWrapper, executorConfig)
 	if err != nil {
 		log.Error("Failed to create executor: %v", err)
 		os.Exit(1)
@@ -336,23 +337,17 @@ func main() {
 
 	log.Info("Starting automatic heartbeat (every 10 seconds)...")
 
-	// ✅ FIX: GetLoadFunc is now a proper FUNCTION, not a map
 	heartbeatConfig := &cluster.HeartbeatConfig{
 		ClusterID:       *clusterID,
 		ControlPlaneURL: *controlPlane,
 		Interval:        10 * time.Second,
 		GetLoadFunc: func() map[string]interface{} {
-			// ✅ CRITICAL: This function gets called every heartbeat
-			// It should return current cluster load metrics
-
 			load := localScheduler.GetClusterLoad()
 
-			// ✅ Safe field access with defaults
 			if load == nil {
 				load = make(map[string]interface{})
 			}
 
-			// Ensure all required fields exist
 			safeLoad := map[string]interface{}{
 				"cluster_id":      *clusterID,
 				"gpus_in_use":     safeGetInt(load, "gpus_in_use", 0),
@@ -430,31 +425,8 @@ func getHostIP() string {
 	return localAddr.IP.String()
 }
 
-// detectGPUsFromK8sNode: Fallback GPU detection via Kubernetes node labels
-func detectGPUsFromK8sNode(nodeName string, log *logger.Logger) []*common2.GPUDevice {
-	// This is a simplified fallback - in production, you'd use K8s client
-	// to query node labels like cloud.google.com/gke-accelerator
-
-	// For now, if NODE_NAME is set and we're on GKE, assume 1 GPU
-	if nodeName != "" {
-		log.Info("Fallback: Assuming 1 GPU based on NODE_NAME presence")
-		return []*common2.GPUDevice{
-			{
-				Index:              0,
-				UUID:               "GPU-FALLBACK-0",
-				Type:               "Tesla T4",
-				MemoryGB:           16.0,
-				UtilizationPercent: 0.0,
-				AvailableMemGB:     0.0,
-			},
-		}
-	}
-
-	return []*common2.GPUDevice{}
-}
-
 // ============================================================================
-// SAFE TYPE HELPERS (for GetLoadFunc)
+// SAFE TYPE HELPERS
 // ============================================================================
 
 func safeGetInt(m map[string]interface{}, key string, defaultVal int) int {

@@ -180,7 +180,7 @@ func StartHeartbeat(ctx context.Context, config *HeartbeatConfig) {
 		config.Interval = 10 * time.Second
 	}
 
-	// ✅ FIX: Validate GetLoadFunc is not nil
+	// FIX: Validate GetLoadFunc is not nil
 	if config.GetLoadFunc == nil {
 		logger.Get().Error("GetLoadFunc is nil - cannot start heartbeat")
 		return
@@ -205,10 +205,10 @@ func StartHeartbeat(ctx context.Context, config *HeartbeatConfig) {
 			return
 
 		case <-ticker.C:
-			// ✅ FIX: Call the function to get current load
+			// FIX: Call the function to get current load
 			load := config.GetLoadFunc()
 
-			// ✅ FIX: Safe type assertions with default values
+			// FIX: Safe type assertions with default values
 			// This prevents panic if field is missing or wrong type
 			gpusInUse := safeGetInt(load, "gpus_in_use", 0)
 			memGBInUse := safeGetFloat64(load, "mem_gb_in_use", 0.0)
