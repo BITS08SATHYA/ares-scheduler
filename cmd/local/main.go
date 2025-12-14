@@ -200,8 +200,8 @@ func main() {
 
 	totalGPUs := len(gpus)
 	log.Info("✓ Discovered %d GPUs", totalGPUs)
-	for i, gpu := range gpus {
-		log.Info("  GPU %d: %s (%.0f GB memory)", i, gpu.Type, gpu.MemoryGB)
+	for i, gpu1 := range gpus {
+		log.Info("  GPU %d: %s (%.0f GB memory)", i, gpu1.Type, gpu1.MemoryGB)
 	}
 
 	topologyManager := gpu.NewGPUTopologyManager(redisClient, gpuDiscovery)
@@ -223,7 +223,7 @@ func main() {
 		ImageRegistry:            "docker.io",
 		DefaultJobImage:          "ares-job:latest",
 		RestartPolicy:            "OnFailure",
-		ImagePullPolicy:          "IfNotPresent",
+		ImagePullPolicy:          "Always",
 		EnableGPUSupport:         true,
 		LogCollectionEnabled:     true,
 		MetricsCollectionEnabled: true,

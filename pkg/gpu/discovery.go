@@ -111,6 +111,7 @@ func (gd *GPUDiscovery) DiscoverGPUsFromK8s(ctx context.Context) ([]*common.GPUD
 		return gpus, nil
 	}
 
+	// This is where I get the GPU count
 	gpuCount := int(gpuQuantity.Value())
 	gd.log.Info("Node %s has %d GPU(s) allocatable", gd.nodeName, gpuCount)
 
