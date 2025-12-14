@@ -1,5 +1,5 @@
 // Feature 4: Topology-Aware Scheduling (NVLink, NUMA, PCIe)
-// FIXED VERSION - Compatible with types.go and main.go
+// FIXED VERSION - With bounds checking to prevent panics
 // Detects GPU interconnections and provides affinity scoring
 
 package gpu
@@ -82,7 +82,6 @@ func (gtm *GPUTopologyManager) DetectNVLink(ctx context.Context) ([][]int, error
 }
 
 func (gtm *GPUTopologyManager) queryNVLinkConnections(ctx context.Context) ([][]int, error) {
-	// ✅ FIX: Try multiple nvidia-smi paths
 	nvidiaSMI := findNvidiaSMI()
 	if nvidiaSMI == "" {
 		return [][]int{}, fmt.Errorf("nvidia-smi not found")
@@ -395,6 +394,10 @@ func (gtm *GPUTopologyManager) ScoreGPUSet(
 
 func (gtm *GPUTopologyManager) hasNVLink(nvlinkPairs [][]int, gpu1, gpu2 int) bool {
 	for _, pair := range nvlinkPairs {
+		// ★★★ FIX: Check pair has at least 2 elements ★★★
+		if len(pair) < 2 {
+			continue
+		}
 		if (pair[0] == gpu1 && pair[1] == gpu2) ||
 			(pair[0] == gpu2 && pair[1] == gpu1) {
 			return true
@@ -415,7 +418,7 @@ func (gtm *GPUTopologyManager) isSameNUMA(mapping map[int]int, gpu1, gpu2 int) b
 }
 
 // ============================================================================
-// GPU SET SELECTION
+// GPU SET SELECTION - ★★★ FIXED VERSION ★★★
 // ============================================================================
 
 func (gtm *GPUTopologyManager) SelectBestGPUSet(
@@ -426,11 +429,36 @@ func (gtm *GPUTopologyManager) SelectBestGPUSet(
 	preferSameNUMA bool,
 ) ([]int, *GPUAffinityScore, error) {
 
+	// ★★★ FIX 1: Validate inputs ★★★
+	if len(availableGPUs) == 0 {
+		return nil, nil, fmt.Errorf("no GPUs available")
+	}
+
+	if requestedCount <= 0 {
+		return nil, nil, fmt.Errorf("invalid GPU count: %d", requestedCount)
+	}
+
 	if len(availableGPUs) < requestedCount {
 		return nil, nil, fmt.Errorf("insufficient GPUs: have %d, need %d",
 			len(availableGPUs), requestedCount)
 	}
 
+	// ★★★ FIX 2: Special case for single GPU - skip all pair logic ★★★
+	if requestedCount == 1 {
+		// Just return the best single GPU (most memory, healthiest)
+		bestGPU := gtm.selectSingleBestGPU(availableGPUs)
+		return []int{bestGPU.Index}, &GPUAffinityScore{
+			GPU1Index:      bestGPU.Index,
+			GPU2Index:      -1, // No second GPU
+			Score:          50.0,
+			Reason:         "single-gpu-no-affinity-needed",
+			HasNVLink:      false,
+			SameNUMA:       false,
+			PCIeGeneration: 4,
+		}, nil
+	}
+
+	// Multi-GPU case: detect topology and find best combination
 	topology, err := gtm.DetectTopology(ctx)
 	if err != nil {
 		return nil, nil, fmt.Errorf("topology detection failed: %w", err)
@@ -449,13 +477,14 @@ func (gtm *GPUTopologyManager) SelectBestGPUSet(
 		indices := gtm.extractIndices(gpuSet)
 		score := gtm.ScoreGPUSet(indices, topology)
 
-		if preferNVLink {
+		// ★★★ FIX 3: Check length before accessing indices[1] ★★★
+		if preferNVLink && len(indices) >= 2 {
 			if gtm.hasNVLink(topology.NVLinkPairs, indices[0], indices[1]) {
 				score += 25.0
 			}
 		}
 
-		if preferSameNUMA && len(indices) > 1 {
+		if preferSameNUMA && len(indices) >= 2 {
 			if gtm.isSameNUMA(topology.GPUToNUMA, indices[0], indices[1]) {
 				score += 15.0
 			}
@@ -468,9 +497,50 @@ func (gtm *GPUTopologyManager) SelectBestGPUSet(
 	}
 
 	indices := gtm.extractIndices(bestSet)
-	scoreDetail := gtm.ScoreGPUPlacement(indices[0], indices[1], topology)
+
+	// ★★★ FIX 4: Handle single vs multi-GPU scoring safely ★★★
+	var scoreDetail *GPUAffinityScore
+	if len(indices) >= 2 {
+		scoreDetail = gtm.ScoreGPUPlacement(indices[0], indices[1], topology)
+	} else if len(indices) == 1 {
+		scoreDetail = &GPUAffinityScore{
+			GPU1Index:      indices[0],
+			GPU2Index:      -1,
+			Score:          50.0,
+			Reason:         "single-gpu",
+			HasNVLink:      false,
+			SameNUMA:       false,
+			PCIeGeneration: 4,
+		}
+	} else {
+		return nil, nil, fmt.Errorf("no GPUs selected")
+	}
 
 	return indices, scoreDetail, nil
+}
+
+// ★★★ NEW HELPER: Select single best GPU ★★★
+func (gtm *GPUTopologyManager) selectSingleBestGPU(gpus []*common.GPUDevice) *common.GPUDevice {
+	if len(gpus) == 0 {
+		return nil
+	}
+	if len(gpus) == 1 {
+		return gpus[0]
+	}
+
+	best := gpus[0]
+	for _, gpu := range gpus[1:] {
+		// Prefer healthy GPUs
+		if gpu.IsHealthy && !best.IsHealthy {
+			best = gpu
+			continue
+		}
+		// Prefer more available memory
+		if gpu.AvailableMemGB > best.AvailableMemGB {
+			best = gpu
+		}
+	}
+	return best
 }
 
 func (gtm *GPUTopologyManager) generateGPUCombinations(
@@ -653,7 +723,6 @@ func findNvidiaSMI() string {
 // GPU DISCOVERY HELPERS (For Fallback)
 // ============================================================================
 
-// ✅ FIX: These are standalone helper functions, not recursive calls
 func detectGPUsFromKubernetesNode(nodeName string) ([]*common.GPUDevice, error) {
 	log := logger.Get()
 
