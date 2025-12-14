@@ -110,7 +110,7 @@ func NewLocalScheduler(
 	redisClient *redis.RedisClient,
 	gpuDiscovery *gpu.GPUDiscovery,
 	topologyManager *gpu.GPUTopologyManager,
-	// executor *executor.Executor,
+// executor *executor.Executor,
 ) *LocalScheduler {
 	return &LocalScheduler{
 		clusterID:       clusterID,
@@ -240,6 +240,7 @@ func (ls *LocalScheduler) SelectBestNode(
 	jobSpec *common.JobSpec,
 ) (*NodeState, *SchedulingScore, error) {
 
+	// get all the nodes
 	nodes := ls.ListNodes()
 	if len(nodes) == 0 {
 		return nil, nil, fmt.Errorf("no nodes available in cluster")
@@ -248,6 +249,9 @@ func (ls *LocalScheduler) SelectBestNode(
 	var bestNode *NodeState
 	var bestScore *SchedulingScore
 
+	// A Worker cluster contains n nodes.  list all nodes whether it is a cpu or gpu node then
+	// iterate each node and to use the gpu flag
+	// to filter out the gpu node and score it
 	for _, node := range nodes {
 		if !node.IsHealthy {
 			ls.log.Debug("Skipping unhealthy node %s", node.NodeID)

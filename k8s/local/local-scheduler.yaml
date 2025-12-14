@@ -18,7 +18,8 @@ spec:
         container.apparmor.security.beta.kubernetes.io/ares-local: "unconfined"
     spec:
       nodeSelector:
-        ares.ai/gpu: "true"
+#        ares.ai/gpu: "true"
+        cloud.google.com/gke-nodepool: default-pool
 
       # Use host network to access nvidia-smi
       hostNetwork: false  # Keep as false for now
@@ -118,13 +119,19 @@ spec:
       serviceAccountName: ares-scheduler
 
       tolerations:
-        - key: nvidia.com/gpu
-          operator: Exists
-          effect: NoSchedule
-        - key: accelerator
+        - key: cloud.google.com/gke-nodepool
           operator: Equal
-          value: t4
+          value: default-pool
           effect: NoSchedule
-        - key: cloud.google.com/gke-accelerator
-          operator: Exists
-          effect: NoSchedule
+
+#      tolerations:
+#        - key: nvidia.com/gpu
+#          operator: Exists
+#          effect: NoSchedule
+#        - key: accelerator
+#          operator: Equal
+#          value: t4
+#          effect: NoSchedule
+#        - key: cloud.google.com/gke-accelerator
+#          operator: Exists
+#          effect: NoSchedule
