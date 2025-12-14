@@ -1,11 +1,12 @@
 // File: cmd/local/main.go
-// FINAL CORRECTED VERSION
+// FINAL CORRECTED VERSION - WITH NODE REGISTRATION FIX
 // All fixes applied:
 // 1. ✅ Correct K8s client wrapper initialization
 // 2. ✅ Pass wrapper to executor (common.K8sClient type)
 // 3. ✅ Get k8s.io client for gpu_discovery
 // 4. ✅ All type mismatches resolved
 // 5. ✅ Ready for production deployment
+// 6. ✅ NODE REGISTRATION ADDED - Fixes "no nodes available in cluster" error
 
 package main
 
@@ -42,6 +43,7 @@ const (
 	DefaultNamespace    = "ares-jobs"
 	DefaultRegion       = "us-west"
 	DefaultZone         = "us-west-1a"
+	DefaultMemoryGB     = 512.0 // Default node memory in GB
 )
 
 // ============================================================================
@@ -102,6 +104,12 @@ var (
 		getEnvString("ARES_CLUSTER_ADDRESS", ""),
 		"Override cluster address (env: ARES_CLUSTER_ADDRESS)",
 	)
+
+	nodeMemoryGB = flag.Float64(
+		"node-memory-gb",
+		getEnvFloat64("ARES_NODE_MEMORY_GB", DefaultMemoryGB),
+		"Node memory in GB (env: ARES_NODE_MEMORY_GB)",
+	)
 )
 
 // ============================================================================
@@ -142,6 +150,7 @@ func main() {
 	log.Info("  Redis: %s", *redisAddr)
 	log.Info("  Control Plane: %s", *controlPlane)
 	log.Info("  K8s Namespace: %s", *namespace)
+	log.Info("  Node Memory: %.0f GB", *nodeMemoryGB)
 	log.Info("  Log Level: %s", *logLevel)
 	log.Info("")
 
@@ -252,6 +261,45 @@ func main() {
 	log.Info("✓ Local scheduler initialized")
 
 	// ========================================================================
+	// STEP 5b: REGISTER THIS NODE WITH LOCAL SCHEDULER
+	// ========================================================================
+	// ★★★ CRITICAL FIX ★★★
+	// Without this, ListNodes() returns empty and scheduling fails with:
+	// "node selection failed: no nodes available in cluster"
+
+	log.Info("")
+	log.Info("╔─────────────────────────────────────────────────────╗")
+	log.Info("║    REGISTERING NODE WITH LOCAL SCHEDULER           ║")
+	log.Info("╚─────────────────────────────────────────────────────╝")
+
+	nodeState := &local.NodeState{
+		NodeID:            *clusterID, // Use cluster ID as node ID for single-node clusters
+		IsHealthy:         true,
+		GPUCount:          totalGPUs,
+		AvailableGPUs:     totalGPUs,     // Initially all GPUs available
+		MemoryGB:          *nodeMemoryGB, // From flag/env
+		AvailableMemoryGB: *nodeMemoryGB, // Initially all memory available
+		RunningJobsCount:  0,
+		LastHealthCheck:   time.Now(),
+		GPUsInfo:          gpus, // From GPU discovery
+	}
+
+	err = localScheduler.RegisterNode(ctx, nodeState)
+	if err != nil {
+		log.Error("Failed to register node: %v", err)
+		os.Exit(1)
+	}
+	log.Info("✓ Node registered with LocalScheduler:")
+	log.Info("    Node ID: %s", nodeState.NodeID)
+	log.Info("    GPUs: %d (all available)", nodeState.GPUCount)
+	log.Info("    Memory: %.0f GB (all available)", nodeState.MemoryGB)
+	log.Info("    Health: %v", nodeState.IsHealthy)
+
+	// Verify registration worked
+	registeredNodes := localScheduler.ListNodes()
+	log.Info("✓ Verified: LocalScheduler now has %d registered node(s)", len(registeredNodes))
+
+	// ========================================================================
 	// STEP 6: AUTO-REGISTER CLUSTER WITH CONTROL PLANE
 	// ========================================================================
 
@@ -287,7 +335,7 @@ func main() {
 		ControlPlaneURL:    *controlPlane,
 		TotalGPUs:          totalGPUs,
 		TotalCPUs:          256,
-		TotalMemoryGB:      512.0,
+		TotalMemoryGB:      *nodeMemoryGB,
 		GPUTopology:        topologyData,
 	}
 
@@ -330,6 +378,8 @@ func main() {
 	log.Info("  GET    /status         - Cluster status")
 	log.Info("  GET    /metrics        - Metrics")
 	log.Info("")
+	log.Info("Registered Nodes: %d", len(localScheduler.ListNodes()))
+	log.Info("")
 
 	// ========================================================================
 	// STEP 8: START AUTOMATIC HEARTBEAT
@@ -356,7 +406,7 @@ func main() {
 				"running_jobs":    safeGetInt(load, "running_jobs", 0),
 				"pending_jobs":    safeGetInt(load, "pending_jobs", 0),
 				"total_gpus":      totalGPUs,
-				"total_memory_gb": 512.0,
+				"total_memory_gb": *nodeMemoryGB,
 				"nodes_count":     safeGetInt(load, "nodes_count", 0),
 			}
 
@@ -399,18 +449,28 @@ func initializeLogger(logLevel string) *logger.Logger {
 
 // getClusterAddress determines how the control plane will reach this scheduler
 func getClusterAddress(port int, override string) string {
-	// First try to get external address from env var
+	// First check explicit override
+	if override != "" {
+		return override
+	}
+
+	// Try to get external address from env var
 	if externalAddr := os.Getenv("ARES_LOCAL_SCHEDULER_EXTERNAL_ADDR"); externalAddr != "" {
 		return externalAddr
 	}
 
 	// Fallback to pod IP (for single-cluster testing)
 	if podIP := os.Getenv("POD_IP"); podIP != "" {
-		return fmt.Sprintf("http://%s:9090", podIP)
+		return fmt.Sprintf("http://%s:%d", podIP, port)
+	}
+
+	// Try to get host IP
+	if hostIP := getHostIP(); hostIP != "" {
+		return fmt.Sprintf("http://%s:%d", hostIP, port)
 	}
 
 	// Last resort: localhost
-	return "http://localhost:9090"
+	return fmt.Sprintf("http://localhost:%d", port)
 }
 
 // getHostIP attempts to get the host's primary IP address
@@ -478,6 +538,24 @@ func getEnvInt(key string, defaultValue int) int {
 	if value := os.Getenv(key); value != "" {
 		if intValue, err := strconv.Atoi(value); err == nil {
 			return intValue
+		}
+	}
+	return defaultValue
+}
+
+func getEnvFloat64(key string, defaultValue float64) float64 {
+	if value := os.Getenv(key); value != "" {
+		if floatValue, err := strconv.ParseFloat(value, 64); err == nil {
+			return floatValue
+		}
+	}
+	return defaultValue
+}
+
+func getEnvBool(key string, defaultValue bool) bool {
+	if value := os.Getenv(key); value != "" {
+		if boolValue, err := strconv.ParseBool(value); err == nil {
+			return boolValue
 		}
 	}
 	return defaultValue
