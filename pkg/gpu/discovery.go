@@ -79,7 +79,7 @@ func NewGPUDiscovery(redisClient *redis.RedisClient) *GPUDiscovery {
 // GPU DETECTION (Feature 13) - WITH K8s API SUPPORT
 // ============================================================================
 
-// ✅ NEW: DiscoverGPUsFromK8s - Query Kubernetes API for GPU allocatable resources
+// NEW: DiscoverGPUsFromK8s - Query Kubernetes API for GPU allocatable resources
 // This is the PREFERRED method when K8s client is available
 // Returns: Array of GPU devices based on node allocatable resources
 // Latency: ~50-100ms (K8s API call)
@@ -104,7 +104,7 @@ func (gd *GPUDiscovery) DiscoverGPUsFromK8s(ctx context.Context) ([]*common.GPUD
 
 	gpus := make([]*common.GPUDevice, 0)
 
-	// Check if node has GPU allocatable
+	// Check if node has GPU allocatable(limited to nvidia gpu devices)
 	gpuQuantity, ok := node.Status.Allocatable[corev1.ResourceName("nvidia.com/gpu")]
 	if !ok || gpuQuantity.Value() == 0 {
 		gd.log.Info("Node %s has no GPU allocatable resources", gd.nodeName)
@@ -241,7 +241,7 @@ func (gd *GPUDiscovery) queryNvidiaSMI(ctx context.Context) ([]*common.GPUDevice
 	// Command format:
 	// nvidia-smi --query-gpu=index,gpu_uuid,gpu_name,memory.total,memory.free,utilization.gpu,temperature.gpu \
 	//            --format=csv,noheader,nounits
-	cmd := exec.CommandContext(ctx, "nvidia-smi",
+	cmd := exec.CommandContext(ctx, "/opt/nvidia/bin/nvidia-smi",
 		"--query-gpu=index,gpu_uuid,gpu_name,memory.total,memory.free,utilization.gpu,temperature.gpu",
 		"--format=csv,noheader,nounits")
 
@@ -399,12 +399,15 @@ func (gd *GPUDiscovery) CheckGPUHealth(ctx context.Context, gpus []*common.GPUDe
 // queryGPUPowerDraw: Get current power draw in watts
 // Returns: Power in watts, or error if GPU unavailable
 func (gd *GPUDiscovery) queryGPUPowerDraw(ctx context.Context, gpuIndex int) (float64, error) {
-	cmd := exec.CommandContext(ctx, "nvidia-smi",
+	cmd := exec.CommandContext(ctx, "/opt/nvidia/bin/nvidia-smi",
 		fmt.Sprintf("--id=%d", gpuIndex),
 		"--query-gpu=power.draw",
 		"--format=csv,noheader,nounits")
 
 	output, err := cmd.Output()
+
+	gd.log.Info("Nvidia output: ", output)
+
 	if err != nil {
 		return 0, fmt.Errorf("nvidia-smi power query failed: %w", err)
 	}

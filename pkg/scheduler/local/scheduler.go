@@ -110,7 +110,7 @@ func NewLocalScheduler(
 	redisClient *redis.RedisClient,
 	gpuDiscovery *gpu.GPUDiscovery,
 	topologyManager *gpu.GPUTopologyManager,
-// executor *executor.Executor,
+	// executor *executor.Executor,
 ) *LocalScheduler {
 	return &LocalScheduler{
 		clusterID:       clusterID,

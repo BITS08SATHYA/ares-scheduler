@@ -17,12 +17,9 @@ spec:
       annotations:
         container.apparmor.security.beta.kubernetes.io/ares-local: "unconfined"
     spec:
-      nodeSelector:
-#        ares.ai/gpu: "true"
-        cloud.google.com/gke-nodepool: default-pool
+      # ✅ NO nodeSelector - runs on all WORKER nodes
 
-      # Use host network to access nvidia-smi
-      hostNetwork: false  # Keep as false for now
+      hostNetwork: false
       hostPID: false
 
       containers:
@@ -40,42 +37,56 @@ spec:
 
           env:
             - name: ARES_REDIS_ADDR
-              value: "34.86.46.217:6379"
+              value: "34.145.167.199:6379"
+#              value: "34.86.13.151:6379"
             - name: ARES_CONTROL_PLANE
               value: "http://35.245.157.53:8080"
 
-            # ✅ FIX 1: Add external address for registration
             - name: ARES_LOCAL_SCHEDULER_EXTERNAL_ADDR
-              value: "http://34.48.68.132:9090"  # CHANGE THIS to actual LoadBalancer IP
+              value: "http://34.48.68.132:9090"
+
+            - name: WORKER_CLUSTER_ID
+              valueFrom:
+                configMapKeyRef:
+                  name: cluster-config
+                  key: cluster-name-full
 
             - name: NODE_NAME
               valueFrom:
                 fieldRef:
                   fieldPath: spec.nodeName
+
             - name: POD_NAME
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.name
+
             - name: POD_NAMESPACE
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
+
             - name: POD_IP
               valueFrom:
                 fieldRef:
                   fieldPath: status.podIP
-            - name: ARES_CLUSTER_ID
-              value: "gke-ares-gpu-worker"
+#            - name: ARES_CLUSTER_ID
+#              value: "gke-ares-gpu-worker"
+
             - name: ARES_REGION
               value: "us-east4"
+
             - name: ARES_ZONE
               value: "us-east4-a"
+
             - name: ARES_K8S_NAMESPACE
               value: "ares-system"
 
-            # ✅ FIX 2: Point to host's nvidia-smi
-            - name: NVIDIA_SMI_PATH
-              value: "/host-usr/bin/nvidia-smi"
+            - name: PATH
+              value: "/opt/nvidia/bin:/usr/bin:/usr/local/bin:/bin:/sbin"
+
+            - name: LD_LIBRARY_PATH
+              value: "/opt/nvidia/lib64:/opt/nvidia/lib:/usr/lib64"
 
             - name: ARES_LOG_LEVEL
               value: "info"
@@ -85,10 +96,9 @@ spec:
               containerPort: 9090
               protocol: TCP
 
-          # ✅ FIX 2: Mount host /usr/bin to access nvidia-smi
           volumeMounts:
-            - name: host-usr-bin
-              mountPath: /host-usr/bin
+            - name: host-opt-nvidia
+              mountPath: /opt/nvidia
               readOnly: true
 
           livenessProbe:
@@ -109,29 +119,54 @@ spec:
             timeoutSeconds: 3
             failureThreshold: 3
 
-      # ✅ Mount host /usr/bin directory
       volumes:
-        - name: host-usr-bin
+        - name: host-opt-nvidia
           hostPath:
-            path: /usr/bin
+            path: /opt/nvidia
             type: Directory
 
       serviceAccountName: ares-scheduler
 
+      # ✅ CORRECTED TOLERATIONS (Worker nodes ONLY)
+      # These tolerations allow the DaemonSet to run on:
+      # - Regular CPU worker nodes (no special taint)
+      # - GPU worker nodes (have nvidia.com/gpu taint)
+      # - Worker nodes with cloud-provider GPU taints
+      # - Worker nodes with custom accelerator taints
+      # - Worker nodes with any other custom taints (catch-all)
+      #
+      # These tolerations DO NOT allow:
+      # ❌ Control-plane nodes (no toleration for control-plane taint)
+      # ❌ Master nodes (no toleration for master taint)
       tolerations:
-        - key: cloud.google.com/gke-nodepool
-          operator: Equal
-          value: default-pool
+        # Tolerate GPU-specific taints (for GPU worker nodes)
+        - key: nvidia.com/gpu
+          operator: Exists
           effect: NoSchedule
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoExecute
 
-#      tolerations:
-#        - key: nvidia.com/gpu
-#          operator: Exists
-#          effect: NoSchedule
-#        - key: accelerator
-#          operator: Equal
-#          value: t4
-#          effect: NoSchedule
-#        - key: cloud.google.com/gke-accelerator
-#          operator: Exists
-#          effect: NoSchedule
+        # Tolerate cloud-provider GPU taints (GCP, AWS, Azure)
+        - key: cloud.google.com/gke-accelerator
+          operator: Exists
+          effect: NoSchedule
+        - key: cloud.google.com/gke-accelerator
+          operator: Exists
+          effect: NoExecute
+
+        # Tolerate generic accelerator taints (some clusters use these)
+        - key: accelerator
+          operator: Exists
+          effect: NoSchedule
+        - key: accelerator
+          operator: Exists
+          effect: NoExecute
+
+        # Catch-all: tolerate any OTHER custom worker node taints
+        # This allows the DaemonSet to run on worker nodes
+        # with any custom taints not listed above
+        - operator: Exists
+          effect: NoExecute
+        - operator: Exists
+          effect: NoSchedule

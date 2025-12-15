@@ -692,6 +692,31 @@ func (gtm *GPUTopologyManager) ClearTopologyCache(ctx context.Context) error {
 	return gtm.redisClient.Del(ctx, gtm.cacheKey)
 }
 
+func (gtm *GPUTopologyManager) FindNvidiaSMI_test_path() string {
+	log := logger.Get()
+
+	paths := []string{
+		"/opt/nvidia/bin/nvidia-smi",
+		"/host-usr/bin/nvidia-smi",
+		"/usr/bin/nvidia-smi",
+		"/usr/local/bin/nvidia-smi",
+		"/usr/local/nvidia/bin/nvidia-smi",
+		"nvidia-smi",
+	}
+
+	//path := "/opt/nvidia/bin/nvidia-smi"
+
+	for _, path := range paths {
+		if _, err := exec.LookPath(path); err == nil {
+			log.Info("✓ opt location used: Found nvidia-smi at: %s", path)
+			return path
+		}
+	}
+
+	log.Warn("opt location was used .. nvidia-smi not found in any standard location")
+	return ""
+}
+
 // ============================================================================
 // HELPER: Find nvidia-smi
 // ============================================================================
@@ -700,22 +725,24 @@ func findNvidiaSMI() string {
 	log := logger.Get()
 
 	paths := []string{
+		"/opt/nvidia/bin/nvidia-smi",
 		"/host-usr/bin/nvidia-smi",
 		"/usr/bin/nvidia-smi",
 		"/usr/local/bin/nvidia-smi",
 		"/usr/local/nvidia/bin/nvidia-smi",
-		"/opt/nvidia/bin/nvidia-smi",
 		"nvidia-smi",
 	}
 
+	//path := "/opt/nvidia/bin/nvidia-smi"
+
 	for _, path := range paths {
 		if _, err := exec.LookPath(path); err == nil {
-			log.Info("✓ Found nvidia-smi at: %s", path)
+			log.Info("✓ opt helper location used: Found nvidia-smi at: %s", path)
 			return path
 		}
 	}
 
-	log.Warn("nvidia-smi not found in any standard location")
+	log.Warn("opt helper location was used .. nvidia-smi not found in any standard location")
 	return ""
 }
 

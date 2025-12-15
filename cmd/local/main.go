@@ -53,8 +53,14 @@ const (
 var (
 	clusterID = flag.String(
 		"cluster-id",
-		getEnvString("ARES_CLUSTER_ID", ""),
+		getEnvString("WORKER_CLUSTER_ID", ""),
 		"Cluster ID (required, env: ARES_CLUSTER_ID)",
+	)
+
+	nodeID = flag.String(
+		"node-id",
+		getEnvString("NODE_NAME", ""),
+		"Node ID (required, env: NODE_NAME)",
 	)
 
 	localPort = flag.Int(
@@ -131,19 +137,23 @@ func main() {
 
 	// Validate required flags
 	if *clusterID == "" {
-		// Try to use NODE_NAME from Kubernetes if available
-		if nodeName := os.Getenv("NODE_NAME"); nodeName != "" {
-			*clusterID = nodeName
-			log.Info("Using NODE_NAME as cluster-id: %s", *clusterID)
-		} else {
-			log.Error("Error: --cluster-id is required (or set NODE_NAME env var)")
-			flag.Usage()
-			os.Exit(1)
-		}
+		//// Try to use NODE_NAME from Kubernetes if available
+		//if nodeName := os.Getenv("NODE_NAME"); nodeName != "" {
+		//	*clusterID = nodeName
+		//	log.Info("Using NODE_NAME as cluster-id: %s", *clusterID)
+		//} else {
+		//	log.Error("Error: --cluster-id is required (or set NODE_NAME env var)")
+		//	flag.Usage()
+		//	os.Exit(1)
+		//}
+		log.Error("Error: --cluster-id is required (or set NODE_NAME env var)")
+		flag.Usage()
+		os.Exit(1)
 	}
 
 	log.Info("Configuration:")
 	log.Info("  Cluster ID: %s", *clusterID)
+	log.Info("  Node ID: %s", *nodeID)
 	log.Info("  Region: %s", *region)
 	log.Info("  Zone: %s", *zone)
 	log.Info("  Port: %d", *localPort)
@@ -187,10 +197,11 @@ func main() {
 
 	log.Info("Initializing GPU discovery...")
 
-	nodeName := os.Getenv("NODE_NAME")
-	if nodeName == "" {
-		nodeName = *clusterID
-	}
+	//nodeName := os.Getenv("NODE_NAME")
+	//if nodeName == "" {
+	//	nodeName = *nodeID
+	//}
+	nodeName := *nodeID
 
 	// ✅ Get the real k8s.io client for gpu_discovery
 	// (different interface than common.K8sClient)
@@ -215,6 +226,16 @@ func main() {
 
 	topologyManager := gpu.NewGPUTopologyManager(redisClient, gpuDiscovery)
 	log.Info("✓ Topology manager initialized")
+	log.Info("Detecting Nvidia-smi...")
+	smiPath := topologyManager.FindNvidiaSMI_test_path()
+
+	if smiPath == "" {
+		log.Warn("⚠️  nvidia-smi not found - GPU topology detection disabled")
+		log.Warn("    GPU discovery will use Kubernetes API")
+	} else {
+		log.Info("✓ GPU topology detection enabled")
+		log.Info("  nvidia-smi path: %s", smiPath)
+	}
 
 	// ========================================================================
 	// STEP 4: Initialize executor (for pod creation)
@@ -273,7 +294,7 @@ func main() {
 	log.Info("╚─────────────────────────────────────────────────────╝")
 
 	nodeState := &local.NodeState{
-		NodeID:            *clusterID, // Use cluster ID as node ID for single-node clusters
+		NodeID:            *nodeID,
 		IsHealthy:         true,
 		GPUCount:          totalGPUs,
 		AvailableGPUs:     totalGPUs,     // Initially all GPUs available
