@@ -406,7 +406,7 @@ func (gd *GPUDiscovery) queryGPUPowerDraw(ctx context.Context, gpuIndex int) (fl
 
 	output, err := cmd.Output()
 
-	gd.log.Info("Nvidia output: ", output)
+	gd.log.Info("New:) Nvidia output: ", output)
 
 	if err != nil {
 		return 0, fmt.Errorf("nvidia-smi power query failed: %w", err)
