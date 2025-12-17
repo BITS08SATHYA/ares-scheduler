@@ -10,13 +10,11 @@ import (
 	"fmt"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/cluster"
 	common2 "github.com/BITS08SATHYA/ares-scheduler/pkg/executor/common"
-	"github.com/BITS08SATHYA/ares-scheduler/pkg/executor/kubernetes"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/idempotency"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/lease"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/orchestrator"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/storage/etcd"
 
-	"github.com/BITS08SATHYA/ares-scheduler/pkg/executor"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler/common"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler/global"
 	"io"
@@ -439,42 +437,42 @@ func NewAPIGatewayWithCoordinator(
 	// LAYER 9: Executor (Kubernetes Pod creation)
 	// ========================================================================
 
-	log.Info("Layer 9: Initializing Kubernetes executor...")
+	//log.Info("Layer 9: Initializing Kubernetes executor...")
 
 	// ✅ CRITICAL FIX: Create as pointer type!
 	// K8sClientImpl has pointer receivers, so it must be a pointer to satisfy the interface
-	mockK8sClient := &kubernetes.K8sClientImpl{}
+	//mockK8sClient := &kubernetes.K8sClientImpl{}
 
-	executorConfig := &common2.ExecutorConfig{
-		ClusterID:                "global-control-plane",
-		Namespace:                "default",
-		DefaultTimeout:           1 * time.Hour,
-		DefaultMemoryMB:          1024,
-		DefaultCPUMillis:         500,
-		HealthCheckInterval:      5 * time.Second,
-		MaxConcurrentJobs:        1000,
-		ImageRegistry:            "docker.io",
-		DefaultJobImage:          "ares-job:latest",
-		RestartPolicy:            "OnFailure",
-		ImagePullPolicy:          "IfNotPresent",
-		EnableGPUSupport:         true,
-		LogCollectionEnabled:     true,
-		MetricsCollectionEnabled: true,
-	}
+	//executorConfig := &common2.ExecutorConfig{
+	//	ClusterID:                "global-control-plane",
+	//	Namespace:                "default",
+	//	DefaultTimeout:           1 * time.Hour,
+	//	DefaultMemoryMB:          1024,
+	//	DefaultCPUMillis:         500,
+	//	HealthCheckInterval:      5 * time.Second,
+	//	MaxConcurrentJobs:        1000,
+	//	ImageRegistry:            "docker.io",
+	//	DefaultJobImage:          "ares-job:latest",
+	//	RestartPolicy:            "OnFailure",
+	//	ImagePullPolicy:          "IfNotPresent",
+	//	EnableGPUSupport:         true,
+	//	LogCollectionEnabled:     true,
+	//	MetricsCollectionEnabled: true,
+	//}
 
-	executorService, err := executor.NewExecutor(
-		"global-control-plane",
-		mockK8sClient, // ✅ FIX: Now this is a pointer, satisfies interface
-		executorConfig,
-	)
-	if err != nil {
-		log.Error("Failed to create executor: %v", err)
-		redisClient.Close()
-		etcdClient.Close()
-		return nil, fmt.Errorf("executor creation failed: %w", err)
-	}
-
-	log.Info("✓ Layer 9: Executor")
+	//executorService, err := executor.NewExecutor(
+	//	"global-control-plane",
+	//	mockK8sClient, // ✅ FIX: Now this is a pointer, satisfies interface
+	//	executorConfig,
+	//)
+	//if err != nil {
+	//	log.Error("Failed to create executor: %v", err)
+	//	redisClient.Close()
+	//	etcdClient.Close()
+	//	return nil, fmt.Errorf("executor creation failed: %w", err)
+	//}
+	//
+	//log.Info("✓ Layer 9: Executor")
 
 	// ========================================================================
 	// LAYER 7: Global Scheduler
@@ -494,7 +492,6 @@ func NewAPIGatewayWithCoordinator(
 		leaseManager,
 		jobStore,
 		globalScheduler,
-		executorService,
 	)
 
 	log.Info("✓ Layer 10: JobCoordinator")
@@ -526,7 +523,7 @@ func NewAPIGatewayWithCoordinator(
 		activeJobs:      make(map[string]*common2.ExecutionContext),
 		completedJobs:   make(map[string]*common2.ExecutionResult),
 		podRegistry:     make(map[string]*common2.PodInfo),
-		k8sClient:       mockK8sClient, // ✅ FIX: Use pointer
+		//k8sClient:       mockK8sClient, //
 	}
 
 	gatewayWithCoordinator := &APIGatewayWithCoordinator{

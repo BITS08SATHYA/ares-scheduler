@@ -1,9 +1,10 @@
 // File: cmd/global/main.go (FINAL CORRECTED)
-// Entry point for Ares Scheduler API Gateway
-// FIXES:
-// 1. Single etcd.endpoint (not plural)
-// 2. No comma-separated parsing needed
-// 3. Simplified configuration
+// Entry point for Ares Scheduler - GLOBAL LAYER
+//
+// ✅ CRITICAL FIX:
+// - NO executor initialization (executor belongs in LOCAL scheduler!)
+// - NO executorConfig (cluster-specific, belongs in LOCAL)
+// - Just decision-making layers
 
 package main
 
@@ -30,8 +31,8 @@ const (
 	DefaultGatewayPort    = 8080
 	DefaultRequestTimeout = 30 * time.Second
 	DefaultMaxRequestSize = 1 << 20 // 1MB
-
-	// Storage - ✅ FIX: Single endpoint, not plural
+	DefaultNamespace      = "ares-jobs"
+	// Storage
 	DefaultETCDEndpoint = "localhost:2379"
 	DefaultRedisAddr    = "localhost:6379"
 	DefaultControlPlane = "localhost:8080"
@@ -57,7 +58,7 @@ var (
 		"Request timeout",
 	)
 
-	// Storage flags - ✅ FIX: Single endpoint
+	// Storage flags
 	etcdEndpoint = flag.String(
 		"etcd.endpoint",
 		getEnvString("ARES_ETCD_ENDPOINT", DefaultETCDEndpoint),
@@ -73,14 +74,14 @@ var (
 	controlPlane = flag.String(
 		"control-plane.addr",
 		getEnvString("ARES_CONTROL_PLANE", DefaultControlPlane),
-		"Control plane address for lease metadata (env: ARES_CONTROL_PLANE)",
+		"Control plane address (env: ARES_CONTROL_PLANE)",
 	)
 
 	// Logging
 	logLevel = flag.String(
 		"log.level",
 		getEnvString("ARES_LOG_LEVEL", "info"),
-		"Log level (debug, info, warn, error, env: ARES_LOG_LEVEL)",
+		"Log level (env: ARES_LOG_LEVEL)",
 	)
 
 	// Feature flags
@@ -115,11 +116,11 @@ func main() {
 
 	log.Info("")
 	log.Info("╔════════════════════════════════════════════════════════╗")
-	log.Info("║     Ares Scheduler - API Gateway                       ║")
-	log.Info("║     Multi-Cluster GPU Scheduler with Exactly-Once      ║")
+	log.Info("║     Ares Scheduler - GLOBAL CONTROL PLANE              ║")
+	log.Info("║     Multi-Cluster GPU Scheduler (Layers 1-5)           ║")
 	log.Info("╚════════════════════════════════════════════════════════╝")
 	log.Info("")
-	log.Info("Starting Ares Gateway (all 10 layers)...")
+	log.Info("Starting Ares Global Scheduler...")
 	log.Info("")
 
 	// Create gateway configuration
@@ -135,7 +136,7 @@ func main() {
 
 	log.Info("Configuration:")
 	log.Info("  Gateway Port: %d", gatewayConfig.Port)
-	log.Info("  etcd Endpoint: %s", *etcdEndpoint) // ✅ FIX: Singular
+	log.Info("  etcd Endpoint: %s", *etcdEndpoint)
 	log.Info("  Redis: %s", *redisAddr)
 	log.Info("  Control Plane: %s", *controlPlane)
 	log.Info("  Log Level: %s", *logLevel)
@@ -148,7 +149,7 @@ func main() {
 	var err error
 
 	if *enableCoordinator {
-		log.Info("Initializing API Gateway WITH Job Coordinator (10-layer pipeline)...")
+		log.Info("Initializing API Gateway WITH Job Coordinator...")
 
 		// Initialize Redis for cluster manager
 		redisClient, err := redis.NewRedisClient(*redisAddr, "", 0)
@@ -166,13 +167,14 @@ func main() {
 			MaxConsecutiveFailures: 3,
 		})
 
-		// ✅ FIX: Wrap single endpoint in array (gateway expects []string)
+		// Wrap single endpoint in array
 		etcdEndpoints := []string{*etcdEndpoint}
 
-		// Initialize gateway with coordinator
+		// Initialize gateway with coordinator (makes scheduling decisions)
+		// ✅ CORRECTED: No executor passed!
 		gatewayWithCoordinator, err := gateway.NewAPIGatewayWithCoordinator(
 			*controlPlane,
-			etcdEndpoints, // Single endpoint wrapped in array
+			etcdEndpoints,
 			*redisAddr,
 			gatewayConfig,
 			clusterManager,
@@ -189,9 +191,11 @@ func main() {
 
 		apiGateway = gatewayWithCoordinator.APIGateway
 		log.Info("✓ API Gateway initialized with Job Coordinator")
+		log.Info("  - Makes scheduling decisions")
+		log.Info("  - Routes to local schedulers for execution")
 
 	} else {
-		log.Warn("Running in coordinator-disabled mode (not recommended for production)")
+		log.Warn("Running in coordinator-disabled mode (not recommended)")
 
 		apiGateway, err = gateway.NewAPIGateway(
 			nil,
@@ -216,7 +220,7 @@ func main() {
 
 	log.Info("")
 	log.Info("╔════════════════════════════════════════════════════════╗")
-	log.Info("║              Ares Gateway Ready                        ║")
+	log.Info("║              Ares Global Scheduler Ready               ║")
 	log.Info("╚════════════════════════════════════════════════════════╝")
 	log.Info("")
 	log.Info("Server listening on port %d", *gatewayPort)
@@ -226,15 +230,15 @@ func main() {
 	log.Info("  GET    /health                  - Health check")
 	log.Info("  GET    /metrics                 - Metrics")
 	log.Info("  GET    /status/job              - Get job status")
-	log.Info("  GET    /status/datacenter       - Datacenter status")
-	log.Info("  GET    /status/federation       - Federation status")
 	log.Info("  GET    /status/cluster          - Cluster status")
 	log.Info("  GET    /info/capacity           - Capacity info")
 	log.Info("  GET    /info/clusters           - List clusters")
-	log.Info("  POST   /job/cancel              - Cancel job")
-	log.Info("  POST   /job/retry               - Retry job")
-	log.Info("  POST   /clusters/register       - Register cluster")
-	log.Info("  POST   /cluster-heartbeat       - Cluster heartbeat")
+	log.Info("")
+	log.Info("Architecture:")
+	log.Info("  - This process: Makes scheduling DECISIONS")
+	log.Info("  - Local schedulers: EXECUTE decisions")
+	log.Info("  - Each cluster has its own local scheduler")
+	log.Info("  - Executor lives in LOCAL scheduler, NOT here")
 	log.Info("")
 	log.Info("Test it:")
 	log.Info("  curl -X POST http://localhost:%d/schedule \\", *gatewayPort)
@@ -263,7 +267,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	log.Info("Graceful shutdown complete")
+	log.Info("✓ Graceful shutdown complete")
 	log.Info("Goodbye!")
 }
 

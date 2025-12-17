@@ -31,7 +31,6 @@ type Executor struct {
 	podMu       sync.RWMutex
 	PodRegistry map[string]*PodInfo // PodName -> PodInfo
 
-	// Kubernetes client (mock for now, will be real K8s client in production)
 	K8sClient K8sClient
 }
 

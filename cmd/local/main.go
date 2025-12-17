@@ -130,22 +130,13 @@ func main() {
 	defer log.Sync()
 
 	log.Info("╔═══════════════════════════════════════════════════════╗")
-	log.Info("║   Ares Local Scheduler - Worker Cluster              ║")
-	log.Info("║   K8s-Native GPU Discovery + Executor Wrapper        ║")
+	log.Info("║   Ares Local Scheduler - Worker Cluster               ║")
+	log.Info("║   K8s-Native GPU Discovery + Executor Wrapper         ║")
 	log.Info("╚═══════════════════════════════════════════════════════╝")
 	log.Info("")
 
 	// Validate required flags
 	if *clusterID == "" {
-		//// Try to use NODE_NAME from Kubernetes if available
-		//if nodeName := os.Getenv("NODE_NAME"); nodeName != "" {
-		//	*clusterID = nodeName
-		//	log.Info("Using NODE_NAME as cluster-id: %s", *clusterID)
-		//} else {
-		//	log.Error("Error: --cluster-id is required (or set NODE_NAME env var)")
-		//	flag.Usage()
-		//	os.Exit(1)
-		//}
 		log.Error("Error: --cluster-id is required (or set NODE_NAME env var)")
 		flag.Usage()
 		os.Exit(1)
@@ -241,7 +232,7 @@ func main() {
 	// STEP 4: Initialize executor (for pod creation)
 	// ========================================================================
 
-	log.Info("Initializing executor...")
+	log.Info("Initializing executor config...")
 	executorConfig := &common.ExecutorConfig{
 		ClusterID:                *clusterID,
 		Namespace:                *namespace,
@@ -290,7 +281,7 @@ func main() {
 
 	log.Info("")
 	log.Info("╔─────────────────────────────────────────────────────╗")
-	log.Info("║    REGISTERING NODE WITH LOCAL SCHEDULER           ║")
+	log.Info("║    REGISTERING NODE WITH LOCAL SCHEDULER            ║")
 	log.Info("╚─────────────────────────────────────────────────────╝")
 
 	nodeState := &local.NodeState{
@@ -326,7 +317,7 @@ func main() {
 
 	log.Info("")
 	log.Info("╔─────────────────────────────────────────────────────╗")
-	log.Info("║    AUTO-REGISTERING CLUSTER WITH CONTROL PLANE     ║")
+	log.Info("║    AUTO-REGISTERING CLUSTER WITH CONTROL PLANE      ║")
 	log.Info("╚─────────────────────────────────────────────────────╝")
 
 	// Detect GPU topology

@@ -184,7 +184,7 @@ func (gs *GlobalScheduler) SelectBestCluster(
 		return nil, nil, fmt.Errorf("no suitable clusters in federation")
 	}
 
-	gs.log.Info("Selected cluster %s in region %s (score=%.1f, reasons=%v)",
+	gs.log.Info("Selected cluster: %s in region %s (score=%.1f, reasons=%v)",
 		bestCluster.ClusterID, bestCluster.Region, bestScore.Score, bestScore.Reasons)
 
 	return bestCluster, bestScore, nil
@@ -320,6 +320,9 @@ func (gs *GlobalScheduler) ScheduleJob(
 		bestCluster.LocalSchedulerAddr,
 		jobSpec,
 	)
+
+	gs.log.Debug("Local Scheduler ScheduleJob returned: %v", localDecision)
+
 	if err != nil {
 		gs.log.Error("Local scheduling failed: %v", err)
 		gs.recordSchedulingFailure()
@@ -341,7 +344,7 @@ func (gs *GlobalScheduler) ScheduleJob(
 
 	gs.recordSchedulingSuccess(bestCluster.ClusterID)
 
-	gs.log.Info("Scheduled job %s to cluster %s in region %s (score=%.1f, addr=%s)",
+	gs.log.Info("Scheduled job: %s to cluster %s in region %s (score=%.1f, addr=%s)",
 		jobSpec.RequestID, bestCluster.ClusterID, bestCluster.Region, decision.ClusterScore,
 		bestCluster.LocalSchedulerAddr)
 

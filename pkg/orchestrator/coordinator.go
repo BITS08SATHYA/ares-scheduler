@@ -3,8 +3,6 @@ package orchestrator
 import (
 	"context"
 	"fmt"
-	common2 "github.com/BITS08SATHYA/ares-scheduler/pkg/executor/common"
-	"github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler/local"
 	"time"
 
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/idempotency"
@@ -26,7 +24,6 @@ type JobCoordinator struct {
 	leaseManager    *lease.LeaseManager
 	jobStore        job.JobStore
 	globalScheduler *global.GlobalScheduler
-	executor        *common2.Executor
 	log             *logger.Logger
 }
 
@@ -48,14 +45,12 @@ func NewJobCoordinator(
 	leaseManager *lease.LeaseManager,
 	jobStore job.JobStore,
 	globalScheduler *global.GlobalScheduler,
-	executor *common2.Executor,
 ) *JobCoordinator {
 	return &JobCoordinator{
 		idempotencyMgr:  idempotencyMgr,
 		leaseManager:    leaseManager,
 		jobStore:        jobStore,
 		globalScheduler: globalScheduler,
-		executor:        executor,
 		log:             logger.Get(),
 	}
 }
@@ -165,6 +160,7 @@ func (jc *JobCoordinator) ScheduleJob(
 		return nil, fmt.Errorf("global scheduling failed: %w", err)
 	}
 
+	jc.log.Debug("GlobalDecision json (body): ", globalDecision)
 	jc.log.Info("Job %s scheduled to cluster %s", jobID, globalDecision.ClusterID)
 
 	// ========================================================================
@@ -194,81 +190,90 @@ func (jc *JobCoordinator) ScheduleJob(
 	// Critical step: LocalScheduler --> returns to Job Coordinator --> calls executor (real k8 client)
 	// ========================================================================
 
-	// Build execution context from local decision
-	execCtx := &common2.ExecutionContext{
-		JobID: jobID,
-		LocalDecision: &local.LocalSchedulingDecision{ // Convert globalDecision to LocalSchedulingDecision
-			JobID:            jobID,
-			NodeID:           globalDecision.NodeID,
-			GPUIndices:       globalDecision.GPUIndices,
-			NodeScore:        globalDecision.ClusterScore,
-			PlacementReasons: globalDecision.PlacementReasons,
-			ScheduledAt:      time.Now(),
-		},
-		Namespace:  jc.executor.Config.Namespace,
-		StartTime:  time.Now(),
-		Timeout:    time.Duration(jobSpec.TimeoutSecs) * time.Second,
-		Status:     common2.StatusPending,
-		NodeID:     globalDecision.NodeID,
-		GPUIndices: globalDecision.GPUIndices,
-		Metrics:    make(map[string]interface{}),
-	}
+	//jc.log.Info("Logging Executor (payload): ", jc.executor)
+	//jc.log.Info("Logging Executor config (payload): ", jc.executor.Config)
 
-	// Generate Pod name
-	podName := fmt.Sprintf("job-%s", jobID[:8]) // Truncate for K8s name limits
-	execCtx.PodName = podName
-
-	// Create PodSpec
-	podSpec := &common2.PodSpec{
-		PodName:         podName,
-		Namespace:       jc.executor.Config.Namespace,
-		Image:           jobSpec.Image,
-		ImagePullPolicy: jc.executor.Config.ImagePullPolicy,
-		EnvVars: map[string]string{
-			"ARES_JOB_ID":        jobID,
-			"ARES_CLUSTER_ID":    globalDecision.ClusterID,
-			"ARES_NODE_ID":       globalDecision.NodeID,
-			"ARES_ASSIGNED_GPUS": fmt.Sprintf("%v", globalDecision.GPUIndices),
-			"ARES_GPU_COUNT":     fmt.Sprintf("%d", len(globalDecision.GPUIndices)),
-		},
-		MemoryMB:      jobSpec.MemoryMB,
-		CPUMillis:     jobSpec.CPUMillis,
-		GPUCount:      len(globalDecision.GPUIndices),
-		GPUIndices:    globalDecision.GPUIndices,
-		Timeout:       time.Duration(jobSpec.TimeoutSecs) * time.Second,
-		RestartPolicy: jc.executor.Config.RestartPolicy,
-		NodeID:        globalDecision.NodeID,
-		Labels: map[string]string{
-			"app":          "ares-job",
-			"job-id":       jobID,
-			"cluster-id":   globalDecision.ClusterID,
-			"scheduled-by": "ares",
-		},
-	}
-
-	// ✅ THE CRITICAL CALL: Create Pod in Kubernetes
-	createdPodName, err := jc.executor.K8sClient.CreatePod(ctx, podSpec)
-	if err != nil {
-		jc.log.Error("Failed to create Pod for job %s: %v", jobID, err)
-		jobRecord.Status = common.StatusFailed
-		jobRecord.ErrorMsg = fmt.Sprintf("pod creation failed: %v", err)
-		jc.jobStore.SaveJob(context.Background(), jobRecord, leaseID)
-		return nil, fmt.Errorf("pod creation failed: %w", err)
-	}
-
-	execCtx.PodName = createdPodName
-	jc.log.Info("✅ Pod created: %s for job %s on node %s", createdPodName, jobID, globalDecision.NodeID)
-
-	// Update job record with Pod info
-	jobRecord.Status = common.StatusRunning
-	jobRecord.PodName = createdPodName
-	jobRecord.NodeID = globalDecision.NodeID
-	jobRecord.AllocatedGPUIndices = globalDecision.GPUIndices
-	jobRecord.StartTime = time.Now()
-	err = jc.jobStore.SaveJob(ctx, jobRecord, leaseID)
-	if err != nil {
-		jc.log.Warn("Failed to update job with Pod info: %v", err)
-	}
+	//jc.log.Debug("Namespace value: Issue")
+	////jc.log.Debug("Accessing Namespace: ", &jc.executor.Config.Namespace)
+	//// Build execution context from local decision
+	//execCtx := &common2.ExecutionContext{
+	//	JobID: jobID,
+	//	LocalDecision: &local.LocalSchedulingDecision{ // Convert globalDecision to LocalSchedulingDecision
+	//		JobID:            jobID,
+	//		NodeID:           globalDecision.NodeID,
+	//		GPUIndices:       globalDecision.GPUIndices,
+	//		NodeScore:        globalDecision.ClusterScore,
+	//		PlacementReasons: globalDecision.PlacementReasons,
+	//		ScheduledAt:      time.Now(),
+	//	},
+	//	Namespace: jc.executor.Config.Namespace,
+	//	//Namespace:  jc.namespace,
+	//	StartTime:  time.Now(),
+	//	Timeout:    time.Duration(jobSpec.TimeoutSecs) * time.Second,
+	//	Status:     common2.StatusPending,
+	//	NodeID:     globalDecision.NodeID,
+	//	GPUIndices: globalDecision.GPUIndices,
+	//	Metrics:    make(map[string]interface{}),
+	//}
+	//
+	//jc.log.Debug("Executing Context json(payload): ", execCtx)
+	//
+	//// Generate Pod name
+	//podName := fmt.Sprintf("job-%s", jobID[:8]) // Truncate for K8s name limits
+	//execCtx.PodName = podName
+	//
+	//// Create PodSpec
+	//podSpec := &common2.PodSpec{
+	//	PodName:         podName,
+	//	Namespace:       jc.executor.Config.Namespace,
+	//	Image:           jobSpec.Image,
+	//	ImagePullPolicy: jc.executor.Config.ImagePullPolicy,
+	//	EnvVars: map[string]string{
+	//		"ARES_JOB_ID":        jobID,
+	//		"ARES_CLUSTER_ID":    globalDecision.ClusterID,
+	//		"ARES_NODE_ID":       globalDecision.NodeID,
+	//		"ARES_ASSIGNED_GPUS": fmt.Sprintf("%v", globalDecision.GPUIndices),
+	//		"ARES_GPU_COUNT":     fmt.Sprintf("%d", len(globalDecision.GPUIndices)),
+	//	},
+	//	MemoryMB:      jobSpec.MemoryMB,
+	//	CPUMillis:     jobSpec.CPUMillis,
+	//	GPUCount:      len(globalDecision.GPUIndices),
+	//	GPUIndices:    globalDecision.GPUIndices,
+	//	Timeout:       time.Duration(jobSpec.TimeoutSecs) * time.Second,
+	//	RestartPolicy: jc.executor.Config.RestartPolicy,
+	//	NodeID:        globalDecision.NodeID,
+	//	Labels: map[string]string{
+	//		"app":          "ares-job",
+	//		"job-id":       jobID,
+	//		"cluster-id":   globalDecision.ClusterID,
+	//		"scheduled-by": "ares",
+	//	},
+	//}
+	//jc.log.Debug("PodSpec json(payload): ", execCtx)
+	//
+	//// ✅ THE CRITICAL CALL: Create Pod in Kubernetes
+	//createdPodName, err := jc.executor.K8sClient.CreatePod(ctx, podSpec)
+	//if err != nil {
+	//	jc.log.Error("Failed to create Pod for job %s: %v", jobID, err)
+	//	jobRecord.Status = common.StatusFailed
+	//	jobRecord.ErrorMsg = fmt.Sprintf("pod creation failed: %v", err)
+	//	jc.jobStore.SaveJob(context.Background(), jobRecord, leaseID)
+	//	return nil, fmt.Errorf("pod creation failed: %w", err)
+	//}
+	//
+	//execCtx.PodName = createdPodName
+	//jc.log.Info("✅ Pod created: %s for job %s on node %s", createdPodName, jobID, globalDecision.NodeID)
+	//
+	//// Update job record with Pod info
+	//jobRecord.Status = common.StatusRunning
+	//jobRecord.PodName = createdPodName
+	//jobRecord.NodeID = globalDecision.NodeID
+	//jobRecord.AllocatedGPUIndices = globalDecision.GPUIndices
+	//jobRecord.StartTime = time.Now()
+	//err = jc.jobStore.SaveJob(ctx, jobRecord, leaseID)
+	//if err != nil {
+	//	jc.log.Warn("Failed to update job with Pod info: %v", err)
+	//}
 
 	// ========================================================================
 	// STEP 8: Start monitoring in background
@@ -287,19 +292,22 @@ func (jc *JobCoordinator) ScheduleJob(
 	// ========================================================================
 
 	result := &SchedulingResult{
-		JobID:              jobID,
-		ClusterID:          globalDecision.ClusterID,
-		NodeID:             globalDecision.NodeID,
-		GPUIndices:         globalDecision.GPUIndices,
-		ClusterScore:       globalDecision.ClusterScore,
-		PlacementReasons:   globalDecision.PlacementReasons,
-		PodName:            createdPodName, // ✅ Include Pod name
+		JobID:            jobID,
+		ClusterID:        globalDecision.ClusterID,
+		NodeID:           globalDecision.NodeID,
+		GPUIndices:       globalDecision.GPUIndices,
+		ClusterScore:     globalDecision.ClusterScore,
+		PlacementReasons: globalDecision.PlacementReasons,
+		//PodName:            createdPodName, // ✅ Include Pod name
 		LocalSchedulerAddr: globalDecision.LocalSchedulerAddr,
 		LeaseID:            leaseID,
 		CreatedAt:          time.Now(),
 	}
 
-	jc.log.Info("Job %s fully scheduled (Pod=%s, leaseID=%d)", jobID, createdPodName, leaseID)
+	jc.log.Debug("The final Result (json payload): ", result)
+
+	//jc.log.Info("Job %s fully scheduled (Pod=%s, leaseID=%d)", jobID, createdPodName, leaseID)
+
 	return result, nil
 
 }
@@ -550,10 +558,10 @@ func (jc *JobCoordinator) CancelJob(ctx context.Context, jobID string, leaseID i
 	// Delete pod if running
 	if jobRecord.PodName != "" {
 		// I have to implement this
-		err = jc.executor.CancelJob(jobID)
-		if err != nil {
-			jc.log.Warn("Failed to cancel executor: %v", err)
-		}
+		//err = jc.executor.CancelJob(jobID)
+		//if err != nil {
+		//	jc.log.Warn("Failed to cancel executor: %v", err)
+		//}
 	}
 
 	// Update status

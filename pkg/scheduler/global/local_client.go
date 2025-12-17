@@ -74,6 +74,8 @@ func (c *LocalSchedulerClient) ScheduleJob(
 	jobSpec *common.JobSpec,
 ) (*local.LocalSchedulingDecision, error) {
 
+	c.log.Debug("Local Scheduler method Entered()")
+
 	if localSchedulerAddr == "" {
 		return nil, fmt.Errorf("local scheduler address cannot be empty")
 	}

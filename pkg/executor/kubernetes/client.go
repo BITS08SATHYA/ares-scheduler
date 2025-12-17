@@ -30,11 +30,15 @@ import (
 type K8sClientImpl struct {
 	clientset k8sCoreClient.Interface // ✅ Real k8s.io client
 	namespace string
+	//log       *logger.Logger
 }
 
 // NewK8sClient: Create real K8s client (in-cluster or kubeconfig)
 // ✅ ENHANCED: Now exposes both custom interface and real k8s.io client
 func NewK8sClient(namespace string) (*K8sClientImpl, error) {
+
+	//log := logger.Get()
+
 	var config *rest.Config
 	var err error
 
@@ -67,6 +71,7 @@ func NewK8sClient(namespace string) (*K8sClientImpl, error) {
 	return &K8sClientImpl{
 		clientset: clientset,
 		namespace: namespace,
+		//log:       logger.Get(),
 	}, nil
 }
 
@@ -92,6 +97,9 @@ func (kc *K8sClientImpl) GetKubernetesInterface() k8sClient.Interface {
 
 // CreatePod: Actually create a Kubernetes Pod
 func (kc *K8sClientImpl) CreatePod(ctx context.Context, podSpec *common.PodSpec) (string, error) {
+
+	//log.Info("Create Pod Entered: ")
+
 	if podSpec == nil || podSpec.PodName == "" {
 		return "", fmt.Errorf("invalid pod spec")
 	}

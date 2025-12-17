@@ -435,6 +435,8 @@ func (ls *LocalScheduler) ScheduleJob(
 	jobSpec *common.JobSpec,
 ) (*LocalSchedulingDecision, error) {
 
+	ls.log.Debug("LocalScheduler schedule method entered()")
+
 	if jobSpec == nil || jobSpec.Name == "" {
 		return nil, fmt.Errorf("invalid job spec")
 	}
