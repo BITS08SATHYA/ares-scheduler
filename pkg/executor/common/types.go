@@ -2,7 +2,8 @@ package common
 
 import (
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/logger"
-	"github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler/local"
+
+	//"github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler/local"
 	"golang.org/x/net/context"
 	"sync"
 	"time"
@@ -16,7 +17,7 @@ type Executor struct {
 	Config       *ExecutorConfig
 
 	// Job tracking
-	jobsMu        sync.RWMutex
+	JobsMu        sync.RWMutex
 	ActiveJobs    map[string]*ExecutionContext // JobID -> ExecutionContext
 	CompletedJobs map[string]*ExecutionResult  // JobID -> ExecutionResult
 
@@ -59,19 +60,19 @@ type ExecutorConfig struct {
 
 // ExecutionContext: Runtime context for a job being executed
 type ExecutionContext struct {
-	JobID         string
-	LocalDecision *local.LocalSchedulingDecision // From Layer 6 (Local Scheduler)
-	PodName       string
-	Namespace     string
-	StartTime     time.Time
-	Timeout       time.Duration
-	Status        JobStatus
-	LastUpdated   time.Time
-	CurrentPhase  PodPhase
-	NodeID        string                 // From LocalSchedulingDecision
-	GPUIndices    []int                  // From LocalSchedulingDecision
-	Logs          string                 // Job logs (if collected)
-	Metrics       map[string]interface{} // Pod metrics
+	JobID string
+	//LocalDecision *local.LocalSchedulingDecision // From Layer 6 (Local Scheduler)
+	PodName      string
+	Namespace    string
+	StartTime    time.Time
+	Timeout      time.Duration
+	Status       JobStatus
+	LastUpdated  time.Time
+	CurrentPhase PodPhase
+	NodeID       string                 // From LocalSchedulingDecision
+	GPUIndices   []int                  // From LocalSchedulingDecision
+	Logs         string                 // Job logs (if collected)
+	Metrics      map[string]interface{} // Pod metrics
 }
 
 // ExecutionResult: Final result of job execution

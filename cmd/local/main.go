@@ -14,6 +14,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/executor"
 	"net"
 	"os"
 	"os/signal"
@@ -22,7 +23,6 @@ import (
 	"time"
 
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/cluster"
-	"github.com/BITS08SATHYA/ares-scheduler/pkg/executor"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/executor/common"
 	executorK8s "github.com/BITS08SATHYA/ares-scheduler/pkg/executor/kubernetes"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/gpu"
@@ -232,7 +232,7 @@ func main() {
 	// STEP 4: Initialize executor (for pod creation)
 	// ========================================================================
 
-	log.Info("Initializing executor config...")
+	log.Info("Initializing Executor Config...")
 	executorConfig := &common.ExecutorConfig{
 		ClusterID:                *clusterID,
 		Namespace:                *namespace,
@@ -252,7 +252,8 @@ func main() {
 
 	// ✅ CRITICAL FIX: Pass wrapper directly (common.K8sClient type)
 	// NOT k8sIOClient (which is kubernetes.Interface)
-	_, err = executor.NewExecutor(*clusterID, k8sClientWrapper, executorConfig)
+	var myExecutor *common.Executor
+	myExecutor, err = executor.NewExecutor(*clusterID, k8sClientWrapper, executorConfig)
 	if err != nil {
 		log.Error("Failed to create executor: %v", err)
 		os.Exit(1)
@@ -269,6 +270,7 @@ func main() {
 		redisClient,
 		gpuDiscovery,
 		topologyManager,
+		myExecutor,
 	)
 	log.Info("✓ Local scheduler initialized")
 

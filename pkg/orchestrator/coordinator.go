@@ -313,13 +313,17 @@ func (jc *JobCoordinator) ScheduleJob(
 }
 
 // ============================================================================
-// MONITOR JOB WITH FENCING TOKEN CHECKS (CRITICAL FIX)
+// MONITOR JOB (operates on JOBS, not pods)
 // ============================================================================
-
-// MonitorJob monitors job execution with fencing to prevent split-brain
+// CRITICAL: This monitors the LOGICAL JOB, not the physical POD
+// Job lifecycle: PENDING → SCHEDULED → RUNNING → SUCCEEDED/FAILED
+// Pod lifecycle: Pending → Running → Succeeded/Failed (handled by executor)
 //
-// CRITICAL: Checks lease ownership before updating job status
-// If lease is lost (network partition), ABORT updates (prevent split-brain)
+// This method:
+// ✓ Tracks job status in etcd
+// ✓ Checks if lease still owned (fencing)
+// ✓ Detects job completion
+// ✗ Does NOT directly manipulate pods (executor does that)
 func (jc *JobCoordinator) MonitorJob(ctx context.Context, jobID string, leaseID int64) error {
 	jobRecord, err := jc.jobStore.GetJob(ctx, jobID)
 	if err != nil {
