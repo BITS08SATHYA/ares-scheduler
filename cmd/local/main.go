@@ -23,7 +23,6 @@ import (
 	"time"
 
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/cluster"
-	"github.com/BITS08SATHYA/ares-scheduler/pkg/executor/common"
 	executorK8s "github.com/BITS08SATHYA/ares-scheduler/pkg/executor/kubernetes"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/gpu"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/logger"
@@ -233,7 +232,7 @@ func main() {
 	// ========================================================================
 
 	log.Info("Initializing Executor Config...")
-	executorConfig := &common.ExecutorConfig{
+	executorConfig := &executor.ExecutorConfig{
 		ClusterID:                *clusterID,
 		Namespace:                *namespace,
 		DefaultTimeout:           1 * time.Hour,
@@ -252,7 +251,7 @@ func main() {
 
 	// ✅ CRITICAL FIX: Pass wrapper directly (common.K8sClient type)
 	// NOT k8sIOClient (which is kubernetes.Interface)
-	var myExecutor *common.Executor
+	var myExecutor *executor.Executor
 	myExecutor, err = executor.NewExecutor(*clusterID, k8sClientWrapper, executorConfig)
 	if err != nil {
 		log.Error("Failed to create executor: %v", err)
@@ -270,7 +269,6 @@ func main() {
 		redisClient,
 		gpuDiscovery,
 		topologyManager,
-		myExecutor,
 	)
 	log.Info("✓ Local scheduler initialized")
 
@@ -368,7 +366,7 @@ func main() {
 	// ========================================================================
 
 	log.Info("Starting HTTP server on port %d...", *localPort)
-	server := local.NewLocalSchedulerServer(localScheduler, *localPort)
+	server := local.NewLocalSchedulerServer(localScheduler, *localPort, myExecutor)
 
 	// Start server in background
 	go func() {

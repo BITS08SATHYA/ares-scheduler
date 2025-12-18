@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/executor"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/logger"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler/common"
 	"net/http"
@@ -20,14 +21,16 @@ type LocalSchedulerServer struct {
 	port      int
 	log       *logger.Logger
 	server    *http.Server
+	executor  *executor.Executor
 }
 
 // NewLocalSchedulerServer creates HTTP server for LocalScheduler
-func NewLocalSchedulerServer(scheduler *LocalScheduler, port int) *LocalSchedulerServer {
+func NewLocalSchedulerServer(scheduler *LocalScheduler, port int, myExecutor *executor.Executor) *LocalSchedulerServer {
 	return &LocalSchedulerServer{
 		scheduler: scheduler,
 		port:      port,
 		log:       logger.Get(),
+		executor:  myExecutor,
 	}
 }
 
@@ -77,6 +80,7 @@ func (lss *LocalSchedulerServer) Stop(timeout time.Duration) error {
 // ========================================================================
 
 // handleSchedule: POST /schedule - Schedule job on this cluster
+// It should call the executor after scheduling decision
 func (lss *LocalSchedulerServer) handleSchedule(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -101,7 +105,9 @@ func (lss *LocalSchedulerServer) handleSchedule(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	// Schedule job
+	lss.log.Info("Received schedule request for job %s", req.JobID)
+
+	// Step 1: LocalScheduler makes scheduling decision
 	decision, err := lss.scheduler.ScheduleJob(r.Context(), req.JobSpec)
 	if err != nil {
 		lss.log.Warn("Scheduling failed: %v", err)
@@ -113,7 +119,35 @@ func (lss *LocalSchedulerServer) handleSchedule(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	// Return decision
+	// Step 2: Execute Job (create Pod)
+	if lss.executor != nil {
+		lss.log.Info("Calling Executor to create Pod...")
+
+		execCtx, err := lss.executor.ExecuteJob(r.Context(), &executor.K8Decision{
+			JobID:            decision.JobID,
+			NodeID:           decision.NodeID,
+			GPUIndices:       decision.GPUIndices,
+			NodeScore:        decision.NodeScore,
+			GPUAffinityScore: decision.GPUAffinityScore,
+			PlacementReasons: decision.PlacementReasons,
+			ScheduledAt:      decision.ScheduledAt,
+		})
+		if err != nil {
+			lss.log.Error("Pod creation failed: %v", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"error":   fmt.Sprintf("executor failed: %v", err),
+			})
+			return
+		}
+
+		lss.log.Info("Pod created: %s for job %s", execCtx.PodName, req.JobID)
+	} else {
+		lss.log.Warn("Executor not configured - Pod not created (OK for testing)")
+	}
+
+	// Step 3: Return Decision
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]interface{}{

@@ -3,7 +3,7 @@ package kubernetes
 import (
 	"context"
 	"fmt"
-	"github.com/BITS08SATHYA/ares-scheduler/pkg/executor/common"
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/executor"
 	_ "go.etcd.io/etcd/client/v3/kubernetes"
 	"io"
 	"os"
@@ -96,7 +96,7 @@ func (kc *K8sClientImpl) GetKubernetesInterface() k8sClient.Interface {
 // ============================================================================
 
 // CreatePod: Actually create a Kubernetes Pod
-func (kc *K8sClientImpl) CreatePod(ctx context.Context, podSpec *common.PodSpec) (string, error) {
+func (kc *K8sClientImpl) CreatePod(ctx context.Context, podSpec *executor.PodSpec) (string, error) {
 
 	//log.Info("Create Pod Entered: ")
 
@@ -152,13 +152,13 @@ func (kc *K8sClientImpl) CreatePod(ctx context.Context, podSpec *common.PodSpec)
 }
 
 // GetPod: Get Pod information
-func (kc *K8sClientImpl) GetPod(ctx context.Context, podName string) (*common.PodInfo, error) {
+func (kc *K8sClientImpl) GetPod(ctx context.Context, podName string) (*executor.PodInfo, error) {
 	pod, err := kc.clientset.CoreV1().Pods(kc.namespace).Get(ctx, podName, metav1.GetOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to get pod: %w", err)
 	}
 
-	return &common.PodInfo{
+	return &executor.PodInfo{
 		PodName:   pod.Name,
 		Namespace: pod.Namespace,
 		Phase:     convertK8sPodPhase(pod.Status.Phase),
@@ -173,15 +173,15 @@ func (kc *K8sClientImpl) DeletePod(ctx context.Context, podName string) error {
 }
 
 // ListPods: List all Pods in namespace
-func (kc *K8sClientImpl) ListPods(ctx context.Context) ([]*common.PodInfo, error) {
+func (kc *K8sClientImpl) ListPods(ctx context.Context) ([]*executor.PodInfo, error) {
 	pods, err := kc.clientset.CoreV1().Pods(kc.namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to list pods: %w", err)
 	}
 
-	var podInfos []*common.PodInfo
+	var podInfos []*executor.PodInfo
 	for _, pod := range pods.Items {
-		podInfos = append(podInfos, &common.PodInfo{
+		podInfos = append(podInfos, &executor.PodInfo{
 			PodName:   pod.Name,
 			Namespace: pod.Namespace,
 			Phase:     convertK8sPodPhase(pod.Status.Phase),
@@ -212,7 +212,7 @@ func (kc *K8sClientImpl) GetPodMetrics(ctx context.Context, podName string) (map
 }
 
 // WatchPod: Watch Pod for status changes
-func (kc *K8sClientImpl) WatchPod(ctx context.Context, podName string, callback func(*common.PodInfo)) error {
+func (kc *K8sClientImpl) WatchPod(ctx context.Context, podName string, callback func(*executor.PodInfo)) error {
 	watcher, err := kc.clientset.CoreV1().Pods(kc.namespace).Watch(ctx, metav1.ListOptions{
 		FieldSelector: fmt.Sprintf("metadata.name=%s", podName),
 	})
@@ -223,7 +223,7 @@ func (kc *K8sClientImpl) WatchPod(ctx context.Context, podName string, callback 
 
 	for event := range watcher.ResultChan() {
 		pod := event.Object.(*corev1.Pod)
-		callback(&common.PodInfo{
+		callback(&executor.PodInfo{
 			PodName:   pod.Name,
 			Namespace: pod.Namespace,
 			Phase:     convertK8sPodPhase(pod.Status.Phase),
@@ -252,18 +252,18 @@ func (kc *K8sClientImpl) WatchPod(ctx context.Context, podName string, callback 
 //	corev1.PodSucceeded -> common.PhaseSucceeded
 //	corev1.PodFailed    -> common.PhaseFailed
 //	(others)            -> common.PhaseUnknown
-func convertK8sPodPhase(k8sPhase corev1.PodPhase) common.PodPhase {
+func convertK8sPodPhase(k8sPhase corev1.PodPhase) executor.PodPhase {
 	switch k8sPhase {
 	case corev1.PodPending:
-		return common.PhasePending
+		return executor.PhasePending
 	case corev1.PodRunning:
-		return common.PhaseRunning
+		return executor.PhaseRunning
 	case corev1.PodSucceeded:
-		return common.PhaseSucceeded
+		return executor.PhaseSucceeded
 	case corev1.PodFailed:
-		return common.PhaseFailed
+		return executor.PhaseFailed
 	default:
-		return common.PhaseUnknown
+		return executor.PhaseUnknown
 	}
 }
 

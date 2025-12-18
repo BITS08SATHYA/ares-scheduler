@@ -9,9 +9,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	common2 "github.com/BITS08SATHYA/ares-scheduler/pkg/executor/common"
-
-	//"github.com/BITS08SATHYA/ares-scheduler/pkg/executor"
 
 	//"github.com/BITS08SATHYA/ares-scheduler/pkg/executor"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/gpu"
@@ -51,7 +48,7 @@ type LocalScheduler struct {
 	metrics   *LocalMetrics
 
 	// Executor
-	executor *common2.Executor
+	//executor *executor.Executor
 }
 
 // NodeState: Track state of single node in cluster
@@ -112,7 +109,6 @@ func NewLocalScheduler(
 	redisClient *redis.RedisClient,
 	gpuDiscovery *gpu.GPUDiscovery,
 	topologyManager *gpu.GPUTopologyManager,
-	executor *common2.Executor,
 ) *LocalScheduler {
 	return &LocalScheduler{
 		clusterID:       clusterID,
@@ -126,7 +122,6 @@ func NewLocalScheduler(
 			TotalJobsFailed:    0,
 			LastUpdated:        time.Now(),
 		},
-		//executor: executor,
 	}
 }
 

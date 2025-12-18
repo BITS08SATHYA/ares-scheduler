@@ -1,16 +1,185 @@
 package executor
 
 import (
+	"context"
 	"fmt"
-	"github.com/BITS08SATHYA/ares-scheduler/pkg/executor/common"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/logger"
-	"github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler/local"
-	"golang.org/x/net/context"
 	_ "k8s.io/client-go/kubernetes"
 	"sync"
 	"sync/atomic"
 	"time"
 )
+
+// Scope: Single cluster (runs on each cluster's control plane)
+type Executor struct {
+	ClusterID    string
+	ControlPlane string
+	Log          *logger.Logger
+	Config       *ExecutorConfig
+
+	// Job tracking
+	JobsMu        sync.RWMutex
+	ActiveJobs    map[string]*ExecutionContext // JobID -> ExecutionContext
+	CompletedJobs map[string]*ExecutionResult  // JobID -> ExecutionResult
+
+	// Metrics (atomic for thread-safety)
+	TotalJobs       uint64
+	TotalSuccessful uint64
+	TotalFailed     uint64
+	TotalCancelled  uint64
+	TotalDuration   int64 // nanoseconds, atomic
+
+	// Pod management
+	PodMu       sync.RWMutex
+	PodRegistry map[string]*PodInfo // PodName -> PodInfo
+
+	K8sClient K8sClient
+}
+
+// ExecutorConfig: Configuration for executor
+type ExecutorConfig struct {
+	ClusterID                string        // e.g., "cluster-us-west-2a"
+	Namespace                string        // e.g., "default" or "ares-jobs"
+	DefaultTimeout           time.Duration // Pod timeout (default: 1 hour)
+	DefaultMemoryMB          int           // Pod default memory
+	DefaultCPUMillis         int           // Pod default CPU (millicores)
+	HealthCheckInterval      time.Duration // Pod health check frequency
+	MaxConcurrentJobs        int           // Max concurrent Pods
+	ImageRegistry            string        // e.g., "docker.io", "ghcr.io"
+	DefaultJobImage          string        // e.g., "ares-job:latest"
+	RestartPolicy            string        // Always, OnFailure, Never
+	ImagePullPolicy          string        // Always, IfNotPresent, Never
+	EnableGPUSupport         bool          // Enable GPU requests
+	LogCollectionEnabled     bool          // Collect Pod logs
+	MetricsCollectionEnabled bool          // Collect Pod metrics
+}
+
+// ExecutionContext: Runtime context for a job being executed
+type ExecutionContext struct {
+	JobID         string
+	LocalDecision K8Decision // From Layer 6 (Local Scheduler)
+	PodName       string
+	Namespace     string
+	StartTime     time.Time
+	Timeout       time.Duration
+	Status        JobStatus
+	LastUpdated   time.Time
+	CurrentPhase  PodPhase
+	NodeID        string                 // From LocalSchedulingDecision
+	GPUIndices    []int                  // From LocalSchedulingDecision
+	Logs          string                 // Job logs (if collected)
+	Metrics       map[string]interface{} // Pod metrics
+}
+
+// ExecutionResult: Final result of job execution
+type ExecutionResult struct {
+	JobID        string
+	PodName      string
+	Status       JobStatus
+	Phase        PodPhase
+	StartTime    time.Time
+	EndTime      time.Time
+	Duration     time.Duration
+	ExitCode     int
+	ErrorMessage string
+	Logs         string
+	Metrics      map[string]interface{}
+	CompletedAt  time.Time
+}
+
+// PodInfo: Information about created Kubernetes Pod
+type PodInfo struct {
+	PodName       string
+	Namespace     string
+	JobID         string
+	NodeID        string
+	Phase         PodPhase
+	CreatedAt     time.Time
+	StartedAt     time.Time
+	FinishedAt    time.Time
+	ContainerID   string
+	GPUIndices    []int
+	ResourceUsage map[string]interface{}
+	Ready         bool
+}
+
+// JobStatus: High-level job status
+type JobStatus string
+
+const (
+	StatusPending    JobStatus = "Pending"
+	StatusRunning    JobStatus = "Running"
+	StatusSuccessful JobStatus = "Successful"
+	StatusFailed     JobStatus = "Failed"
+	StatusCancelled  JobStatus = "Cancelled"
+	StatusUnknown    JobStatus = "Unknown"
+)
+
+// PodPhase: Kubernetes Pod phase
+type PodPhase string
+
+const (
+	PhasePending   PodPhase = "Pending"
+	PhaseRunning   PodPhase = "Running"
+	PhaseSucceeded PodPhase = "Succeeded"
+	PhaseFailed    PodPhase = "Failed"
+	PhaseUnknown   PodPhase = "Unknown"
+)
+
+// K8sClient: Interface for Kubernetes operations (mock in this file)
+type K8sClient interface {
+	CreatePod(ctx context.Context, pod *PodSpec) (podName string, err error)
+	GetPod(ctx context.Context, podName string) (*PodInfo, error)
+	DeletePod(ctx context.Context, podName string) error
+	ListPods(ctx context.Context) ([]*PodInfo, error)
+	GetPodLogs(ctx context.Context, podName string) (string, error)
+	GetPodMetrics(ctx context.Context, podName string) (map[string]interface{}, error)
+	WatchPod(ctx context.Context, podName string, callback func(*PodInfo)) error
+}
+
+// PodSpec: Specification for Kubernetes Pod
+type PodSpec struct {
+	PodName         string
+	Namespace       string
+	Image           string
+	ImagePullPolicy string
+	EnvVars         map[string]string
+	MemoryMB        int
+	CPUMillis       int
+	GPUCount        int
+	GPUIndices      []int
+	Timeout         time.Duration
+	RestartPolicy   string
+	NodeID          string
+	Labels          map[string]string
+}
+
+// Default config
+var DefaultExecutorConfig = &ExecutorConfig{
+	Namespace:                "default",
+	DefaultTimeout:           1 * time.Hour,
+	DefaultMemoryMB:          1024,
+	DefaultCPUMillis:         500,
+	HealthCheckInterval:      5 * time.Second,
+	MaxConcurrentJobs:        100,
+	ImageRegistry:            "docker.io",
+	DefaultJobImage:          "ares-job:latest",
+	RestartPolicy:            "OnFailure",
+	ImagePullPolicy:          "IfNotPresent",
+	EnableGPUSupport:         true,
+	LogCollectionEnabled:     true,
+	MetricsCollectionEnabled: true,
+}
+
+type K8Decision struct {
+	JobID            string
+	NodeID           string
+	GPUIndices       []int
+	NodeScore        float64
+	GPUAffinityScore float64
+	PlacementReasons []string
+	ScheduledAt      time.Time
+}
 
 // ============================================================================
 // EXECUTOR SERVICE (Layer 9)
@@ -38,9 +207,9 @@ import (
 //   - 3 parameters total (matches cmd/local/main.go call)
 func NewExecutor(
 	clusterID string,
-	k8sClient common.K8sClient, // ✅ FIX: Interface type, NOT *common.K8sClient
-	config *common.ExecutorConfig,
-) (*common.Executor, error) {
+	k8sClient K8sClient, // ✅ FIX: Interface type, NOT *common.K8sClient
+	config *ExecutorConfig,
+) (*Executor, error) {
 
 	if clusterID == "" {
 		return nil, fmt.Errorf("cluster ID cannot be empty")
@@ -51,7 +220,7 @@ func NewExecutor(
 	}
 
 	if config == nil {
-		config = common.DefaultExecutorConfig
+		config = DefaultExecutorConfig
 	}
 
 	if config.Namespace == "" {
@@ -70,20 +239,19 @@ func NewExecutor(
 		config.MaxConcurrentJobs = 100
 	}
 
-	executor := &common.Executor{
+	executor := &Executor{
 		ClusterID:     clusterID,
 		ControlPlane:  fmt.Sprintf("ares-executor-%s", clusterID),
 		Log:           logger.Get(), // ✅ Create our own logger
 		Config:        config,
-		ActiveJobs:    make(map[string]*common.ExecutionContext),
-		CompletedJobs: make(map[string]*common.ExecutionResult),
-		PodRegistry:   make(map[string]*common.PodInfo),
+		ActiveJobs:    make(map[string]*ExecutionContext),
+		CompletedJobs: make(map[string]*ExecutionResult),
+		PodRegistry:   make(map[string]*PodInfo),
 		K8sClient:     k8sClient, // ✅ FIX: Direct assignment (not dereferencing)
 	}
 
 	return executor, nil
 }
-
 
 // ============================================================================
 // JOB EXECUTION
@@ -92,10 +260,10 @@ func NewExecutor(
 // ExecuteJob: Execute job by creating Kubernetes Pod
 // Input: LocalSchedulingDecision (from LocalScheduler - Layer 6)
 // Output: ExecutionContext (tracking info)
-func (ex *common.Executor) ExecuteJob(
+func (ex *Executor) ExecuteJob(
 	ctx context.Context,
-	decision *local.LocalSchedulingDecision,
-) (*common.ExecutionContext, error) {
+	decision *K8Decision,
+) (*ExecutionContext, error) {
 
 	if decision == nil {
 		return nil, fmt.Errorf("local scheduling decision cannot be nil")
@@ -111,53 +279,61 @@ func (ex *common.Executor) ExecuteJob(
 
 	// Check concurrency limit
 	ex.JobsMu.RLock()
-	activeCount := len(ex.activeJobs)
+	activeCount := len(ex.ActiveJobs)
 	ex.JobsMu.RUnlock()
 
-	if activeCount >= ex.config.MaxConcurrentJobs {
-		return nil, fmt.Errorf("max concurrent jobs (%d) reached", ex.config.MaxConcurrentJobs)
+	if activeCount >= ex.Config.MaxConcurrentJobs {
+		return nil, fmt.Errorf("max concurrent jobs (%d) reached", ex.Config.MaxConcurrentJobs)
 	}
 
 	// Create execution context
-	execCtx := &common.ExecutionContext{
-		JobID:         decision.JobID,
-		LocalDecision: decision,
-		Namespace:     ex.config.Namespace,
-		StartTime:     time.Now(),
-		Timeout:       ex.config.DefaultTimeout,
-		Status:        StatusPending,
-		CurrentPhase:  PhasePending,
-		NodeID:        decision.NodeID,
-		GPUIndices:    decision.GPUIndices,
-		Metrics:       make(map[string]interface{}),
+	execCtx := &ExecutionContext{
+		JobID: decision.JobID,
+		LocalDecision: K8Decision{
+			JobID:            decision.JobID,
+			NodeID:           decision.NodeID,
+			GPUIndices:       decision.GPUIndices,
+			NodeScore:        decision.NodeScore,
+			GPUAffinityScore: decision.GPUAffinityScore,
+			PlacementReasons: decision.PlacementReasons,
+			ScheduledAt:      decision.ScheduledAt,
+		},
+		Namespace:    ex.Config.Namespace,
+		StartTime:    time.Now(),
+		Timeout:      ex.Config.DefaultTimeout,
+		Status:       StatusPending,
+		CurrentPhase: PhasePending,
+		NodeID:       decision.NodeID,
+		GPUIndices:   decision.GPUIndices,
+		Metrics:      make(map[string]interface{}),
 	}
 
 	// Generate Pod name (max 63 chars in Kubernetes)
-	podName := ex.generatePodName(decision.JobID)
+	podName := generatePodName(decision.JobID)
 	execCtx.PodName = podName
 
 	// Create Pod spec
-	podSpec := ex.createPodSpec(decision, podName)
+	podSpec := createPodSpec(ex, decision, podName)
 
 	// Create Pod in Kubernetes
-	createdName, err := ex.k8sClient.CreatePod(ctx, podSpec)
+	createdName, err := ex.K8sClient.CreatePod(ctx, podSpec)
 	if err != nil {
-		ex.log.Error("Failed to create Pod for job %s: %v", decision.JobID, err)
-		atomic.AddUint64(&ex.totalFailed, 1)
+		ex.Log.Error("Failed to create Pod for job %s: %v", decision.JobID, err)
+		atomic.AddUint64(&ex.TotalFailed, 1)
 		return nil, fmt.Errorf("failed to create Pod: %w", err)
 	}
 
 	execCtx.PodName = createdName
-	ex.log.Info("Pod created for job %s: %s (node=%s, gpus=%v)",
+	ex.Log.Info("Pod created for job %s: %s (node=%s, gpus=%v)",
 		decision.JobID, createdName, decision.NodeID, decision.GPUIndices)
 
 	// Store execution context
 	ex.JobsMu.Lock()
-	ex.activeJobs[decision.JobID] = execCtx
+	ex.ActiveJobs[decision.JobID] = execCtx
 	ex.JobsMu.Unlock()
 
 	// Increment metrics
-	atomic.AddUint64(&ex.totalJobs, 1)
+	atomic.AddUint64(&ex.TotalJobs, 1)
 
 	// Start background monitoring
 	go ex.monitorJobExecution(ctx, execCtx)
@@ -167,15 +343,16 @@ func (ex *common.Executor) ExecuteJob(
 
 // createPodSpec: Create Kubernetes Pod specification
 // CORRECTED: Uses NodeID and GPUIndices from LocalSchedulingDecision
-func (ex *common.Executor) createPodSpec(
-	decision *local.LocalSchedulingDecision,
+func createPodSpec(
+	ex *Executor,
+	decision *K8Decision,
 	podName string,
-) *common.PodSpec {
+) *PodSpec {
 
 	// Build image name
-	imageName := ex.config.DefaultJobImage
-	if ex.config.ImageRegistry != "" && !contains(imageName, "/") {
-		imageName = fmt.Sprintf("%s/%s", ex.config.ImageRegistry, imageName)
+	imageName := ex.Config.DefaultJobImage
+	if ex.Config.ImageRegistry != "" && !contains(imageName, "/") {
+		imageName = fmt.Sprintf("%s/%s", ex.Config.ImageRegistry, imageName)
 	}
 
 	// Convert GPU indices to strings for environment variable
@@ -187,7 +364,7 @@ func (ex *common.Executor) createPodSpec(
 	// Environment variables
 	envVars := map[string]string{
 		"ARES_JOB_ID":        decision.JobID,
-		"ARES_CLUSTER_ID":    ex.clusterID,
+		"ARES_CLUSTER_ID":    ex.ClusterID,
 		"ARES_NODE_ID":       decision.NodeID,
 		"ARES_ASSIGNED_GPUS": join(gpuDeviceStrs, ","),
 		"ARES_GPU_COUNT":     fmt.Sprintf("%d", len(decision.GPUIndices)),
@@ -203,23 +380,23 @@ func (ex *common.Executor) createPodSpec(
 	labels := map[string]string{
 		"app":          "ares-job",
 		"job-id":       decision.JobID,
-		"cluster-id":   ex.clusterID,
+		"cluster-id":   ex.ClusterID,
 		"scheduled-by": "ares-executor",
 	}
 
 	// Pod spec
-	spec := &common.PodSpec{
+	spec := &PodSpec{
 		PodName:         podName,
-		Namespace:       ex.config.Namespace,
+		Namespace:       ex.Config.Namespace,
 		Image:           imageName,
-		ImagePullPolicy: ex.config.ImagePullPolicy,
+		ImagePullPolicy: ex.Config.ImagePullPolicy,
 		EnvVars:         envVars,
-		MemoryMB:        ex.config.DefaultMemoryMB,
-		CPUMillis:       ex.config.DefaultCPUMillis,
+		MemoryMB:        ex.Config.DefaultMemoryMB,
+		CPUMillis:       ex.Config.DefaultCPUMillis,
 		GPUCount:        len(decision.GPUIndices),
 		GPUIndices:      decision.GPUIndices,
-		Timeout:         ex.config.DefaultTimeout,
-		RestartPolicy:   ex.config.RestartPolicy,
+		Timeout:         ex.Config.DefaultTimeout,
+		RestartPolicy:   ex.Config.RestartPolicy,
 		NodeID:          decision.NodeID,
 		Labels:          labels,
 	}
@@ -228,8 +405,9 @@ func (ex *common.Executor) createPodSpec(
 }
 
 // monitorJobExecution: Background job monitoring
-func (ex *common.Executor) monitorJobExecution(ctx context.Context, execCtx *ExecutionContext) {
-	ticker := time.NewTicker(ex.config.HealthCheckInterval)
+func (ex *Executor) monitorJobExecution(
+	ctx context.Context, execCtx *ExecutionContext) {
+	ticker := time.NewTicker(ex.Config.HealthCheckInterval)
 	defer ticker.Stop()
 
 	timeoutTimer := time.NewTimer(execCtx.Timeout)
@@ -247,9 +425,9 @@ func (ex *common.Executor) monitorJobExecution(ctx context.Context, execCtx *Exe
 
 		case <-ticker.C:
 			// Check Pod status
-			podInfo, err := ex.k8sClient.GetPod(ctx, execCtx.PodName)
+			podInfo, err := ex.K8sClient.GetPod(ctx, execCtx.PodName)
 			if err != nil {
-				ex.log.Warn("Failed to get Pod status for job %s: %v", execCtx.JobID, err)
+				ex.Log.Warn("Failed to get Pod status for job %s: %v", execCtx.JobID, err)
 				continue
 			}
 
@@ -261,27 +439,27 @@ func (ex *common.Executor) monitorJobExecution(ctx context.Context, execCtx *Exe
 			switch podInfo.Phase {
 			case PhaseRunning:
 				execCtx.Status = StatusRunning
-				ex.log.Debug("Job %s running on Pod %s", execCtx.JobID, execCtx.PodName)
+				ex.Log.Debug("Job %s running on Pod %s", execCtx.JobID, execCtx.PodName)
 
 			case PhaseSucceeded:
-				result := ex.completeJob(execCtx, StatusSuccessful)
-				ex.log.Info("Job %s completed successfully (duration=%.2fs)",
+				result := completeJob(ex, execCtx, StatusSuccessful)
+				ex.Log.Info("Job %s completed successfully (duration=%.2fs)",
 					execCtx.JobID, result.Duration.Seconds())
 				return
 
 			case PhaseFailed:
-				result := ex.completeJob(execCtx, StatusFailed)
-				ex.log.Warn("Job %s failed (duration=%.2fs, error=%s)",
+				result := completeJob(ex, execCtx, StatusFailed)
+				ex.Log.Warn("Job %s failed (duration=%.2fs, error=%s)",
 					execCtx.JobID, result.Duration.Seconds(), result.ErrorMessage)
 				return
 
 			case PhaseUnknown:
-				ex.log.Warn("Job %s in unknown phase", execCtx.JobID)
+				ex.Log.Warn("Job %s in unknown phase", execCtx.JobID)
 			}
 
 			// Collect metrics periodically
-			if ex.config.MetricsCollectionEnabled {
-				metrics, err := ex.k8sClient.GetPodMetrics(ctx, execCtx.PodName)
+			if ex.Config.MetricsCollectionEnabled {
+				metrics, err := ex.K8sClient.GetPodMetrics(ctx, execCtx.PodName)
 				if err == nil {
 					execCtx.Metrics = metrics
 				}
@@ -289,8 +467,8 @@ func (ex *common.Executor) monitorJobExecution(ctx context.Context, execCtx *Exe
 
 			// Collect logs if job is completing
 			if podInfo.Phase == PhaseSucceeded || podInfo.Phase == PhaseFailed {
-				if ex.config.LogCollectionEnabled {
-					logs, err := ex.k8sClient.GetPodLogs(ctx, execCtx.PodName)
+				if ex.Config.LogCollectionEnabled {
+					logs, err := ex.K8sClient.GetPodLogs(ctx, execCtx.PodName)
 					if err == nil {
 						execCtx.Logs = logs
 					}
@@ -301,18 +479,18 @@ func (ex *common.Executor) monitorJobExecution(ctx context.Context, execCtx *Exe
 }
 
 // handleJobTimeout: Handle job timeout
-func (ex *common.Executor) handleJobTimeout(execCtx *ExecutionContext) {
-	ex.log.Warn("Job %s timeout after %.2fs", execCtx.JobID, execCtx.Timeout.Seconds())
+func (ex *Executor) handleJobTimeout(execCtx *ExecutionContext) {
+	ex.Log.Warn("Job %s timeout after %.2fs", execCtx.JobID, execCtx.Timeout.Seconds())
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	err := ex.k8sClient.DeletePod(ctx, execCtx.PodName)
+	err := ex.K8sClient.DeletePod(ctx, execCtx.PodName)
 	if err != nil {
-		ex.log.Error("Failed to delete timed-out Pod %s: %v", execCtx.PodName, err)
+		ex.Log.Error("Failed to delete timed-out Pod %s: %v", execCtx.PodName, err)
 	}
 
-	result := &common.ExecutionResult{
+	result := &ExecutionResult{
 		JobID:        execCtx.JobID,
 		PodName:      execCtx.PodName,
 		Status:       StatusFailed,
@@ -325,26 +503,26 @@ func (ex *common.Executor) handleJobTimeout(execCtx *ExecutionContext) {
 	}
 
 	ex.JobsMu.Lock()
-	delete(ex.activeJobs, execCtx.JobID)
-	ex.completedJobs[execCtx.JobID] = result
+	delete(ex.ActiveJobs, execCtx.JobID)
+	ex.CompletedJobs[execCtx.JobID] = result
 	ex.JobsMu.Unlock()
 
-	atomic.AddUint64(&ex.totalFailed, 1)
+	atomic.AddUint64(&ex.TotalFailed, 1)
 }
 
 // handleJobCancellation: Handle job cancellation
-func (ex *common.Executor) handleJobCancellation(execCtx *ExecutionContext) {
-	ex.log.Info("Cancelling job %s", execCtx.JobID)
+func (ex *Executor) handleJobCancellation(execCtx *ExecutionContext) {
+	ex.Log.Info("Cancelling job %s", execCtx.JobID)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	err := ex.k8sClient.DeletePod(ctx, execCtx.PodName)
+	err := ex.K8sClient.DeletePod(ctx, execCtx.PodName)
 	if err != nil {
-		ex.log.Error("Failed to delete cancelled Pod %s: %v", execCtx.PodName, err)
+		ex.Log.Error("Failed to delete cancelled Pod %s: %v", execCtx.PodName, err)
 	}
 
-	result := &common.ExecutionResult{
+	result := &ExecutionResult{
 		JobID:       execCtx.JobID,
 		PodName:     execCtx.PodName,
 		Status:      StatusCancelled,
@@ -356,29 +534,30 @@ func (ex *common.Executor) handleJobCancellation(execCtx *ExecutionContext) {
 	}
 
 	ex.JobsMu.Lock()
-	delete(ex.activeJobs, execCtx.JobID)
-	ex.completedJobs[execCtx.JobID] = result
+	delete(ex.ActiveJobs, execCtx.JobID)
+	ex.CompletedJobs[execCtx.JobID] = result
 	ex.JobsMu.Unlock()
 
-	atomic.AddUint64(&ex.totalCancelled, 1)
+	atomic.AddUint64(&ex.TotalCancelled, 1)
 }
 
 // completeJob: Mark job as complete
-func (ex *common.Executor) completeJob(execCtx *common.ExecutionContext, status JobStatus) *ExecutionResult {
+func completeJob(ex *Executor, execCtx *ExecutionContext,
+	status JobStatus) *ExecutionResult {
 	endTime := time.Now()
 	duration := endTime.Sub(execCtx.StartTime)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	if ex.config.LogCollectionEnabled {
-		logs, err := ex.k8sClient.GetPodLogs(ctx, execCtx.PodName)
+	if ex.Config.LogCollectionEnabled {
+		logs, err := ex.K8sClient.GetPodLogs(ctx, execCtx.PodName)
 		if err == nil {
 			execCtx.Logs = logs
 		}
 	}
 
-	result := &common.ExecutionResult{
+	result := &ExecutionResult{
 		JobID:       execCtx.JobID,
 		PodName:     execCtx.PodName,
 		Status:      status,
@@ -392,15 +571,15 @@ func (ex *common.Executor) completeJob(execCtx *common.ExecutionContext, status 
 	}
 
 	ex.JobsMu.Lock()
-	delete(ex.activeJobs, execCtx.JobID)
-	ex.completedJobs[execCtx.JobID] = result
+	delete(ex.ActiveJobs, execCtx.JobID)
+	ex.CompletedJobs[execCtx.JobID] = result
 	ex.JobsMu.Unlock()
 
-	atomic.AddInt64(&ex.totalDuration, duration.Nanoseconds())
+	atomic.AddInt64(&ex.TotalDuration, duration.Nanoseconds())
 	if status == StatusSuccessful {
-		atomic.AddUint64(&ex.totalSuccessful, 1)
+		atomic.AddUint64(&ex.TotalSuccessful, 1)
 	} else if status == StatusFailed {
-		atomic.AddUint64(&ex.totalFailed, 1)
+		atomic.AddUint64(&ex.TotalFailed, 1)
 	}
 
 	return result
@@ -411,13 +590,13 @@ func (ex *common.Executor) completeJob(execCtx *common.ExecutionContext, status 
 // ============================================================================
 
 // GetJobStatus: Get current job status
-func (ex *common.Executor) GetJobStatus(jobID string) (*common.ExecutionContext, error) {
+func (ex *Executor) GetJobStatus(jobID string) (*ExecutionContext, error) {
 	if jobID == "" {
 		return nil, fmt.Errorf("job ID cannot be empty")
 	}
 
 	ex.JobsMu.RLock()
-	execCtx, exists := ex.activeJobs[jobID]
+	execCtx, exists := ex.ActiveJobs[jobID]
 	ex.JobsMu.RUnlock()
 
 	if !exists {
@@ -428,13 +607,13 @@ func (ex *common.Executor) GetJobStatus(jobID string) (*common.ExecutionContext,
 }
 
 // GetJobResult: Get completed job result
-func (ex *common.Executor) GetJobResult(jobID string) (*common.ExecutionResult, error) {
+func (ex *Executor) GetJobResult(jobID string) (*ExecutionResult, error) {
 	if jobID == "" {
 		return nil, fmt.Errorf("job ID cannot be empty")
 	}
 
 	ex.JobsMu.RLock()
-	result, exists := ex.completedJobs[jobID]
+	result, exists := ex.CompletedJobs[jobID]
 	ex.JobsMu.RUnlock()
 
 	if !exists {
@@ -445,12 +624,12 @@ func (ex *common.Executor) GetJobResult(jobID string) (*common.ExecutionResult, 
 }
 
 // ListActiveJobs: List all active jobs
-func (ex *common.Executor) ListActiveJobs() []*common.ExecutionContext {
+func (ex *Executor) ListActiveJobs() []*ExecutionContext {
 	ex.JobsMu.RLock()
 	defer ex.JobsMu.RUnlock()
 
-	jobs := make([]*common.ExecutionContext, 0, len(ex.activeJobs))
-	for _, job := range ex.activeJobs {
+	jobs := make([]*ExecutionContext, 0, len(ex.ActiveJobs))
+	for _, job := range ex.ActiveJobs {
 		jobs = append(jobs, job)
 	}
 
@@ -458,12 +637,12 @@ func (ex *common.Executor) ListActiveJobs() []*common.ExecutionContext {
 }
 
 // ListCompletedJobs: List all completed jobs
-func (ex *common.Executor) ListCompletedJobs() []*common.ExecutionResult {
+func (ex *Executor) ListCompletedJobs() []*ExecutionResult {
 	ex.JobsMu.RLock()
 	defer ex.JobsMu.RUnlock()
 
-	results := make([]*common.ExecutionResult, 0, len(ex.completedJobs))
-	for _, result := range ex.completedJobs {
+	results := make([]*ExecutionResult, 0, len(ex.CompletedJobs))
+	for _, result := range ex.CompletedJobs {
 		results = append(results, result)
 	}
 
@@ -471,13 +650,13 @@ func (ex *common.Executor) ListCompletedJobs() []*common.ExecutionResult {
 }
 
 // CancelJob: Cancel a running job
-func (ex *common.Executor) CancelJob(jobID string) error {
+func (ex *Executor) CancelJob(jobID string) error {
 	if jobID == "" {
 		return fmt.Errorf("job ID cannot be empty")
 	}
 
 	ex.JobsMu.RLock()
-	execCtx, exists := ex.activeJobs[jobID]
+	execCtx, exists := ex.ActiveJobs[jobID]
 	ex.JobsMu.RUnlock()
 
 	if !exists {
@@ -487,13 +666,13 @@ func (ex *common.Executor) CancelJob(jobID string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	err := ex.k8sClient.DeletePod(ctx, execCtx.PodName)
+	err := ex.K8sClient.DeletePod(ctx, execCtx.PodName)
 	if err != nil {
-		ex.log.Error("Failed to cancel job %s: %v", jobID, err)
+		ex.Log.Error("Failed to cancel job %s: %v", jobID, err)
 		return fmt.Errorf("failed to cancel job: %w", err)
 	}
 
-	ex.log.Info("Job %s cancelled", jobID)
+	ex.Log.Info("Job %s cancelled", jobID)
 	return nil
 }
 
@@ -502,16 +681,16 @@ func (ex *common.Executor) CancelJob(jobID string) error {
 // ============================================================================
 
 // GetStats: Get executor statistics
-func (ex *common.Executor) GetStats() map[string]interface{} {
+func (ex *Executor) GetStats() map[string]interface{} {
 	ex.JobsMu.RLock()
-	activeCount := len(ex.activeJobs)
-	completedCount := len(ex.completedJobs)
+	activeCount := len(ex.ActiveJobs)
+	completedCount := len(ex.CompletedJobs)
 	ex.JobsMu.RUnlock()
 
-	totalJobs := atomic.LoadUint64(&ex.totalJobs)
-	totalSuccessful := atomic.LoadUint64(&ex.totalSuccessful)
-	totalFailed := atomic.LoadUint64(&ex.totalFailed)
-	totalCancelled := atomic.LoadUint64(&ex.totalCancelled)
+	totalJobs := atomic.LoadUint64(&ex.TotalJobs)
+	totalSuccessful := atomic.LoadUint64(&ex.TotalSuccessful)
+	totalFailed := atomic.LoadUint64(&ex.TotalFailed)
+	totalCancelled := atomic.LoadUint64(&ex.TotalCancelled)
 
 	successRate := 0.0
 	if totalJobs > 0 {
@@ -520,12 +699,12 @@ func (ex *common.Executor) GetStats() map[string]interface{} {
 
 	avgDuration := 0.0
 	if totalJobs > 0 {
-		totalDuration := atomic.LoadInt64(&ex.totalDuration)
+		totalDuration := atomic.LoadInt64(&ex.TotalDuration)
 		avgDuration = float64(totalDuration) / float64(totalJobs) / 1e9
 	}
 
 	return map[string]interface{}{
-		"cluster_id":       ex.clusterID,
+		"cluster_id":       ex.ClusterID,
 		"active_jobs":      activeCount,
 		"completed_jobs":   completedCount,
 		"total_jobs":       totalJobs,
@@ -534,46 +713,46 @@ func (ex *common.Executor) GetStats() map[string]interface{} {
 		"total_cancelled":  totalCancelled,
 		"success_rate":     successRate,
 		"avg_duration_sec": avgDuration,
-		"max_concurrent":   ex.config.MaxConcurrentJobs,
-		"namespace":        ex.config.Namespace,
+		"max_concurrent":   ex.Config.MaxConcurrentJobs,
+		"namespace":        ex.Config.Namespace,
 	}
 }
 
 // GetExecutorHealth: Get executor health status
-func (ex *common.Executor) GetExecutorHealth() map[string]interface{} {
+func (ex *Executor) GetExecutorHealth() map[string]interface{} {
 	ex.JobsMu.RLock()
-	activeCount := len(ex.activeJobs)
+	activeCount := len(ex.ActiveJobs)
 	ex.JobsMu.RUnlock()
 
-	isHealthy := activeCount < ex.config.MaxConcurrentJobs
-	utilization := float64(activeCount) / float64(ex.config.MaxConcurrentJobs) * 100.0
+	isHealthy := activeCount < ex.Config.MaxConcurrentJobs
+	utilization := float64(activeCount) / float64(ex.Config.MaxConcurrentJobs) * 100.0
 
 	return map[string]interface{}{
-		"cluster_id":      ex.clusterID,
+		"cluster_id":      ex.ClusterID,
 		"healthy":         isHealthy,
 		"active_jobs":     activeCount,
-		"max_concurrent":  ex.config.MaxConcurrentJobs,
+		"max_concurrent":  ex.Config.MaxConcurrentJobs,
 		"utilization_pct": utilization,
 		"timestamp":       time.Now().Format(time.RFC3339),
 	}
 }
 
 // Cleanup: Clean up old completed jobs
-func (ex *common.Executor) Cleanup(olderThan time.Duration) error {
+func (ex *Executor) Cleanup(olderThan time.Duration) error {
 	cutoffTime := time.Now().Add(-olderThan)
 
 	ex.JobsMu.Lock()
 	defer ex.JobsMu.Unlock()
 
 	deletedCount := 0
-	for jobID, result := range ex.completedJobs {
+	for jobID, result := range ex.CompletedJobs {
 		if result.CompletedAt.Before(cutoffTime) {
-			delete(ex.completedJobs, jobID)
+			delete(ex.CompletedJobs, jobID)
 			deletedCount++
 		}
 	}
 
-	ex.log.Info("Cleanup: removed %d old completed jobs", deletedCount)
+	ex.Log.Info("Cleanup: removed %d old completed jobs", deletedCount)
 	return nil
 }
 
@@ -582,7 +761,7 @@ func (ex *common.Executor) Cleanup(olderThan time.Duration) error {
 // ============================================================================
 
 // generatePodName: Generate valid Kubernetes Pod name
-func (ex *common.Executor) generatePodName(jobID string) string {
+func generatePodName(jobID string) string {
 	podName := ""
 	for _, ch := range jobID {
 		if (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '-' {
@@ -650,7 +829,7 @@ func join(arr []string, sep string) string {
 // MockK8sClient: Mock Kubernetes client for development
 type MockK8sClient struct {
 	mu         sync.RWMutex
-	pods       map[string]*common.PodInfo
+	pods       map[string]*PodInfo
 	podLogs    map[string]string
 	podMetrics map[string]map[string]interface{}
 }
@@ -658,14 +837,14 @@ type MockK8sClient struct {
 // NewMockK8sClient: Create mock client
 func NewMockK8sClient() *MockK8sClient {
 	return &MockK8sClient{
-		pods:       make(map[string]*common.PodInfo),
+		pods:       make(map[string]*PodInfo),
 		podLogs:    make(map[string]string),
 		podMetrics: make(map[string]map[string]interface{}),
 	}
 }
 
 // CreatePod: Mock Pod creation
-func (m *MockK8sClient) CreatePod(ctx context.Context, pod *common.PodSpec) (string, error) {
+func (m *MockK8sClient) CreatePod(ctx context.Context, pod *PodSpec) (string, error) {
 	if pod == nil || pod.PodName == "" {
 		return "", fmt.Errorf("invalid pod spec")
 	}
@@ -673,12 +852,12 @@ func (m *MockK8sClient) CreatePod(ctx context.Context, pod *common.PodSpec) (str
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	podInfo := &common.PodInfo{
+	podInfo := &PodInfo{
 		PodName:    pod.PodName,
 		Namespace:  pod.Namespace,
 		JobID:      pod.Labels["job-id"],
 		NodeID:     pod.NodeID,
-		Phase:      pod.,
+		Phase:      PhasePending,
 		CreatedAt:  time.Now(),
 		GPUIndices: pod.GPUIndices,
 		Ready:      false,
@@ -708,7 +887,7 @@ func (m *MockK8sClient) CreatePod(ctx context.Context, pod *common.PodSpec) (str
 }
 
 // GetPod: Mock get Pod
-func (m *MockK8sClient) GetPod(ctx context.Context, podName string) (*common.PodInfo, error) {
+func (m *MockK8sClient) GetPod(ctx context.Context, podName string) (*PodInfo, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -734,11 +913,11 @@ func (m *MockK8sClient) DeletePod(ctx context.Context, podName string) error {
 }
 
 // ListPods: Mock list Pods
-func (m *MockK8sClient) ListPods(ctx context.Context) ([]*common.PodInfo, error) {
+func (m *MockK8sClient) ListPods(ctx context.Context) ([]*PodInfo, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	pods := make([]*common.PodInfo, 0, len(m.pods))
+	pods := make([]*PodInfo, 0, len(m.pods))
 	for _, pod := range m.pods {
 		pods = append(pods, pod)
 	}
@@ -776,7 +955,7 @@ func (m *MockK8sClient) GetPodMetrics(ctx context.Context, podName string) (map[
 }
 
 // WatchPod: Mock watch Pod
-func (m *MockK8sClient) WatchPod(ctx context.Context, podName string, callback func(*common.PodInfo)) error {
+func (m *MockK8sClient) WatchPod(ctx context.Context, podName string, callback func(*PodInfo)) error {
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 
