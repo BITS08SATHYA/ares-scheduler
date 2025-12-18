@@ -4,12 +4,14 @@ import (
 	"context"
 	"fmt"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/executor"
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/logger"
 	_ "go.etcd.io/etcd/client/v3/kubernetes"
 	"io"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"os"
+	"sort"
 
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8sClient "k8s.io/client-go/kubernetes"
 	k8sCoreClient "k8s.io/client-go/kubernetes"
@@ -96,24 +98,108 @@ func (kc *K8sClientImpl) GetKubernetesInterface() k8sClient.Interface {
 // ============================================================================
 
 // CreatePod: Actually create a Kubernetes Pod
+//func (kc *K8sClientImpl) CreatePod(ctx context.Context, podSpec *executor.PodSpec) (string, error) {
+//
+//	logger.Get().Info("Implementation --> Create Pod Entered: ")
+//
+//	if podSpec == nil || podSpec.PodName == "" {
+//		return "", fmt.Errorf("invalid pod spec")
+//	}
+//
+//	// Build GPU requests
+//	requests := corev1.ResourceList{
+//		"memory": resource.MustParse(fmt.Sprintf("%dMi", podSpec.MemoryMB)),
+//		"cpu":    resource.MustParse(fmt.Sprintf("%dm", podSpec.CPUMillis)),
+//	}
+//
+//	// Add GPU requests if specified
+//	if podSpec.GPUCount > 0 {
+//		requests["nvidia.com/gpu"] = resource.MustParse(fmt.Sprintf("%d", podSpec.GPUCount))
+//	}
+//
+//	// Build Pod object
+//	pod := &corev1.Pod{
+//		ObjectMeta: metav1.ObjectMeta{
+//			Name:      podSpec.PodName,
+//			Namespace: podSpec.Namespace,
+//			Labels:    podSpec.Labels,
+//		},
+//		Spec: corev1.PodSpec{
+//			Containers: []corev1.Container{
+//				{
+//					Name:            podSpec.PodName,
+//					Image:           podSpec.Image,
+//					ImagePullPolicy: corev1.PullPolicy(podSpec.ImagePullPolicy),
+//					Env:             envMapToEnvVars(podSpec.EnvVars),
+//					Resources: corev1.ResourceRequirements{
+//						Requests: requests,
+//						Limits:   requests,
+//					},
+//				},
+//			},
+//			RestartPolicy: corev1.RestartPolicy(podSpec.RestartPolicy),
+//			NodeSelector: map[string]string{
+//				"kubernetes.io/hostname": podSpec.NodeID,
+//			},
+//		},
+//	}
+//
+//	// Create Pod in Kubernetes
+//	created, err := kc.clientset.CoreV1().Pods(kc.namespace).Create(ctx, pod, metav1.CreateOptions{})
+//	if err != nil {
+//		return "", fmt.Errorf("failed to create pod: %w", err)
+//	}
+//
+//	logger.Get().Info("Pod is created @ K8s Implementation:  ", created)
+//
+//	return created.Name, nil
+//}
+
+// CreatePod: Actually create a Kubernetes Pod
 func (kc *K8sClientImpl) CreatePod(ctx context.Context, podSpec *executor.PodSpec) (string, error) {
+	logger.Get().Info("Implementation --> Create Pod Entered")
 
-	//log.Info("Create Pod Entered: ")
-
+	// Validate input
 	if podSpec == nil || podSpec.PodName == "" {
-		return "", fmt.Errorf("invalid pod spec")
+		return "", fmt.Errorf("invalid pod spec: podName is required")
+	}
+	if podSpec.Image == "" {
+		return "", fmt.Errorf("invalid pod spec: image is required")
 	}
 
-	// Build GPU requests
+	// Build resource requirements (requests = limits for Guaranteed QoS)
 	requests := corev1.ResourceList{
-		"memory": resource.MustParse(fmt.Sprintf("%dMi", podSpec.MemoryMB)),
-		"cpu":    resource.MustParse(fmt.Sprintf("%dm", podSpec.CPUMillis)),
+		corev1.ResourceMemory: resource.MustParse(fmt.Sprintf("%dMi", podSpec.MemoryMB)),
+		corev1.ResourceCPU:    resource.MustParse(fmt.Sprintf("%dm", podSpec.CPUMillis)),
 	}
 
 	// Add GPU requests if specified
 	if podSpec.GPUCount > 0 {
-		requests["nvidia.com/gpu"] = resource.MustParse(fmt.Sprintf("%d", podSpec.GPUCount))
+		requests[corev1.ResourceName("nvidia.com/gpu")] = resource.MustParse(fmt.Sprintf("%d", podSpec.GPUCount))
 	}
+
+	// Build container spec
+	container := corev1.Container{
+		Name:            podSpec.PodName,
+		Image:           podSpec.Image,
+		ImagePullPolicy: corev1.PullPolicy(podSpec.ImagePullPolicy),
+		Env:             envMapToEnvVars(podSpec.EnvVars),
+		Resources: corev1.ResourceRequirements{
+			Requests: requests,
+			Limits:   requests, // Requests == Limits for Guaranteed QoS
+		},
+	}
+
+	// Add Command and Args if provided
+	if len(podSpec.Command) > 0 {
+		container.Command = podSpec.Command
+	}
+	if len(podSpec.Args) > 0 {
+		container.Args = podSpec.Args
+	}
+
+	// Build tolerations - ALIGNED WITH DAEMONSET (OPTION 1: CATCH-ALL)
+	tolerations := buildPodTolerations()
 
 	// Build Pod object
 	pod := &corev1.Pod{
@@ -123,32 +209,134 @@ func (kc *K8sClientImpl) CreatePod(ctx context.Context, podSpec *executor.PodSpe
 			Labels:    podSpec.Labels,
 		},
 		Spec: corev1.PodSpec{
-			Containers: []corev1.Container{
-				{
-					Name:            podSpec.PodName,
-					Image:           podSpec.Image,
-					ImagePullPolicy: corev1.PullPolicy(podSpec.ImagePullPolicy),
-					Env:             envMapToEnvVars(podSpec.EnvVars),
-					Resources: corev1.ResourceRequirements{
-						Requests: requests,
-						Limits:   requests,
-					},
-				},
-			},
+			Containers:    []corev1.Container{container},
 			RestartPolicy: corev1.RestartPolicy(podSpec.RestartPolicy),
 			NodeSelector: map[string]string{
 				"kubernetes.io/hostname": podSpec.NodeID,
 			},
+			Tolerations: tolerations, // ✅ CRITICAL: Aligned with DaemonSet
 		},
 	}
 
 	// Create Pod in Kubernetes
 	created, err := kc.clientset.CoreV1().Pods(kc.namespace).Create(ctx, pod, metav1.CreateOptions{})
 	if err != nil {
-		return "", fmt.Errorf("failed to create pod: %w", err)
+		logger.Get().Error("Failed to create pod", "error", err, "podName", podSpec.PodName)
+		return "", fmt.Errorf("failed to create pod %s: %w", podSpec.PodName, err)
 	}
 
+	logger.Get().Info("Pod created successfully",
+		"podName", created.Name,
+		"namespace", created.Namespace,
+		"node", podSpec.NodeID,
+		"gpuCount", podSpec.GPUCount,
+	)
+
 	return created.Name, nil
+}
+
+// buildPodTolerations: Build tolerations matching ares-local DaemonSet behavior
+// This ensures job pods can schedule on ANY node where ares-local runs
+func buildPodTolerations() []corev1.Toleration {
+	tolerationSeconds := int64(300)
+
+	return []corev1.Toleration{
+		// ============================================
+		// STANDARD KUBERNETES NODE CONDITIONS
+		// ============================================
+		// Tolerate temporarily unreachable nodes
+		{
+			Key:               "node.kubernetes.io/not-ready",
+			Operator:          corev1.TolerationOpExists,
+			Effect:            corev1.TaintEffectNoExecute,
+			TolerationSeconds: &tolerationSeconds,
+		},
+		{
+			Key:               "node.kubernetes.io/unreachable",
+			Operator:          corev1.TolerationOpExists,
+			Effect:            corev1.TaintEffectNoExecute,
+			TolerationSeconds: &tolerationSeconds,
+		},
+
+		// ============================================
+		// GPU-SPECIFIC TAINTS
+		// ============================================
+		// NVIDIA GPU taints (common in GPU clusters)
+		{
+			Key:      "nvidia.com/gpu",
+			Operator: corev1.TolerationOpExists,
+			Effect:   corev1.TaintEffectNoSchedule,
+		},
+		{
+			Key:      "nvidia.com/gpu",
+			Operator: corev1.TolerationOpExists,
+			Effect:   corev1.TaintEffectNoExecute,
+		},
+
+		// ============================================
+		// CLOUD PROVIDER GPU TAINTS
+		// ============================================
+		// GKE (Google Kubernetes Engine) GPU taints
+		{
+			Key:      "cloud.google.com/gke-accelerator",
+			Operator: corev1.TolerationOpExists,
+			Effect:   corev1.TaintEffectNoSchedule,
+		},
+		{
+			Key:      "cloud.google.com/gke-accelerator",
+			Operator: corev1.TolerationOpExists,
+			Effect:   corev1.TaintEffectNoExecute,
+		},
+
+		// Generic accelerator taints (some clusters use this)
+		{
+			Key:      "accelerator",
+			Operator: corev1.TolerationOpExists,
+			Effect:   corev1.TaintEffectNoSchedule,
+		},
+		{
+			Key:      "accelerator",
+			Operator: corev1.TolerationOpExists,
+			Effect:   corev1.TaintEffectNoExecute,
+		},
+
+		// ============================================
+		// CATCH-ALL TOLERATIONS (OPTION 1)
+		// ============================================
+		// Tolerate ANY taint with NoSchedule effect
+		// This matches ares-local DaemonSet behavior
+		{
+			Operator: corev1.TolerationOpExists,
+			Effect:   corev1.TaintEffectNoSchedule,
+		},
+		// Tolerate ANY taint with NoExecute effect
+		{
+			Operator: corev1.TolerationOpExists,
+			Effect:   corev1.TaintEffectNoExecute,
+		},
+	}
+}
+
+// envMapToEnvVars: Convert map to Kubernetes EnvVar slice
+func envMapToEnvVars(envMap map[string]string) []corev1.EnvVar {
+	if len(envMap) == 0 {
+		return []corev1.EnvVar{}
+	}
+
+	envVars := make([]corev1.EnvVar, 0, len(envMap))
+	for key, value := range envMap {
+		envVars = append(envVars, corev1.EnvVar{
+			Name:  key,
+			Value: value,
+		})
+	}
+
+	// Sort for deterministic output (helpful for testing/debugging)
+	sort.Slice(envVars, func(i, j int) bool {
+		return envVars[i].Name < envVars[j].Name
+	})
+
+	return envVars
 }
 
 // GetPod: Get Pod information
@@ -269,13 +457,13 @@ func convertK8sPodPhase(k8sPhase corev1.PodPhase) executor.PodPhase {
 
 // envMapToEnvVars: Convert map[string]string to []corev1.EnvVar
 // Used when building Pod environment variables
-func envMapToEnvVars(envMap map[string]string) []corev1.EnvVar {
-	var envVars []corev1.EnvVar
-	for key, value := range envMap {
-		envVars = append(envVars, corev1.EnvVar{
-			Name:  key,
-			Value: value,
-		})
-	}
-	return envVars
-}
+//func envMapToEnvVars(envMap map[string]string) []corev1.EnvVar {
+//	var envVars []corev1.EnvVar
+//	for key, value := range envMap {
+//		envVars = append(envVars, corev1.EnvVar{
+//			Name:  key,
+//			Value: value,
+//		})
+//	}
+//	return envVars
+//}

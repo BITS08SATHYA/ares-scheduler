@@ -142,6 +142,8 @@ type PodSpec struct {
 	PodName         string
 	Namespace       string
 	Image           string
+	Command         []string
+	Args            []string
 	ImagePullPolicy string
 	EnvVars         map[string]string
 	MemoryMB        int
@@ -156,14 +158,15 @@ type PodSpec struct {
 
 // Default config
 var DefaultExecutorConfig = &ExecutorConfig{
-	Namespace:                "default",
-	DefaultTimeout:           1 * time.Hour,
-	DefaultMemoryMB:          1024,
-	DefaultCPUMillis:         500,
-	HealthCheckInterval:      5 * time.Second,
-	MaxConcurrentJobs:        100,
-	ImageRegistry:            "docker.io",
-	DefaultJobImage:          "ares-job:latest",
+	Namespace:           "default",
+	DefaultTimeout:      1 * time.Hour,
+	DefaultMemoryMB:     1024,
+	DefaultCPUMillis:    500,
+	HealthCheckInterval: 5 * time.Second,
+	MaxConcurrentJobs:   100,
+	//ImageRegistry:            "docker.io",
+	ImageRegistry:            "",
+	DefaultJobImage:          "nvidia/cuda:13.0.2-runtime-ubuntu22.04",
 	RestartPolicy:            "OnFailure",
 	ImagePullPolicy:          "IfNotPresent",
 	EnableGPUSupport:         true,
@@ -179,6 +182,9 @@ type K8Decision struct {
 	GPUAffinityScore float64
 	PlacementReasons []string
 	ScheduledAt      time.Time
+	Command          []string
+	Args             []string
+	Image            string
 }
 
 // ============================================================================
@@ -351,9 +357,12 @@ func createPodSpec(
 
 	// Build image name
 	imageName := ex.Config.DefaultJobImage
+
 	if ex.Config.ImageRegistry != "" && !contains(imageName, "/") {
 		imageName = fmt.Sprintf("%s/%s", ex.Config.ImageRegistry, imageName)
 	}
+	//imageName := decision.Image
+	ex.Log.Debug("Passed Image Name: %s", imageName)
 
 	// Convert GPU indices to strings for environment variable
 	gpuDeviceStrs := make([]string, len(decision.GPUIndices))
@@ -389,6 +398,8 @@ func createPodSpec(
 		PodName:         podName,
 		Namespace:       ex.Config.Namespace,
 		Image:           imageName,
+		Command:         decision.Command, // ✅ FIXED: Pass from decision
+		Args:            decision.Args,    // ✅ FIXED: Pass from decision
 		ImagePullPolicy: ex.Config.ImagePullPolicy,
 		EnvVars:         envVars,
 		MemoryMB:        ex.Config.DefaultMemoryMB,
@@ -400,6 +411,8 @@ func createPodSpec(
 		NodeID:          decision.NodeID,
 		Labels:          labels,
 	}
+
+	logger.Get().Info("Generated PodSpec: ", spec)
 
 	return spec
 }
@@ -793,6 +806,8 @@ func generatePodName(jobID string) string {
 	if podName == "" {
 		podName = fmt.Sprintf("job-%d", time.Now().UnixNano())
 	}
+
+	logger.Get().Info("Generated Pod Name: %s", podName)
 
 	return podName
 }

@@ -94,6 +94,9 @@ func (lss *LocalSchedulerServer) handleSchedule(w http.ResponseWriter, r *http.R
 	var req struct {
 		JobID   string          `json:"job_id"`
 		JobSpec *common.JobSpec `json:"job_spec"`
+		Command []string        `json:"command,omitempty"` // ✅ ADDED
+		Args    []string        `json:"args,omitempty"`    // ✅ ADDED
+		Image   string          `json:"image,omitempty"`   // ✅ ADDED
 	}
 
 	err := json.NewDecoder(r.Body).Decode(&req)
@@ -123,7 +126,7 @@ func (lss *LocalSchedulerServer) handleSchedule(w http.ResponseWriter, r *http.R
 	if lss.executor != nil {
 		lss.log.Info("Calling Executor to create Pod...")
 
-		execCtx, err := lss.executor.ExecuteJob(r.Context(), &executor.K8Decision{
+		k8dec := &executor.K8Decision{
 			JobID:            decision.JobID,
 			NodeID:           decision.NodeID,
 			GPUIndices:       decision.GPUIndices,
@@ -131,7 +134,19 @@ func (lss *LocalSchedulerServer) handleSchedule(w http.ResponseWriter, r *http.R
 			GPUAffinityScore: decision.GPUAffinityScore,
 			PlacementReasons: decision.PlacementReasons,
 			ScheduledAt:      decision.ScheduledAt,
-		})
+			Command:          req.Command,
+			Args:             req.Args,
+			Image:            req.Image,
+		}
+
+		// ✅ FIXED: Set defaults if not provided
+		if len(k8dec.Command) == 0 && len(k8dec.Args) == 0 {
+			k8dec.Command = []string{"sh", "-c"}
+			k8dec.Args = []string{"nvidia-smi && echo 'Job started' && sleep 120"}
+			lss.log.Info("Using default command/args for testing")
+		}
+
+		execCtx, err := lss.executor.ExecuteJob(r.Context(), k8dec)
 		if err != nil {
 			lss.log.Error("Pod creation failed: %v", err)
 			w.WriteHeader(http.StatusInternalServerError)
