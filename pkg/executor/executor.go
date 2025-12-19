@@ -158,7 +158,7 @@ type PodSpec struct {
 
 // Default config
 var DefaultExecutorConfig = &ExecutorConfig{
-	Namespace:           "default",
+	Namespace:           "ares-system",
 	DefaultTimeout:      1 * time.Hour,
 	DefaultMemoryMB:     1024,
 	DefaultCPUMillis:    500,
@@ -230,7 +230,7 @@ func NewExecutor(
 	}
 
 	if config.Namespace == "" {
-		config.Namespace = "default"
+		config.Namespace = "ares-system"
 	}
 
 	if config.DefaultTimeout <= 0 {

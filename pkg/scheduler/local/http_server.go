@@ -146,7 +146,9 @@ func (lss *LocalSchedulerServer) handleSchedule(w http.ResponseWriter, r *http.R
 			lss.log.Info("Using default command/args for testing")
 		}
 
-		execCtx, err := lss.executor.ExecuteJob(r.Context(), k8dec)
+		jobCtx := context.Background()
+
+		execCtx, err := lss.executor.ExecuteJob(jobCtx, k8dec)
 		if err != nil {
 			lss.log.Error("Pod creation failed: %v", err)
 			w.WriteHeader(http.StatusInternalServerError)
