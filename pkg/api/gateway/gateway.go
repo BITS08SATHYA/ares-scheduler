@@ -290,6 +290,8 @@ type APIGateway struct {
 
 	// Handler mutex
 	handlerMu sync.RWMutex
+
+	metrics *Metrics // Prometheus metrics
 }
 
 // GatewayConfig: Configuration for API gateway
@@ -347,6 +349,7 @@ func NewAPIGateway(
 		activeJobs:      make(map[string]*executor.ExecutionContext),
 		completedJobs:   make(map[string]*executor.ExecutionResult),
 		podRegistry:     make(map[string]*executor.PodInfo),
+		metrics:         &Metrics{},
 	}
 
 	return gateway, nil
@@ -523,6 +526,7 @@ func NewAPIGatewayWithCoordinator(
 		activeJobs:      make(map[string]*executor.ExecutionContext),
 		completedJobs:   make(map[string]*executor.ExecutionResult),
 		podRegistry:     make(map[string]*executor.PodInfo),
+		metrics:         &Metrics{},
 		//k8sClient:       mockK8sClient, //
 	}
 
@@ -617,6 +621,8 @@ func (ag *APIGateway) wrapHandler(handler func(http.ResponseWriter, *http.Reques
 		atomic.AddUint64(&ag.totalRequests, 1)
 		atomic.AddInt64(&ag.requestDuration, duration.Nanoseconds())
 
+		ag.metrics.RecordRequest(duration)
+
 		ag.log.Info("API Response completed in %.2fms", duration.Seconds()*1000)
 	}
 }
@@ -683,8 +689,12 @@ func (ag *APIGateway) handleScheduleJob(w http.ResponseWriter, r *http.Request) 
 		ag.log.Warn("Scheduling failed for job %s: %v", apiReq.RequestID, scheduleErr)
 		ag.respondError(w, http.StatusConflict, "SCHEDULING_FAILED", scheduleErr.Error())
 		atomic.AddUint64(&ag.totalErrors, 1)
+		ag.metrics.RecordError() // Recording the Error
 		return
 	}
+
+	// Record Successful Job Scheduling
+	ag.metrics.RecordJobScheduled()
 
 	// BUILD RESPONSE
 	w.WriteHeader(http.StatusOK)
@@ -764,42 +774,49 @@ func (ag *APIGateway) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if ag.globalScheduler == nil {
-		ag.respondError(w, http.StatusInternalServerError, "NO_SCHEDULER", "scheduler not initialized")
-		return
-	}
-
-	globalMetrics := ag.globalScheduler.GetMetrics()
-	datacenterLoad := ag.globalScheduler.GetDatacenterLoad()
-	federationStatus := ag.globalScheduler.GetFederationStatus()
-
-	totalReq := atomic.LoadUint64(&ag.totalRequests)
-	totalErr := atomic.LoadUint64(&ag.totalErrors)
-
-	successRate := 0.0
-	if totalReq > 0 {
-		successRate = float64(totalReq-totalErr) / float64(totalReq) * 100.0
-	}
-
-	avgDuration := 0.0
-	if totalReq > 0 {
-		totalDuration := atomic.LoadInt64(&ag.requestDuration)
-		avgDuration = float64(totalDuration) / float64(totalReq) / 1e6
-	}
-
-	response := &MetricsResponse{
-		Timestamp:         time.Now().Format(time.RFC3339),
-		TotalScheduled:    uint64(globalMetrics.TotalJobsScheduled),
-		TotalFailed:       uint64(globalMetrics.TotalJobsFailed),
-		SuccessRate:       successRate,
-		AvgDurationMs:     avgDuration,
-		DatacenterLoad:    datacenterLoad,
-		FederationStatus:  federationStatus,
-		SLAComplianceRate: 0.95,
-	}
-
+	// Prometheus Format (plain text)
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(response)
+
+	// Export Metrics in Prometheus format
+	fmt.Fprint(w, ag.metrics.ExportPrometheus())
+
+	//if ag.globalScheduler == nil {
+	//	ag.respondError(w, http.StatusInternalServerError, "NO_SCHEDULER", "scheduler not initialized")
+	//	return
+	//}
+	//
+	//globalMetrics := ag.globalScheduler.GetMetrics()
+	//datacenterLoad := ag.globalScheduler.GetDatacenterLoad()
+	//federationStatus := ag.globalScheduler.GetFederationStatus()
+	//
+	//totalReq := atomic.LoadUint64(&ag.totalRequests)
+	//totalErr := atomic.LoadUint64(&ag.totalErrors)
+	//
+	//successRate := 0.0
+	//if totalReq > 0 {
+	//	successRate = float64(totalReq-totalErr) / float64(totalReq) * 100.0
+	//}
+	//
+	//avgDuration := 0.0
+	//if totalReq > 0 {
+	//	totalDuration := atomic.LoadInt64(&ag.requestDuration)
+	//	avgDuration = float64(totalDuration) / float64(totalReq) / 1e6
+	//}
+	//
+	//response := &MetricsResponse{
+	//	Timestamp:         time.Now().Format(time.RFC3339),
+	//	TotalScheduled:    uint64(globalMetrics.TotalJobsScheduled),
+	//	TotalFailed:       uint64(globalMetrics.TotalJobsFailed),
+	//	SuccessRate:       successRate,
+	//	AvgDurationMs:     avgDuration,
+	//	DatacenterLoad:    datacenterLoad,
+	//	FederationStatus:  federationStatus,
+	//	SLAComplianceRate: 0.95,
+	//}
+	//
+	//w.WriteHeader(http.StatusOK)
+	//json.NewEncoder(w).Encode(response)
 }
 
 // Other handlers (abbreviated)

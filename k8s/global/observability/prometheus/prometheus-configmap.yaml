@@ -1,0 +1,90 @@
+# Prometheus configuration for scraping Ares metrics
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: ares-global
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s      # Scrape every 15 seconds
+      evaluation_interval: 15s
+      external_labels:
+        cluster: 'ares-production'
+        monitor: 'ares-prometheus'
+
+    # Scrape configurations
+    scrape_configs:
+      # ========================================
+      # ARES GLOBAL SCHEDULER (API Gateway)
+      # ========================================
+      - job_name: 'ares-global-scheduler'
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names:
+                - ares-global
+        relabel_configs:
+          # Only scrape pods with label app=ares-global-scheduler
+          - source_labels: [__meta_kubernetes_pod_label_app]
+            action: keep
+            regex: ares-global-scheduler
+          
+          # Set instance label to pod name
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: instance
+          
+          # Add cluster_id label
+          - source_labels: [__meta_kubernetes_pod_label_cluster_id]
+            target_label: cluster_id
+        
+        # Scrape /metrics endpoint on port 8080
+        metrics_path: '/metrics'
+      
+      # ========================================
+      # ARES LOCAL SCHEDULERS (Worker Clusters)
+      # ========================================
+      - job_name: 'ares-local-schedulers'
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names:
+                - ares-local
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_label_app]
+            action: keep
+            regex: ares-local-scheduler
+          
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: instance
+          
+          - source_labels: [__meta_kubernetes_pod_label_cluster_id]
+            target_label: cluster_id
+        
+        metrics_path: '/metrics'
+
+      # ========================================
+      # REDIS (Global State)
+      # ========================================
+      - job_name: 'ares-redis'
+        static_configs:
+          - targets: ['redis:6379']
+        metrics_path: '/metrics'
+
+      # ========================================
+      # ETCD (Distributed Coordination)
+      # ========================================
+      - job_name: 'ares-etcd'
+        static_configs:
+          - targets: ['etcd:2379']
+        metrics_path: '/metrics'
+
+      # ========================================
+      # KUBERNETES NODES (GPU utilization)
+      # ========================================
+      - job_name: 'kubernetes-nodes'
+        kubernetes_sd_configs:
+          - role: node
+        relabel_configs:
+          - action: labelmap
+            regex: __meta_kubernetes_node_label_(.+)
