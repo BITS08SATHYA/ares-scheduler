@@ -93,68 +93,6 @@ func (kc *K8sClientImpl) GetKubernetesInterface() k8sClient.Interface {
 	return kc.clientset
 }
 
-// ============================================================================
-// POD OPERATIONS
-// ============================================================================
-
-// CreatePod: Actually create a Kubernetes Pod
-//func (kc *K8sClientImpl) CreatePod(ctx context.Context, podSpec *executor.PodSpec) (string, error) {
-//
-//	logger.Get().Info("Implementation --> Create Pod Entered: ")
-//
-//	if podSpec == nil || podSpec.PodName == "" {
-//		return "", fmt.Errorf("invalid pod spec")
-//	}
-//
-//	// Build GPU requests
-//	requests := corev1.ResourceList{
-//		"memory": resource.MustParse(fmt.Sprintf("%dMi", podSpec.MemoryMB)),
-//		"cpu":    resource.MustParse(fmt.Sprintf("%dm", podSpec.CPUMillis)),
-//	}
-//
-//	// Add GPU requests if specified
-//	if podSpec.GPUCount > 0 {
-//		requests["nvidia.com/gpu"] = resource.MustParse(fmt.Sprintf("%d", podSpec.GPUCount))
-//	}
-//
-//	// Build Pod object
-//	pod := &corev1.Pod{
-//		ObjectMeta: metav1.ObjectMeta{
-//			Name:      podSpec.PodName,
-//			Namespace: podSpec.Namespace,
-//			Labels:    podSpec.Labels,
-//		},
-//		Spec: corev1.PodSpec{
-//			Containers: []corev1.Container{
-//				{
-//					Name:            podSpec.PodName,
-//					Image:           podSpec.Image,
-//					ImagePullPolicy: corev1.PullPolicy(podSpec.ImagePullPolicy),
-//					Env:             envMapToEnvVars(podSpec.EnvVars),
-//					Resources: corev1.ResourceRequirements{
-//						Requests: requests,
-//						Limits:   requests,
-//					},
-//				},
-//			},
-//			RestartPolicy: corev1.RestartPolicy(podSpec.RestartPolicy),
-//			NodeSelector: map[string]string{
-//				"kubernetes.io/hostname": podSpec.NodeID,
-//			},
-//		},
-//	}
-//
-//	// Create Pod in Kubernetes
-//	created, err := kc.clientset.CoreV1().Pods(kc.namespace).Create(ctx, pod, metav1.CreateOptions{})
-//	if err != nil {
-//		return "", fmt.Errorf("failed to create pod: %w", err)
-//	}
-//
-//	logger.Get().Info("Pod is created @ K8s Implementation:  ", created)
-//
-//	return created.Name, nil
-//}
-
 // CreatePod: Actually create a Kubernetes Pod
 func (kc *K8sClientImpl) CreatePod(ctx context.Context, podSpec *executor.PodSpec) (string, error) {
 	logger.Get().Info("Implementation --> Create Pod Entered")
@@ -186,7 +124,7 @@ func (kc *K8sClientImpl) CreatePod(ctx context.Context, podSpec *executor.PodSpe
 		Env:             envMapToEnvVars(podSpec.EnvVars),
 		Resources: corev1.ResourceRequirements{
 			Requests: requests,
-			Limits:   requests, // Requests == Limits for Guaranteed QoS
+			Limits:   requests,
 		},
 	}
 

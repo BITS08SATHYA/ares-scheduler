@@ -32,7 +32,7 @@ spec:
               name: http
               protocol: TCP
 
-          # ✅ CORRECTED: Only pass flags that exist in cmd/global/main.go
+          # CORRECTED: Only pass flags that exist in cmd/global/main.go
           args:
             - --gateway.port=8080
             - --etcd.endpoint=etcd-0.etcd.ares-system.svc.cluster.local:2379
