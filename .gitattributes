@@ -1,16 +1,22 @@
+# Configuration files - don't count in language stats
 .gitattributes linguist-vendored
 .gitignore linguist-vendored
-docker-compose.yml linguist-language=YAML
 
-# Dockerfile variants
+# YAML files
+docker-compose.yml linguist-language=YAML
+*.yaml linguist-language=YAML
+*.yml linguist-language=YAML
+
+# Dockerfile variants - specific rules FIRST
+Dockerfile.global linguist-language=Dockerfile
+Dockerfile.local linguist-language=Dockerfile
 Dockerfile linguist-language=Dockerfile
 Dockerfile.* linguist-language=Dockerfile
 *.dockerfile linguist-language=Dockerfile
 
-# Kubernetes manifests
-k8s/*.yaml linguist-language=YAML
-*.k8s.yaml linguist-language=YAML
-
 # Documentation
 *.md linguist-documentation
 docs/* linguist-documentation
+
+# Tests
+tests/* linguist-detectable=true
