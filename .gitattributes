@@ -1,2 +1,4 @@
+.gitattributes linguist-vendored
+
 Dockerfile.global linguist-language=Dockerfile
 Dockerfile.local linguist-language=Dockerfile
