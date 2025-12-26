@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: grafana
-  namespace: ares-global
+  namespace: ares-system
   labels:
     app: grafana
 spec:
@@ -15,6 +15,7 @@ spec:
       labels:
         app: grafana
     spec:
+      serviceAccountName: ares-scheduler
       containers:
         - name: grafana
           image: grafana/grafana:10.2.2

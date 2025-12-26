@@ -3,7 +3,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: prometheus-config
-  namespace: ares-global
+  namespace: ares-system
 data:
   prometheus.yml: |
     global:
@@ -23,12 +23,12 @@ data:
           - role: pod
             namespaces:
               names:
-                - ares-global
+                - ares-system
         relabel_configs:
           # Only scrape pods with label app=ares-global-scheduler
           - source_labels: [__meta_kubernetes_pod_label_app]
             action: keep
-            regex: ares-global-scheduler
+            regex: ares-global
           
           # Set instance label to pod name
           - source_labels: [__meta_kubernetes_pod_name]
@@ -49,11 +49,11 @@ data:
           - role: pod
             namespaces:
               names:
-                - ares-local
+                - ares-system
         relabel_configs:
           - source_labels: [__meta_kubernetes_pod_label_app]
             action: keep
-            regex: ares-local-scheduler
+            regex: ares-local
           
           - source_labels: [__meta_kubernetes_pod_name]
             target_label: instance

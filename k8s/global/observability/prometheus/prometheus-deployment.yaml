@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: prometheus
-  namespace: ares-global
+  namespace: ares-system
   labels:
     app: prometheus
 spec:
@@ -15,7 +15,7 @@ spec:
       labels:
         app: prometheus
     spec:
-      serviceAccountName: ares-global-scheduler  # Reuse existing SA
+      serviceAccountName: ares-scheduler # Reuse existing SA
       containers:
         - name: prometheus
           image: prom/prometheus:v2.48.0
