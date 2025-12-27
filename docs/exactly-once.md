@@ -245,63 +245,11 @@ Ares adapts Kafka's three-level approach for **job execution scheduling** (not m
 
 ### The Three-Layer Defense
 
-```
+## Request Flow
 
-┌─────────────────────────────────────────────────────────────────────────────┐
-│  CLIENT          SCHEDULER         REDIS           etcd         EXECUTOR    │
-│    │                 │               │               │               │      │
-│    │  (1) Submit job with RequestID  │               │               │      │
-│    ├────────────────────────────────>│               │               │      │
-│    │                 │               │               │               │      │
-│    │                 │  (1a) Check Redis for RequestID               │      │
-│    │                 ├──────────────────────────────>│               │      │
-│    │                 │               │               │               │      │
-│    │    ┌────────────────────────────────────────────┤               │      │
-│    │    │ Decision 1: RequestID cached?              │               │      │
-│    │    └────────────────────────────────────────────┤               │      │
-│    │                 │               │        YES    │               │      │
-│    │                 │<──────────────[Return cached] │               │      │
-│    │                 │    SKIP EXECUTION (Idempotent)                │      │
-│    │                 │               │               │               │      │
-│    │                 │     NOT FOUND: Store in Redis                 │      │
-│    │                 │               │<──────────┐   │               │      │
-│    │                 │               │  SETEX    │   │               │      │
-│    │                 │               │          [24h]                │      │
-│    │                 │               │               │               │      │
-│    │                 │ (2) Acquire execution lease in etcd           │      │
-│    │                 ├──────────────────────────────────────────────>│      │
-│    │                 │               │               │               │      │
-│    │    ┌────────────────────────────────────────────────────────────┤      │
-│    │    │ Decision 2: Lease available?                               │      │
-│    │    └────────────────────────────────────────────────────────────┤      │
-│    │                 │               │        YES: Lease acquired    │      │
-│    │                 │               │             with token=42     │      │
-│    │                 │<──────────────────────────[token=42]───────── │      │
-│    │                 │               │    (30sec TTL, heartbeat)     │      │
-│    │                 │               │               │               │      │
-│    │                 │     HELD: Wait & Retry (exponential backoff)  │      │
-│    │                 │               │               │               │      │
-│    │                 │ (3) Execute job on executor                   │      │
-│    │                 ├──────────────────────────────────────────────>│      │
-│    │                 │               │               │  [Job Running]│      │
-│    │                 │               │               │               │      │ 
-│    │                 │               │               │               │      │
-│    │                 │ (4) Write result with token to etcd           │      │
-│    │                 ├──────────────────────────────────────────────>│      │
-│    │                 │               │     {JobID, Status, token}    │      │
-│    │                 │               │               │               │      │
-│    │    ┌────────────────────────────────────────────────────────────┤      │
-│    │    │ Decision 3: Token validation                               │      │
-│    │    └────────────────────────────────────────────────────────────┤      │
-│    │                 │               │               │               │      │
-│    │                 │<──────────────────[ token=current ]────────── │      │
-│    │                 │               │  WRITE ACCEPTED               │      │
-│    │                 │               │  Result persisted forever     │      │
-│    │                 │               │               │               │      │
-│    │  (5) Return result                              │               │      │
-│    │<────────────────────────────────────────────────────────────────│      │
-│    │                 │               │               │               │      │
-└─────────────────────────────────────────────────────────────────────────────┘
+![Sequence Diagram](./EXO.png)
+
+```
 
 EXACTLY-ONCE EXECUTION GUARANTEED
 Job executed exactly once, regardless of failures, retries, or partitions
