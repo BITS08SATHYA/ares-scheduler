@@ -3,8 +3,12 @@ package executor
 import (
 	"context"
 	"fmt"
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/job"
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/lease"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/logger"
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler/common"
 	_ "k8s.io/client-go/kubernetes"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -16,6 +20,9 @@ type Executor struct {
 	ControlPlane string
 	Log          *logger.Logger
 	Config       *ExecutorConfig
+
+	JobStore     job.JobStore
+	LeaseManager *lease.LeaseManager
 
 	// Job tracking
 	JobsMu        sync.RWMutex
@@ -191,19 +198,19 @@ type K8Decision struct {
 // EXECUTOR SERVICE (Layer 9)
 // ============================================================================
 // FIXES APPLIED:
-// 1. ✅ Fixed NewExecutor signature: k8sClient is common.K8sClient (interface), NOT *common.K8sClient (pointer)
-// 2. ✅ Removed 'log' parameter (we create our own logger inside)
-// 3. ✅ Fixed to match 3-parameter call from cmd/local/main.go
-// 4. ✅ Fixed k8sClient field assignment (removed dereference)
+// 1.  Fixed NewExecutor signature: k8sClient is common.K8sClient (interface), NOT *common.K8sClient (pointer)
+// 2.  Removed 'log' parameter (we create our own logger inside)
+// 3.  Fixed to match 3-parameter call from cmd/local/main.go
+// 4.  Fixed k8sClient field assignment (removed dereference)
 //
 // EXPLANATION OF FIX:
-// ❌ WRONG: func NewExecutor(clusterID string, k8sClient *common.K8sClient, log logger.Logger, config...)
-// ❌ Why: Can't create *common.K8sClient (pointer to interface) - Go doesn't allow this
-// ❌ The concrete type is *kubernetes.K8sClientImpl which satisfies common.K8sClient interface
+//  WRONG: func NewExecutor(clusterID string, k8sClient *common.K8sClient, log logger.Logger, config...)
+//  Why: Can't create *common.K8sClient (pointer to interface) - Go doesn't allow this
+//  The concrete type is *kubernetes.K8sClientImpl which satisfies common.K8sClient interface
 //
-// ✅ RIGHT: func NewExecutor(clusterID string, k8sClient common.K8sClient, config...)
-// ✅ Why: Interface types don't need to be pointers
-// ✅ *kubernetes.K8sClientImpl satisfies common.K8sClient interface
+//  RIGHT: func NewExecutor(clusterID string, k8sClient common.K8sClient, config...)
+//  Why: Interface types don't need to be pointers
+//  *kubernetes.K8sClientImpl satisfies common.K8sClient interface
 // ============================================================================
 
 // NewExecutor: Create new executor
@@ -213,8 +220,10 @@ type K8Decision struct {
 //   - 3 parameters total (matches cmd/local/main.go call)
 func NewExecutor(
 	clusterID string,
-	k8sClient K8sClient, // ✅ FIX: Interface type, NOT *common.K8sClient
+	k8sClient K8sClient, //  FIX: Interface type, NOT *common.K8sClient
 	config *ExecutorConfig,
+	jobStore job.JobStore,
+	leaseManager *lease.LeaseManager,
 ) (*Executor, error) {
 
 	if clusterID == "" {
@@ -245,16 +254,32 @@ func NewExecutor(
 		config.MaxConcurrentJobs = 100
 	}
 
+	if jobStore == nil {
+		return nil, fmt.Errorf("Job Store cannot be nil")
+	}
+
+	if leaseManager == nil {
+		return nil, fmt.Errorf("Lease Manager cannot be nil")
+	}
+
 	executor := &Executor{
 		ClusterID:     clusterID,
 		ControlPlane:  fmt.Sprintf("ares-executor-%s", clusterID),
-		Log:           logger.Get(), // ✅ Create our own logger
+		Log:           logger.Get(), // Create our own logger
 		Config:        config,
 		ActiveJobs:    make(map[string]*ExecutionContext),
 		CompletedJobs: make(map[string]*ExecutionResult),
 		PodRegistry:   make(map[string]*PodInfo),
-		K8sClient:     k8sClient, // ✅ FIX: Direct assignment (not dereferencing)
+		K8sClient:     k8sClient, // FIX: Direct assignment (not dereferencing)
+		JobStore:      jobStore,
+		LeaseManager:  leaseManager,
 	}
+
+	executor.Log.Info("Executor Initialized for cluster %s", clusterID)
+	executor.Log.Info("Namespace: %s", config.Namespace)
+	executor.Log.Info("Max Concurrent jobs: %s", config.MaxConcurrentJobs)
+	executor.Log.Info("Default timeout: %v", config.DefaultTimeout)
+	executor.Log.Info("Pod Lifecycle monitoring enabled")
 
 	return executor, nil
 }
@@ -283,7 +308,10 @@ func (ex *Executor) ExecuteJob(
 		return nil, fmt.Errorf("node ID cannot be empty")
 	}
 
-	// Check concurrency limit
+	ex.Log.Info("Executing job %s on node %s with GPUs %v",
+		decision.JobID, decision.NodeID, decision.GPUIndices)
+
+	//Check concurrency limit
 	ex.JobsMu.RLock()
 	activeCount := len(ex.ActiveJobs)
 	ex.JobsMu.RUnlock()
@@ -322,16 +350,19 @@ func (ex *Executor) ExecuteJob(
 	podSpec := createPodSpec(ex, decision, podName)
 
 	// Create Pod in Kubernetes
-	createdName, err := ex.K8sClient.CreatePod(ctx, podSpec)
+	createdPodName, err := ex.K8sClient.CreatePod(ctx, podSpec)
 	if err != nil {
 		ex.Log.Error("Failed to create Pod for job %s: %v", decision.JobID, err)
 		atomic.AddUint64(&ex.TotalFailed, 1)
 		return nil, fmt.Errorf("failed to create Pod: %w", err)
 	}
 
-	execCtx.PodName = createdName
+	ex.Log.Debug("Creating Pod %s for job %s", podName, decision.JobID)
+
+	execCtx.PodName = createdPodName
+	execCtx.Status = StatusRunning
 	ex.Log.Info("Pod created for job %s: %s (node=%s, gpus=%v)",
-		decision.JobID, createdName, decision.NodeID, decision.GPUIndices)
+		decision.JobID, createdPodName, decision.NodeID, decision.GPUIndices)
 
 	// Store execution context
 	ex.JobsMu.Lock()
@@ -342,7 +373,17 @@ func (ex *Executor) ExecuteJob(
 	atomic.AddUint64(&ex.TotalJobs, 1)
 
 	// Start background monitoring
-	go ex.monitorJobExecution(ctx, execCtx)
+	//go ex.monitorJobExecution(ctx, execCtx)
+
+	go func() {
+		err := ex.monitorAndUpdateJob(context.Background(), execCtx, decision.JobID)
+		if err != nil && err != context.Canceled {
+			// Log error but don't crash (monitoring is best-effort)
+			ex.Log.Error("Monitoring failed for job %s: %v", decision.JobID, err)
+		}
+	}()
+
+	ex.Log.Info("Started Pod Lifecycle monitoring for job %s", decision.JobID)
 
 	return execCtx, nil
 }
@@ -398,8 +439,8 @@ func createPodSpec(
 		PodName:         podName,
 		Namespace:       ex.Config.Namespace,
 		Image:           imageName,
-		Command:         decision.Command, // ✅ FIXED: Pass from decision
-		Args:            decision.Args,    // ✅ FIXED: Pass from decision
+		Command:         decision.Command, //  FIXED: Pass from decision
+		Args:            decision.Args,    //  FIXED: Pass from decision
 		ImagePullPolicy: ex.Config.ImagePullPolicy,
 		EnvVars:         envVars,
 		MemoryMB:        ex.Config.DefaultMemoryMB,
@@ -417,9 +458,173 @@ func createPodSpec(
 	return spec
 }
 
+// ============================================================================
+// POD LIFECYCLE MONITORING (NEW)
+// ============================================================================
+
+// monitorAndUpdateJob: Monitor Pod status and update Job record in etcd
+//
+// This is the CRITICAL method that closes the loop:
+// 1. Poll Pod status from Kubernetes API every 5 seconds
+// 2. When Pod status changes, update Job record in etcd
+// 3. When Pod completes (Succeeded/Failed), stop monitoring
+//
+// This runs in a background goroutine started by ExecuteJob()
+func (e *Executor) monitorAndUpdateJob(
+	ctx context.Context,
+	execCtx *ExecutionContext,
+	jobID string,
+) error {
+	e.Log.Info("Starting Pod monitoring for job %s (pod=%s)", jobID, execCtx.PodName)
+
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	// Track last known status to avoid redundant updates
+	lastKnownStatus := common.StatusPending
+
+	for {
+		select {
+		case <-ctx.Done():
+			e.Log.Info("Monitoring stopped for job %s (context done)", jobID)
+			return ctx.Err()
+
+		case <-ticker.C:
+			// ================================================================
+			// STEP 1: Get Pod status from Kubernetes
+			// ================================================================
+			podInfo, err := e.K8sClient.GetPod(ctx, execCtx.PodName)
+
+			podStatus := podInfo.Phase
+
+			if err != nil {
+				e.Log.Warn("Failed to get Pod status for %s: %v", execCtx.PodName, err)
+				continue // Retry next tick
+			}
+
+			e.Log.Debug("Pod %s status: %s", execCtx.PodName, podStatus)
+
+			// ================================================================
+			// STEP 2: Get Job record from etcd
+			// ================================================================
+			jobRecord, err := e.JobStore.GetJob(ctx, jobID)
+			if err != nil {
+				e.Log.Error("Failed to get Job record for %s: %v", jobID, err)
+				continue // Retry next tick
+			}
+
+			// ================================================================
+			// STEP 3: Map Pod status to Job status
+			// ================================================================
+			var newJobStatus common.JobStatus
+			shouldUpdate := false
+			shouldStop := false
+
+			switch podStatus {
+			case "Pending":
+				// Pod is being created (pulling image, scheduling)
+				newJobStatus = common.StatusPending
+				if lastKnownStatus != common.StatusPending {
+					shouldUpdate = true
+					e.Log.Info("Job %s: Pod is pending", jobID)
+				}
+
+			case "Running":
+				// Pod is executing
+				newJobStatus = common.StatusRunning
+				if lastKnownStatus != common.StatusRunning {
+					shouldUpdate = true
+					jobRecord.StartTime = time.Now()
+					e.Log.Info("Job %s: Pod started running", jobID)
+				}
+
+			case "Succeeded":
+				// Pod completed successfully
+				newJobStatus = common.StatusSucceeded
+				shouldUpdate = true
+				shouldStop = true
+				jobRecord.EndTime = time.Now()
+				jobRecord.ExitCode = 0
+				e.Log.Info(" Job %s: Pod succeeded", jobID)
+
+			case "Failed":
+				// Pod failed
+				newJobStatus = common.StatusFailed
+				shouldUpdate = true
+				shouldStop = true
+				jobRecord.EndTime = time.Now()
+				jobRecord.ExitCode = 1
+
+				// Try to get failure reason from Pod logs
+				podLogs, logErr := e.K8sClient.GetPodLogs(ctx, execCtx.PodName)
+				if logErr == nil && podLogs != "" {
+					// Truncate logs if too long (max 500 chars)
+					if len(podLogs) > 500 {
+						podLogs = podLogs[:500] + "... (truncated)"
+					}
+					jobRecord.ErrorMsg = fmt.Sprintf("Pod failed: %s", podLogs)
+				} else {
+					jobRecord.ErrorMsg = "Pod failed (logs unavailable)"
+				}
+
+				e.Log.Error("Job %s: Pod failed", jobID)
+
+			case "Unknown":
+				// Pod status unclear (node down, network issue, etc.)
+				e.Log.Warn("Job %s: Pod status unknown", jobID)
+				// Don't update - wait for clearer status
+				continue
+
+			default:
+				e.Log.Warn("Job %s: Unexpected pod status: %s", jobID, podStatus)
+				continue
+			}
+
+			// ================================================================
+			// STEP 4: Update Job record if status changed
+			// ================================================================
+			if shouldUpdate {
+				jobRecord.Status = newJobStatus
+				lastKnownStatus = newJobStatus
+
+				// Get current lease ID from Job record
+				// (Job was created with lease attachment in coordinator.go)
+				leaseID := int64(0)
+				if jobRecord.ExecutionLease != nil {
+					// Parse lease ID from LeaseInfo
+					// (This assumes LeaseInfo.LeaseID is a string representation)
+					// You may need to adjust based on your LeaseInfo structure
+					if parsedLeaseID, parseErr := strconv.ParseInt(jobRecord.ExecutionLease.LeaseID, 10, 64); parseErr == nil {
+						leaseID = parsedLeaseID
+					}
+				}
+
+				err = e.JobStore.SaveJob(ctx, jobRecord, leaseID)
+				if err != nil {
+					e.Log.Error("Failed to update Job %s status to %s: %v",
+						jobID, newJobStatus, err)
+					continue // Retry next tick
+				}
+
+				e.Log.Info("Updated Job %s status: %s → %s",
+					jobID, lastKnownStatus, newJobStatus)
+			}
+
+			// ================================================================
+			// STEP 5: Stop monitoring if Pod completed
+			// ================================================================
+			if shouldStop {
+				e.Log.Info("Stopping monitoring for job %s (final status: %s)",
+					jobID, newJobStatus)
+				return nil
+			}
+		}
+	}
+}
+
 // monitorJobExecution: Background job monitoring
-func (ex *Executor) monitorJobExecution(
-	ctx context.Context, execCtx *ExecutionContext) {
+func (ex *Executor) monitorJobExecution(ctx context.Context, execCtx *ExecutionContext) {
+
 	ticker := time.NewTicker(ex.Config.HealthCheckInterval)
 	defer ticker.Stop()
 

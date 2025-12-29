@@ -371,7 +371,7 @@ type APIGatewayWithCoordinator struct {
 
 // NewAPIGatewayWithCoordinator: Initialize complete 10-layer pipeline
 // This is the main initialization function
-// ✅ CRITICAL FIX: K8sClientImpl must be created as pointer (&kubernetes.K8sClientImpl{})
+// CRITICAL FIX: K8sClientImpl must be created as pointer (&kubernetes.K8sClientImpl{})
 func NewAPIGatewayWithCoordinator(
 	controlPlaneAddr string,
 	etcdEndpoints []string,
@@ -437,47 +437,6 @@ func NewAPIGatewayWithCoordinator(
 	log.Info("✓ Layer 5: GPUDiscovery, TopologyManager")
 
 	// ========================================================================
-	// LAYER 9: Executor (Kubernetes Pod creation)
-	// ========================================================================
-
-	//log.Info("Layer 9: Initializing Kubernetes executor...")
-
-	// ✅ CRITICAL FIX: Create as pointer type!
-	// K8sClientImpl has pointer receivers, so it must be a pointer to satisfy the interface
-	//mockK8sClient := &kubernetes.K8sClientImpl{}
-
-	//executorConfig := &common2.ExecutorConfig{
-	//	ClusterID:                "global-control-plane",
-	//	Namespace:                "default",
-	//	DefaultTimeout:           1 * time.Hour,
-	//	DefaultMemoryMB:          1024,
-	//	DefaultCPUMillis:         500,
-	//	HealthCheckInterval:      5 * time.Second,
-	//	MaxConcurrentJobs:        1000,
-	//	ImageRegistry:            "docker.io",
-	//	DefaultJobImage:          "ares-job:latest",
-	//	RestartPolicy:            "OnFailure",
-	//	ImagePullPolicy:          "IfNotPresent",
-	//	EnableGPUSupport:         true,
-	//	LogCollectionEnabled:     true,
-	//	MetricsCollectionEnabled: true,
-	//}
-
-	//executorService, err := executor.NewExecutor(
-	//	"global-control-plane",
-	//	mockK8sClient, // ✅ FIX: Now this is a pointer, satisfies interface
-	//	executorConfig,
-	//)
-	//if err != nil {
-	//	log.Error("Failed to create executor: %v", err)
-	//	redisClient.Close()
-	//	etcdClient.Close()
-	//	return nil, fmt.Errorf("executor creation failed: %w", err)
-	//}
-	//
-	//log.Info("✓ Layer 9: Executor")
-
-	// ========================================================================
 	// LAYER 7: Global Scheduler
 	// ========================================================================
 
@@ -537,17 +496,17 @@ func NewAPIGatewayWithCoordinator(
 	}
 
 	log.Info("")
-	log.Info("╔════════════════════════════════════════════════════════════╗")
-	log.Info("║  COMPLETE: All 10 layers initialized and wired             ║")
-	log.Info("║  ✓ Layer 2:  Storage (etcd + Redis)                       ║")
-	log.Info("║  ✓ Layer 3:  Persistence & Coordination                   ║")
-	log.Info("║  ✓ Layer 4:  Cluster Management                           ║")
-	log.Info("║  ✓ Layer 5:  GPU Discovery & Topology                     ║")
-	log.Info("║  ✓ Layer 7:  Global Scheduler                             ║")
-	log.Info("║  ✓ Layer 8:  API Gateway                                  ║")
-	log.Info("║  ✓ Layer 9:  Executor                                     ║")
-	log.Info("║  ✓ Layer 10: Job Coordinator                              ║")
-	log.Info("╚════════════════════════════════════════════════════════════╝")
+	log.Info("╔═══════════════════════════════════════════════════════════╗")
+	log.Info("║  COMPLETE: All 10 layers initialized and wired            ║")
+	log.Info("║  ✓ Layer 1:  Storage (etcd + Redis)                       ║")
+	log.Info("║  ✓ Layer 2:  Persistence & Coordination                   ║")
+	log.Info("║  ✓ Layer 3:  Cluster Management                           ║")
+	log.Info("║  ✓ Layer 4:  GPU Discovery & Topology                     ║")
+	log.Info("║  ✓ Layer 5:  Global Scheduler                             ║")
+	log.Info("║  ✓ Layer 6:  API Gateway                                  ║")
+	log.Info("║  ✓ Layer 7:  Executor                                     ║")
+	log.Info("║  ✓ Layer 8: Job Coordinator                               ║")
+	log.Info("╚═══════════════════════════════════════════════════════════╝")
 	log.Info("")
 
 	return gatewayWithCoordinator, nil

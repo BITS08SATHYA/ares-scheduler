@@ -146,7 +146,7 @@ func (jc *JobCoordinator) ScheduleJob(
 	}
 
 	jc.log.Info("Job %s persisted (leaseID=%d for auto-cleanup)", jobID, leaseID)
-
+	jc.log.Info("Executor will monitor Pod and update this Job record")
 	// ========================================================================
 	// STEP 4: Call global scheduler (cluster selection)
 	// ========================================================================
@@ -188,95 +188,6 @@ func (jc *JobCoordinator) ScheduleJob(
 	// ========================================================================
 	// STEP 7: Return scheduling result with lease ID
 	// Critical step: LocalScheduler --> returns to Job Coordinator --> calls executor (real k8 client)
-	// ========================================================================
-
-	//jc.log.Info("Logging Executor (payload): ", jc.executor)
-	//jc.log.Info("Logging Executor config (payload): ", jc.executor.Config)
-
-	//jc.log.Debug("Namespace value: Issue")
-	////jc.log.Debug("Accessing Namespace: ", &jc.executor.Config.Namespace)
-	//// Build execution context from local decision
-	//execCtx := &common2.ExecutionContext{
-	//	JobID: jobID,
-	//	LocalDecision: &local.LocalSchedulingDecision{ // Convert globalDecision to LocalSchedulingDecision
-	//		JobID:            jobID,
-	//		NodeID:           globalDecision.NodeID,
-	//		GPUIndices:       globalDecision.GPUIndices,
-	//		NodeScore:        globalDecision.ClusterScore,
-	//		PlacementReasons: globalDecision.PlacementReasons,
-	//		ScheduledAt:      time.Now(),
-	//	},
-	//	Namespace: jc.executor.Config.Namespace,
-	//	//Namespace:  jc.namespace,
-	//	StartTime:  time.Now(),
-	//	Timeout:    time.Duration(jobSpec.TimeoutSecs) * time.Second,
-	//	Status:     common2.StatusPending,
-	//	NodeID:     globalDecision.NodeID,
-	//	GPUIndices: globalDecision.GPUIndices,
-	//	Metrics:    make(map[string]interface{}),
-	//}
-	//
-	//jc.log.Debug("Executing Context json(payload): ", execCtx)
-	//
-	//// Generate Pod name
-	//podName := fmt.Sprintf("job-%s", jobID[:8]) // Truncate for K8s name limits
-	//execCtx.PodName = podName
-	//
-	//// Create PodSpec
-	//podSpec := &common2.PodSpec{
-	//	PodName:         podName,
-	//	Namespace:       jc.executor.Config.Namespace,
-	//	Image:           jobSpec.Image,
-	//	ImagePullPolicy: jc.executor.Config.ImagePullPolicy,
-	//	EnvVars: map[string]string{
-	//		"ARES_JOB_ID":        jobID,
-	//		"ARES_CLUSTER_ID":    globalDecision.ClusterID,
-	//		"ARES_NODE_ID":       globalDecision.NodeID,
-	//		"ARES_ASSIGNED_GPUS": fmt.Sprintf("%v", globalDecision.GPUIndices),
-	//		"ARES_GPU_COUNT":     fmt.Sprintf("%d", len(globalDecision.GPUIndices)),
-	//	},
-	//	MemoryMB:      jobSpec.MemoryMB,
-	//	CPUMillis:     jobSpec.CPUMillis,
-	//	GPUCount:      len(globalDecision.GPUIndices),
-	//	GPUIndices:    globalDecision.GPUIndices,
-	//	Timeout:       time.Duration(jobSpec.TimeoutSecs) * time.Second,
-	//	RestartPolicy: jc.executor.Config.RestartPolicy,
-	//	NodeID:        globalDecision.NodeID,
-	//	Labels: map[string]string{
-	//		"app":          "ares-job",
-	//		"job-id":       jobID,
-	//		"cluster-id":   globalDecision.ClusterID,
-	//		"scheduled-by": "ares",
-	//	},
-	//}
-	//jc.log.Debug("PodSpec json(payload): ", execCtx)
-	//
-	//// ✅ THE CRITICAL CALL: Create Pod in Kubernetes
-	//createdPodName, err := jc.executor.K8sClient.CreatePod(ctx, podSpec)
-	//if err != nil {
-	//	jc.log.Error("Failed to create Pod for job %s: %v", jobID, err)
-	//	jobRecord.Status = common.StatusFailed
-	//	jobRecord.ErrorMsg = fmt.Sprintf("pod creation failed: %v", err)
-	//	jc.jobStore.SaveJob(context.Background(), jobRecord, leaseID)
-	//	return nil, fmt.Errorf("pod creation failed: %w", err)
-	//}
-	//
-	//execCtx.PodName = createdPodName
-	//jc.log.Info("✅ Pod created: %s for job %s on node %s", createdPodName, jobID, globalDecision.NodeID)
-	//
-	//// Update job record with Pod info
-	//jobRecord.Status = common.StatusRunning
-	//jobRecord.PodName = createdPodName
-	//jobRecord.NodeID = globalDecision.NodeID
-	//jobRecord.AllocatedGPUIndices = globalDecision.GPUIndices
-	//jobRecord.StartTime = time.Now()
-	//err = jc.jobStore.SaveJob(ctx, jobRecord, leaseID)
-	//if err != nil {
-	//	jc.log.Warn("Failed to update job with Pod info: %v", err)
-	//}
-
-	// ========================================================================
-	// STEP 8: Start monitoring in background
 	// ========================================================================
 
 	go func() {

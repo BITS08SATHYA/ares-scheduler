@@ -171,7 +171,7 @@ func main() {
 		etcdEndpoints := []string{*etcdEndpoint}
 
 		// Initialize gateway with coordinator (makes scheduling decisions)
-		// ✅ CORRECTED: No executor passed!
+		//  CORRECTED: No executor passed!
 		gatewayWithCoordinator, err := gateway.NewAPIGatewayWithCoordinator(
 			*controlPlane,
 			etcdEndpoints,
@@ -190,7 +190,7 @@ func main() {
 		}
 
 		apiGateway = gatewayWithCoordinator.APIGateway
-		log.Info("✓ API Gateway initialized with Job Coordinator")
+		log.Info("API Gateway initialized with Job Coordinator")
 		log.Info("  - Makes scheduling decisions")
 		log.Info("  - Routes to local schedulers for execution")
 

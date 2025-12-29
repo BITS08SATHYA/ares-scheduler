@@ -94,7 +94,7 @@ func NewLeaseManager(etcdClient *etcd.ETCDClient, schedulerID string, log Logger
 	return &LeaseManager{
 		etcdClient:        etcdClient,
 		schedulerID:       schedulerID,
-		leaseTTL:          30, // 30 second lease TTL
+		leaseTTL:          30,
 		log:               log,
 		activeLeases:      make(map[string]*LeaseInfo),
 		heartbeatTicker:   10 * time.Second, // Renew every 10 seconds

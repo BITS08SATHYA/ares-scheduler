@@ -25,9 +25,12 @@ import (
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/cluster"
 	executorK8s "github.com/BITS08SATHYA/ares-scheduler/pkg/executor/kubernetes"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/gpu"
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/job"
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/lease"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/logger"
 	common2 "github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler/common"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler/local"
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/storage/etcd"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/storage/redis"
 )
 
@@ -167,7 +170,33 @@ func main() {
 		os.Exit(1)
 	}
 	defer redisClient.Close()
-	log.Info("✓ Connected to Redis")
+	log.Info("Connected to Redis")
+
+	// ========================================================================
+	// STEP 1b: Connect to etcd (for JobStore and LeaseManager)
+	// ========================================================================
+
+	log.Info("Connecting to etcd...")
+	etcdEndpoints := []string{"etcd-0.etcd.ares-system.svc.cluster.local:2379"}
+	etcdClient, err := etcd.NewETCDClient(etcdEndpoints, 5*time.Second)
+	if err != nil {
+		log.Error("Failed to connect to etcd: %v", err)
+		os.Exit(1)
+	}
+	defer etcdClient.Close()
+	log.Info("Connected to etcd")
+
+	// ========================================================================
+	// STEP 1c: Initialize JobStore and LeaseManager
+	// ========================================================================
+
+	log.Info("Initializing JobStore...")
+	jobStore := job.NewETCDJobStore(etcdClient)
+	log.Info("JobStore initialized")
+
+	log.Info("Initializing LeaseManager...")
+	leaseManager := lease.NewLeaseManager(etcdClient, *controlPlane, &simpleLogger{})
+	log.Info("LeaseManager initialized")
 
 	// ========================================================================
 	// STEP 2: Create K8s client wrapper (single source of truth!)
@@ -179,7 +208,7 @@ func main() {
 		log.Error("Failed to create K8s client: %v", err)
 		os.Exit(1)
 	}
-	log.Info("✓ Kubernetes client initialized")
+	log.Info("Kubernetes client initialized")
 
 	// ========================================================================
 	// STEP 3: Initialize GPU discovery WITH K8s client
@@ -193,11 +222,11 @@ func main() {
 	//}
 	nodeName := *nodeID
 
-	// ✅ Get the real k8s.io client for gpu_discovery
+	// Get the real k8s.io client for gpu_discovery
 	// (different interface than common.K8sClient)
 	k8sIOClient := k8sClientWrapper.GetKubernetesInterface()
 
-	// ✅ Pass k8s.io client to gpu_discovery (it needs raw K8s API access)
+	// Pass k8s.io client to gpu_discovery (it needs raw K8s API access)
 	gpuDiscovery := gpu.NewGPUDiscoveryWithK8s(redisClient, k8sIOClient, nodeName)
 	log.Info("GPU discovery initialized (will try K8s API first, fallback to nvidia-smi)")
 
@@ -209,22 +238,22 @@ func main() {
 	}
 
 	totalGPUs := len(gpus)
-	log.Info("✓ Discovered %d GPUs", totalGPUs)
+	log.Info("Discovered %d GPUs", totalGPUs)
 	for i, gpu1 := range gpus {
 		log.Info("  GPU %d: %s (%.0f GB memory)", i, gpu1.Type, gpu1.MemoryGB)
 	}
 
 	topologyManager := gpu.NewGPUTopologyManager(redisClient, gpuDiscovery)
-	log.Info("✓ Topology manager initialized")
+	log.Info("Topology manager initialized")
 	log.Info("Detecting Nvidia-smi...")
 	smiPath := topologyManager.FindNvidiaSMI_test_path()
 
 	if smiPath == "" {
-		log.Warn("⚠️  nvidia-smi not found - GPU topology detection disabled")
-		log.Warn("    GPU discovery will use Kubernetes API")
+		log.Warn("⚠️nvidia-smi not found - GPU topology detection disabled")
+		log.Warn("GPU discovery will use Kubernetes API")
 	} else {
-		log.Info("✓ GPU topology detection enabled")
-		log.Info("  nvidia-smi path: %s", smiPath)
+		log.Info("GPU topology detection enabled")
+		log.Info("nvidia-smi path: %s", smiPath)
 	}
 
 	// ========================================================================
@@ -249,15 +278,21 @@ func main() {
 		MetricsCollectionEnabled: true,
 	}
 
-	// ✅ CRITICAL FIX: Pass wrapper directly (common.K8sClient type)
+	// CRITICAL FIX: Pass wrapper directly (common.K8sClient type)
 	// NOT k8sIOClient (which is kubernetes.Interface)
 	var myExecutor *executor.Executor
-	myExecutor, err = executor.NewExecutor(*clusterID, k8sClientWrapper, executorConfig)
+	myExecutor, err = executor.NewExecutor(*clusterID,
+		k8sClientWrapper,
+		executorConfig,
+		jobStore,
+		leaseManager,
+	)
+
 	if err != nil {
 		log.Error("Failed to create executor: %v", err)
 		os.Exit(1)
 	}
-	log.Info("✓ Executor initialized")
+	log.Info("Executor initialized with Pod Lifecycle Monitoring")
 
 	// ========================================================================
 	// STEP 5: Initialize local scheduler
@@ -301,15 +336,15 @@ func main() {
 		log.Error("Failed to register node: %v", err)
 		os.Exit(1)
 	}
-	log.Info("✓ Node registered with LocalScheduler:")
-	log.Info("    Node ID: %s", nodeState.NodeID)
-	log.Info("    GPUs: %d (all available)", nodeState.GPUCount)
-	log.Info("    Memory: %.0f GB (all available)", nodeState.MemoryGB)
-	log.Info("    Health: %v", nodeState.IsHealthy)
+	log.Info("Node registered with LocalScheduler:")
+	log.Info("Node ID: %s", nodeState.NodeID)
+	log.Info("GPUs: %d (all available)", nodeState.GPUCount)
+	log.Info("Memory: %.0f GB (all available)", nodeState.MemoryGB)
+	log.Info("Health: %v", nodeState.IsHealthy)
 
 	// Verify registration worked
 	registeredNodes := localScheduler.ListNodes()
-	log.Info("✓ Verified: LocalScheduler now has %d registered node(s)", len(registeredNodes))
+	log.Info("Verified: LocalScheduler now has %d registered node(s)", len(registeredNodes))
 
 	// ========================================================================
 	// STEP 6: AUTO-REGISTER CLUSTER WITH CONTROL PLANE
@@ -571,4 +606,26 @@ func getEnvBool(key string, defaultValue bool) bool {
 		}
 	}
 	return defaultValue
+}
+
+// ============================================================================
+// SIMPLE LOGGER (for LeaseManager)
+// ============================================================================
+
+type simpleLogger struct{}
+
+func (sl *simpleLogger) Infof(format string, args ...interface{}) {
+	logger.Get().Info(format, args...)
+}
+
+func (sl *simpleLogger) Debugf(format string, args ...interface{}) {
+	logger.Get().Debug(format, args...)
+}
+
+func (sl *simpleLogger) Warnf(format string, args ...interface{}) {
+	logger.Get().Warn(format, args...)
+}
+
+func (sl *simpleLogger) Errorf(format string, args ...interface{}) {
+	logger.Get().Error(format, args...)
 }

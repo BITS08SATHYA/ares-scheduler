@@ -80,7 +80,7 @@ func (lss *LocalSchedulerServer) Stop(timeout time.Duration) error {
 // ========================================================================
 
 // handleSchedule: POST /schedule - Schedule job on this cluster
-// It should call the executor after scheduling decision
+// Updated: Now Passes JobID to Executor for monitoring
 func (lss *LocalSchedulerServer) handleSchedule(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -127,7 +127,7 @@ func (lss *LocalSchedulerServer) handleSchedule(w http.ResponseWriter, r *http.R
 		lss.log.Info("Calling Executor to create Pod...")
 
 		k8dec := &executor.K8Decision{
-			JobID:            decision.JobID,
+			JobID:            req.JobID,
 			NodeID:           decision.NodeID,
 			GPUIndices:       decision.GPUIndices,
 			NodeScore:        decision.NodeScore,
@@ -139,7 +139,7 @@ func (lss *LocalSchedulerServer) handleSchedule(w http.ResponseWriter, r *http.R
 			Image:            req.Image,
 		}
 
-		// ✅ FIXED: Set defaults if not provided
+		//  FIXED: Set defaults if not provided
 		if len(k8dec.Command) == 0 && len(k8dec.Args) == 0 {
 			k8dec.Command = []string{"sh", "-c"}
 			k8dec.Args = []string{"nvidia-smi && echo 'Job started' && sleep 120"}
@@ -147,6 +147,11 @@ func (lss *LocalSchedulerServer) handleSchedule(w http.ResponseWriter, r *http.R
 		}
 
 		jobCtx := context.Background()
+
+		// ✅ ExecuteJob now:
+		// 1. Creates Pod in Kubernetes
+		// 2. Starts background monitoring goroutine
+		// 3. Returns immediately
 
 		execCtx, err := lss.executor.ExecuteJob(jobCtx, k8dec)
 		if err != nil {
@@ -159,7 +164,7 @@ func (lss *LocalSchedulerServer) handleSchedule(w http.ResponseWriter, r *http.R
 			return
 		}
 
-		lss.log.Info("Pod created: %s for job %s", execCtx.PodName, req.JobID)
+		lss.log.Info("Pod created: %s for job %s (monitoring started)", execCtx.PodName, req.JobID)
 	} else {
 		lss.log.Warn("Executor not configured - Pod not created (OK for testing)")
 	}
