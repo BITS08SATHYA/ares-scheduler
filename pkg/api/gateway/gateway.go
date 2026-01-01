@@ -675,18 +675,98 @@ func (ag *APIGateway) handleJobStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	response := &JobStatusResponse{
-		JobID:      jobID,
-		RequestID:  "unknown",
-		Name:       "unknown",
-		Status:     "RUNNING",
-		SubmitTime: time.Now().Format(time.RFC3339),
-		StartTime:  time.Now().Format(time.RFC3339),
-		DurationMs: 0,
+	// Get Job Record from JobCoordinator (queries etcd)
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	jobRecord, err := ag.jobCoordinator.GetJobStatus(ctx, jobID)
+	if err != nil {
+		ag.log.Warn("Job %s not found: %v", jobID, err)
+		ag.respondError(w, http.StatusNotFound, "JOB_NOT_FOUND",
+			fmt.Sprintf("job %s not found", jobID))
+		atomic.AddUint64(&ag.totalErrors, 1)
+		return
 	}
 
+	// Transform Job Record to JobStatusResponse
+	response := &JobStatusResponse{
+		JobID:               jobRecord.ID,
+		RequestID:           jobRecord.Spec.RequestID,
+		Name:                jobRecord.Spec.Name,
+		Status:              string(jobRecord.Status),
+		ClusterID:           jobRecord.ClusterID,
+		NodeID:              jobRecord.NodeID,
+		PodName:             jobRecord.PodName,
+		AllocatedGPUIndices: jobRecord.AllocatedGPUIndices,
+		Attempts:            jobRecord.Attempts,
+		MaxRetries:          jobRecord.Spec.MaxRetries,
+		NextRetryAt:         "",
+		SubmitTime:          formatTime(jobRecord.SubmitTime),
+		ScheduleTime:        "",
+		StartTime:           "",
+		EndTime:             "",
+		DurationMs:          0,
+		ExitCode:            0,
+		ErrorMsg:            "",
+		TargetLatencyMs:     0,
+		ActualLatencyMs:     0,
+		SLACompliant:        false,
+		Metrics:             nil,
+	}
+
+	// Add optional fields if they exist
+	if !jobRecord.ScheduleTime.IsZero() {
+		response.ScheduleTime = formatTime(jobRecord.ScheduleTime)
+	}
+
+	if !jobRecord.StartTime.IsZero() {
+		response.StartTime = formatTime(jobRecord.StartTime)
+	}
+
+	if !jobRecord.EndTime.IsZero() {
+		response.EndTime = formatTime(jobRecord.EndTime)
+
+		// Calculate duration
+		duration := jobRecord.EndTime.Sub(jobRecord.StartTime)
+		response.DurationMs = int(duration.Milliseconds())
+	}
+
+	// Add next retry time if job is pending retry
+	if !jobRecord.NextRetryAt.IsZero() {
+		response.NextRetryAt = formatTime(jobRecord.NextRetryAt)
+	}
+
+	// Add exit code and error message if job completed
+	response.ExitCode = jobRecord.ExitCode
+	response.ErrorMsg = jobRecord.ErrorMsg
+
+	// SLA compliance (if applicable)
+	if jobRecord.Spec.TargetLatencyMs > 0 && !jobRecord.EndTime.IsZero() {
+		response.TargetLatencyMs = jobRecord.Spec.TargetLatencyMs
+
+		actualLatency := jobRecord.EndTime.Sub(jobRecord.SubmitTime)
+		response.ActualLatencyMs = int(actualLatency.Milliseconds())
+
+		response.SLACompliant = response.ActualLatencyMs <= response.TargetLatencyMs
+	}
+
+	// Add metrics if available
+	if len(jobRecord.Metrics) > 0 {
+		response.Metrics = jobRecord.Metrics
+	}
+
+	// Return Response
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(response)
+	ag.log.Info("Job status query: %s (status=%s)", jobID, jobRecord.Status)
+}
+
+// formatTime: Helper to format time.Time to RFC3339 string
+func formatTime(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.Format(time.RFC3339)
 }
 
 // handleHealthCheck: GET /health
