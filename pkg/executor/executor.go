@@ -474,13 +474,21 @@ func (e *Executor) monitorAndUpdateJob(
 	execCtx *ExecutionContext,
 	jobID string,
 ) error {
+
+	// FIX: Add panic recovery so we can see crashes
+	defer func() {
+		if r := recover() {
+			e.Log.Error("PANIC in monitoring for job %s: %v", jobID, r)
+		}
+	}()
+
 	e.Log.Info("Starting Pod monitoring for job %s (pod=%s)", jobID, execCtx.PodName)
 
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
 	// Track last known status to avoid redundant updates
-	lastKnownStatus := common.StatusPending
+	lastKnownStatus := common.StatusScheduled
 
 	for {
 		select {
@@ -500,7 +508,8 @@ func (e *Executor) monitorAndUpdateJob(
 			}
 
 			podStatus := podInfo.Phase
-			e.Log.Debug("Pod %s status: %s", execCtx.PodName, podStatus)
+			e.Log.Info("Pod %s current status: %s (last known status: %s)",
+				execCtx.PodName, podStatus, lastKnownStatus)
 
 			// ================================================================
 			// STEP 2: Get Job record from etcd

@@ -247,7 +247,7 @@ Ares adapts Kafka's three-level approach for **job execution scheduling** (not m
 
 ## Request Flow
 
-![Sequence Diagram](./EXO.png)
+![Sequence Diagram](diagrams/EXO.png)
 
 ```
 
