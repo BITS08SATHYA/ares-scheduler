@@ -135,6 +135,14 @@ func (jc *JobCoordinator) ScheduleJob(
 		SubmitTime: time.Now(),
 		Attempts:   0,
 		Metrics:    make(map[string]interface{}),
+		ExecutionLease: &common.LeaseInfo{
+			LeaseID:    fmt.Sprintf("%d", leaseID), // Convert int64 to string
+			JobID:      jobID,
+			ExecutorID: "ares-executor", // Or actual executor ID
+			GrantedAt:  time.Now(),
+			TTLSeconds: 30,
+			ExpiresAt:  time.Now().Add(30 * time.Second),
+		},
 	}
 
 	// Store job with lease for auto-cleanup (CRITICAL FIX)

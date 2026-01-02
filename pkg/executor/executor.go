@@ -8,7 +8,6 @@ import (
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/logger"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler/common"
 	_ "k8s.io/client-go/kubernetes"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -495,13 +494,12 @@ func (e *Executor) monitorAndUpdateJob(
 			// ================================================================
 			podInfo, err := e.K8sClient.GetPod(ctx, execCtx.PodName)
 
-			podStatus := podInfo.Phase
-
 			if err != nil {
 				e.Log.Warn("Failed to get Pod status for %s: %v", execCtx.PodName, err)
 				continue // Retry next tick
 			}
 
+			podStatus := podInfo.Phase
 			e.Log.Debug("Pod %s status: %s", execCtx.PodName, podStatus)
 
 			// ================================================================
@@ -587,26 +585,18 @@ func (e *Executor) monitorAndUpdateJob(
 				jobRecord.Status = newJobStatus
 				lastKnownStatus = newJobStatus
 
-				// Get current lease ID from Job record
-				// (Job was created with lease attachment in coordinator.go)
-				leaseID := int64(0)
-				if jobRecord.ExecutionLease != nil {
-					// Parse lease ID from LeaseInfo
-					// (This assumes LeaseInfo.LeaseID is a string representation)
-					// You may need to adjust based on your LeaseInfo structure
-					if parsedLeaseID, parseErr := strconv.ParseInt(jobRecord.ExecutionLease.LeaseID, 10, 64); parseErr == nil {
-						leaseID = parsedLeaseID
-					}
-				}
-
-				err = e.JobStore.SaveJob(ctx, jobRecord, leaseID)
+				// FIX #2: Pass leaseID = 0 (we don't have it in Executor)
+				// The Job was created by JobCoordinator with the lease
+				// Executor just updates status without needing the lease ID
+				// (This is safe because only one Executor monitors each Pod)
+				err = e.JobStore.SaveJob(ctx, jobRecord, 0)
 				if err != nil {
 					e.Log.Error("Failed to update Job %s status to %s: %v",
 						jobID, newJobStatus, err)
 					continue // Retry next tick
 				}
 
-				e.Log.Info("Updated Job %s status: %s → %s",
+				e.Log.Info("✓ Updated Job %s status: %s → %s",
 					jobID, lastKnownStatus, newJobStatus)
 			}
 
