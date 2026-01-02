@@ -358,14 +358,14 @@ Dec 8:                LAUNCH                        🎯 TARGET
 ### Feature Progress
 
 ```
-███████░░░░░░░░░░░░░░░░░ 27% (7/26 features)
+████████████████░░░░░░░░░░░░░ 54% (14/26 features)
 
 Core-4 MVP (Dec 8):        27% → 54% (4 weeks)
-Phase 2 (Jan-Feb 2026):    54% → 85% (8 weeks)  
+Phase 2 (Jan-Feb 2026):    54% → 85% (8 weeks)  (I'm here)
 Full Vision (June 2026):   85% → 100% (6 months)
 ```
 
-**[→ Detailed roadmap](docs/FEATURES.md#roadmap)**
+**[→ Detailed roadmap](docs/features.md)**
 
 ---
 
