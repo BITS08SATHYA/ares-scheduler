@@ -477,7 +477,7 @@ func (e *Executor) monitorAndUpdateJob(
 
 	// FIX: Add panic recovery so we can see crashes
 	defer func() {
-		if r := recover() {
+		if r := recover(); r != nil {
 			e.Log.Error("PANIC in monitoring for job %s: %v", jobID, r)
 		}
 	}()
@@ -528,7 +528,7 @@ func (e *Executor) monitorAndUpdateJob(
 			shouldStop := false
 
 			switch podStatus {
-			case "Pending":
+			case PhasePending:
 				// Pod is being created (pulling image, scheduling)
 				newJobStatus = common.StatusPending
 				if lastKnownStatus != common.StatusPending {
@@ -536,7 +536,7 @@ func (e *Executor) monitorAndUpdateJob(
 					e.Log.Info("Job %s: Pod is pending", jobID)
 				}
 
-			case "Running":
+			case PhaseRunning:
 				// Pod is executing
 				newJobStatus = common.StatusRunning
 				if lastKnownStatus != common.StatusRunning {
@@ -545,7 +545,7 @@ func (e *Executor) monitorAndUpdateJob(
 					e.Log.Info("Job %s: Pod started running", jobID)
 				}
 
-			case "Succeeded":
+			case PhaseSucceeded:
 				// Pod completed successfully
 				newJobStatus = common.StatusSucceeded
 				shouldUpdate = true
@@ -554,7 +554,7 @@ func (e *Executor) monitorAndUpdateJob(
 				jobRecord.ExitCode = 0
 				e.Log.Info(" Job %s: Pod succeeded", jobID)
 
-			case "Failed":
+			case PhaseFailed:
 				// Pod failed
 				newJobStatus = common.StatusFailed
 				shouldUpdate = true
@@ -576,7 +576,7 @@ func (e *Executor) monitorAndUpdateJob(
 
 				e.Log.Error("Job %s: Pod failed", jobID)
 
-			case "Unknown":
+			case PhaseUnknown:
 				// Pod status unclear (node down, network issue, etc.)
 				e.Log.Warn("Job %s: Pod status unknown", jobID)
 				// Don't update - wait for clearer status
@@ -591,19 +591,35 @@ func (e *Executor) monitorAndUpdateJob(
 			// STEP 4: Update Job record if status changed
 			// ================================================================
 			if shouldUpdate {
-				jobRecord.Status = newJobStatus
-				lastKnownStatus = newJobStatus
 
-				// FIX #2: Pass leaseID = 0 (we don't have it in Executor)
+				e.Log.Info("🔄 Updating Job %s: %s → %s", jobID, lastKnownStatus, newJobStatus)
+
+				jobRecord.Status = newJobStatus
+
+				leaseID := int64(0)
+				if jobRecord.ExecutionLease != nil && jobRecord.ExecutionLease.LeaseID != "" {
+					// Parse leaseID from string to int64
+
+					_, parseErr := fmt.Sscanf(jobRecord.ExecutionLease.LeaseID, "%d", &leaseID)
+					if parseErr != nil {
+						e.Log.Warn("Failed to parse lease ID: %v (using 0)", parseErr)
+						//leaseID = 0
+					}
+				}
+
+				e.Log.Debug("Saving Job with leaseID=%d", leaseID)
+
 				// The Job was created by JobCoordinator with the lease
 				// Executor just updates status without needing the lease ID
 				// (This is safe because only one Executor monitors each Pod)
-				err = e.JobStore.SaveJob(ctx, jobRecord, 0)
+
+				err = e.JobStore.SaveJob(ctx, jobRecord, leaseID)
 				if err != nil {
-					e.Log.Error("Failed to update Job %s status to %s: %v",
-						jobID, newJobStatus, err)
+					e.Log.Error("Failed to update Job %s status to %s: %v", jobID, newJobStatus, err)
 					continue // Retry next tick
 				}
+
+				lastKnownStatus = newJobStatus
 
 				e.Log.Info("✓ Updated Job %s status: %s → %s",
 					jobID, lastKnownStatus, newJobStatus)

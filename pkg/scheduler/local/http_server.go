@@ -169,28 +169,56 @@ func (lss *LocalSchedulerServer) handleSchedule(w http.ResponseWriter, r *http.R
 
 		lss.log.Info("Pod created: %s for job %s (monitoring started)", podName, req.JobID)
 
-		// Fix: Save Pod Name to Job Record in etcd
-		go func() {
-			ctx := context.Background()
-			jobRecord, err := lss.executor.JobStore.GetJob(ctx, req.JobID)
-			if err != nil {
-				lss.log.Error("Failed to get Job Record to update Pod Name: %v", err)
-				return
-			}
+		// Save Pod Name to Job Record in etcd (as intended)  (asynchronous)
+		// It is asynchronous operation.
+		// But monitoring starts immediately.
+		// That's why monitoring tries to get pod with empty name -> so Fails Silently!
+		//go func() {
+		//	ctx := context.Background()
+		//	jobRecord, err := lss.executor.JobStore.GetJob(ctx, req.JobID)
+		//	if err != nil {
+		//		lss.log.Error("Failed to get Job Record to update Pod Name: %v", err)
+		//		return
+		//	}
+		//
+		//	jobRecord.PodName = podName
+		//	jobRecord.NodeID = decision.NodeID
+		//	jobRecord.AllocatedGPUIndices = decision.GPUIndices
+		//
+		//	err = lss.executor.JobStore.SaveJob(ctx, jobRecord, 0)
+		//
+		//	if err != nil {
+		//		lss.log.Error("Failed to save Pod name to Job Record: %v", err)
+		//	} else {
+		//		lss.log.Info("Saved Pod name %s to Job %s", podName, req.JobID)
+		//	}
+		//
+		//}()
 
+		jobRecord, err := lss.executor.JobStore.GetJob(context.Background(), req.JobID)
+		if err != nil {
+			lss.log.Error("Failed to get Job Record: %v", err)
+		} else {
 			jobRecord.PodName = podName
 			jobRecord.NodeID = decision.NodeID
 			jobRecord.AllocatedGPUIndices = decision.GPUIndices
 
-			err = lss.executor.JobStore.SaveJob(ctx, jobRecord, 0)
-
-			if err != nil {
-				lss.log.Error("Failed to save Pod name to Job Record: %v", err)
-			} else {
-				lss.log.Info("Saved Pod name %s to Job %s", podName, req.JobID)
+			// Critical: Use LeaseID from Job Record
+			leaseID := int64(0)
+			if jobRecord.ExecutionLease != nil {
+				// Parse leaseID from string
+				fmt.Sscanf(jobRecord.ExecutionLease.LeaseID, "%d", &leaseID)
 			}
 
-		}()
+			err := lss.executor.JobStore.SaveJob(context.Background(), jobRecord, leaseID)
+
+			if err != nil {
+				lss.log.Error("Failed to save Pod Name: %v", err)
+			} else {
+				lss.log.Info("Saved Pod name %s to Job %s (leaseID=%d)", podName, req.JobID, leaseID)
+			}
+
+		}
 
 	} else {
 		lss.log.Warn("Executor not configured - Pod not created (OK for testing)")
