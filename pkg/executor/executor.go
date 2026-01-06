@@ -618,11 +618,8 @@ func (e *Executor) monitorAndUpdateJob(
 					e.Log.Error("Failed to update Job %s status to %s: %v", jobID, newJobStatus, err)
 					continue // Retry next tick
 				}
-
 				lastKnownStatus = newJobStatus
-
-				e.Log.Info("✓ Updated Job %s status: %s → %s",
-					jobID, lastKnownStatus, newJobStatus)
+				e.Log.Info("✓ Updated Job %s status: %s → %s", jobID, lastKnownStatus, newJobStatus)
 			}
 
 			// ================================================================
