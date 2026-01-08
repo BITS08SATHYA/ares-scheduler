@@ -217,7 +217,7 @@ func (jc *JobCoordinator) ScheduleJob(
 		GPUIndices:       globalDecision.GPUIndices,
 		ClusterScore:     globalDecision.ClusterScore,
 		PlacementReasons: globalDecision.PlacementReasons,
-		//PodName:            createdPodName, // ✅ Include Pod name
+		//PodName:            createdPodName,
 		LocalSchedulerAddr: globalDecision.LocalSchedulerAddr,
 		LeaseID:            leaseID,
 		CreatedAt:          time.Now(),

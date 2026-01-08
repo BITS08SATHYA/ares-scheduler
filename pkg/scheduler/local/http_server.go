@@ -59,7 +59,7 @@ func (lss *LocalSchedulerServer) Start() error {
 	}()
 
 	time.Sleep(100 * time.Millisecond)
-	lss.log.Info("LocalScheduler HTTP server ready")
+	lss.log.Info("LocalScheduler HTTP server ready!")
 	return nil
 }
 
@@ -166,72 +166,62 @@ func (lss *LocalSchedulerServer) handleSchedule(w http.ResponseWriter, r *http.R
 		}
 
 		podName = execCtx.PodName
-
 		lss.log.Info("Pod created: %s for job %s (monitoring started)", podName, req.JobID)
 
-		// Save Pod Name to Job Record in etcd (as intended)  (asynchronous)
-		// It is asynchronous operation.
-		// But monitoring starts immediately.
-		// That's why monitoring tries to get pod with empty name -> so Fails Silently!
-		//go func() {
-		//	ctx := context.Background()
-		//	jobRecord, err := lss.executor.JobStore.GetJob(ctx, req.JobID)
-		//	if err != nil {
-		//		lss.log.Error("Failed to get Job Record to update Pod Name: %v", err)
-		//		return
-		//	}
-		//
-		//	jobRecord.PodName = podName
-		//	jobRecord.NodeID = decision.NodeID
-		//	jobRecord.AllocatedGPUIndices = decision.GPUIndices
-		//
-		//	err = lss.executor.JobStore.SaveJob(ctx, jobRecord, 0)
-		//
-		//	if err != nil {
-		//		lss.log.Error("Failed to save Pod name to Job Record: %v", err)
-		//	} else {
-		//		lss.log.Info("Saved Pod name %s to Job %s", podName, req.JobID)
-		//	}
-		//
-		//}()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success":  true,
+			"decision": decision,
+			"pod_name": podName,
+		})
 
-		jobRecord, err := lss.executor.JobStore.GetJob(context.Background(), req.JobID)
-		if err != nil {
-			lss.log.Error("Failed to get Job Record: %v", err)
-		} else {
+		lss.log.Info("✅ Sent HTTP response to Global Scheduler")
+
+		// Step 4: NOW save Job record in background (after response sent)
+		go func() {
+			lss.log.Info("💾 Saving Pod name to Job record (in background)...")
+
+			jobRecord, err := lss.executor.JobStore.GetJob(context.Background(), req.JobID)
+			if err != nil {
+				lss.log.Error("❌ Failed to get Job record: %v", err)
+				return
+			}
+
 			jobRecord.PodName = podName
 			jobRecord.NodeID = decision.NodeID
 			jobRecord.AllocatedGPUIndices = decision.GPUIndices
 
-			// Critical: Use LeaseID from Job Record
 			leaseID := int64(0)
-			if jobRecord.ExecutionLease != nil {
-				// Parse leaseID from string
+			if jobRecord.ExecutionLease != nil && jobRecord.ExecutionLease.LeaseID != "" {
 				fmt.Sscanf(jobRecord.ExecutionLease.LeaseID, "%d", &leaseID)
 			}
 
-			err := lss.executor.JobStore.SaveJob(context.Background(), jobRecord, leaseID)
-
+			err = lss.executor.JobStore.SaveJob(context.Background(), jobRecord, leaseID)
 			if err != nil {
-				lss.log.Error("Failed to save Pod Name: %v", err)
+				lss.log.Error("❌ Failed to save Pod name: %v", err)
 			} else {
-				lss.log.Info("Saved Pod name %s to Job %s (leaseID=%d)", podName, req.JobID, leaseID)
+				lss.log.Info("✅ Saved Pod name %s to Job %s (leaseID=%d)", podName, req.JobID, leaseID)
 			}
+		}()
 
-		}
+		// Response already sent above, return now
+		return
 
 	} else {
 		lss.log.Warn("Executor not configured - Pod not created (OK for testing)")
+
+		// Step 3: Return Decision
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success":  true,
+			"decision": decision,
+			"pod_name": "",
+		})
+
 	}
 
-	// Step 3: Return Decision
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"success":  true,
-		"decision": decision,
-		"pod_name": podName,
-	})
 }
 
 // handleHealth: GET /health - Get cluster health
