@@ -159,7 +159,7 @@ func (jc *JobCoordinator) ScheduleJob(
 	// STEP 4: Call global scheduler (cluster selection)
 	// ========================================================================
 
-	globalDecision, err := jc.globalScheduler.ScheduleJob(ctx, jobSpec)
+	globalDecision, err := jc.globalScheduler.ScheduleJob(ctx, jobRecord)
 	if err != nil {
 		jc.log.Error("Global scheduling failed for job %s: %v", jobID, err)
 		jobRecord.Status = common.StatusFailed

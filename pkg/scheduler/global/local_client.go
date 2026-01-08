@@ -71,7 +71,7 @@ func NewLocalSchedulerClient() *LocalSchedulerClient {
 func (c *LocalSchedulerClient) ScheduleJob(
 	ctx context.Context,
 	localSchedulerAddr string,
-	jobSpec *common.JobSpec,
+	jobRecord *common.Job,
 ) (*local.LocalSchedulingDecision, error) {
 
 	c.log.Debug("Local Scheduler method Entered()")
@@ -80,14 +80,14 @@ func (c *LocalSchedulerClient) ScheduleJob(
 		return nil, fmt.Errorf("local scheduler address cannot be empty")
 	}
 
-	if jobSpec == nil {
+	if jobRecord.Spec == nil {
 		return nil, fmt.Errorf("job spec cannot be nil")
 	}
 
 	// Prepare request
 	req := &LocalScheduleRequest{
-		JobID:   jobSpec.RequestID,
-		JobSpec: jobSpec,
+		JobID:   jobRecord.ID,
+		JobSpec: jobRecord.Spec,
 	}
 
 	reqBody, err := json.Marshal(req)
@@ -105,7 +105,7 @@ func (c *LocalSchedulerClient) ScheduleJob(
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("X-Request-ID", jobSpec.RequestID)
+	httpReq.Header.Set("X-Request-ID", jobRecord.ID)
 
 	c.log.Debug("Calling LocalScheduler: POST %s", url)
 

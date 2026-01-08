@@ -291,22 +291,22 @@ func (gs *GlobalScheduler) scoreCluster(
 // Returns: Complete global scheduling decision
 func (gs *GlobalScheduler) ScheduleJob(
 	ctx context.Context,
-	jobSpec *common.JobSpec,
+	jobRecord *common.Job,
 ) (*cluster.GlobalSchedulingDecision, error) {
 
 	gs.log.Info("Global Scheduler ScheduleJob entered")
-	gs.log.Info("Job Spec: %v", jobSpec)
+	gs.log.Info("Job Record: %v", jobRecord)
 
-	if jobSpec == nil || jobSpec.Name == "" {
+	if jobRecord == nil || jobRecord.Spec.Name == "" {
 		return nil, fmt.Errorf("Invalid job spec")
 	}
 
-	if jobSpec.GPUCount < 0 || jobSpec.GPUCount > 256 {
-		return nil, fmt.Errorf("Invalid GPU count: %d", jobSpec.GPUCount)
+	if jobRecord.Spec.GPUCount < 0 || jobRecord.Spec.GPUCount > 256 {
+		return nil, fmt.Errorf("Invalid GPU count: %d", jobRecord.Spec.GPUCount)
 	}
 
 	// Step 1: Select best cluster (ONLY decision made by global scheduler)
-	bestCluster, clusterScore, err := gs.SelectBestCluster(ctx, jobSpec, "")
+	bestCluster, clusterScore, err := gs.SelectBestCluster(ctx, jobRecord.Spec, "")
 	if err != nil {
 		gs.recordSchedulingFailure()
 		return nil, fmt.Errorf("cluster selection failed: %w", err)
@@ -318,7 +318,7 @@ func (gs *GlobalScheduler) ScheduleJob(
 	localDecision, err := localClient.ScheduleJob(
 		ctx,
 		bestCluster.LocalSchedulerAddr,
-		jobSpec,
+		jobRecord,
 	)
 
 	gs.log.Debug("Local Scheduler ScheduleJob returned: %v", localDecision)
@@ -331,7 +331,7 @@ func (gs *GlobalScheduler) ScheduleJob(
 
 	// Step 3: Create decision
 	decision := &cluster.GlobalSchedulingDecision{
-		JobID:              jobSpec.RequestID,
+		JobID:              jobRecord.ID,
 		ClusterID:          bestCluster.ClusterID,
 		NodeID:             localDecision.NodeID,
 		GPUIndices:         localDecision.GPUIndices,
@@ -345,7 +345,7 @@ func (gs *GlobalScheduler) ScheduleJob(
 	gs.recordSchedulingSuccess(bestCluster.ClusterID)
 
 	gs.log.Info("Scheduled job: %s to cluster %s in region %s (score=%.1f, addr=%s)",
-		jobSpec.RequestID, bestCluster.ClusterID, bestCluster.Region, decision.ClusterScore,
+		jobRecord.ID, bestCluster.ClusterID, bestCluster.Region, decision.ClusterScore,
 		bestCluster.LocalSchedulerAddr)
 
 	return decision, nil
