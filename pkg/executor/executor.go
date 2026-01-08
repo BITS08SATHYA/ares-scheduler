@@ -521,6 +521,16 @@ func (e *Executor) monitorAndUpdateJob(
 				continue // Retry next tick
 			}
 
+			// Test (Remove it asap)
+			e.Log.Info("Job %s is now running", jobID)
+			e.Log.Info("JobRecord from etcd: %s", jobRecord)
+			e.Log.Info("Fetched Pod Phase from Kubernetes: %s", podStatus)
+			e.Log.Info("Pending Value of Pod Status: %s", PhasePending)
+			e.Log.Info("Running Value of Pod Status: %s", PhaseRunning)
+			e.Log.Info("Completed Value of Pod Status: %s", PhaseSucceeded)
+			e.Log.Info("Failed Value of Pod Status: %s", PhaseFailed)
+			e.Log.Info("Unknown Value of Pod Status: %s", PhaseUnknown)
+
 			// ================================================================
 			// STEP 3: Map Pod status to Job status
 			// ================================================================
@@ -538,7 +548,8 @@ func (e *Executor) monitorAndUpdateJob(
 				}
 
 			case PhaseRunning:
-				// Pod is executing
+				// Pod is running/executing
+				e.Log.Info("Entered Pod Running State:")
 				newJobStatus = common.StatusRunning
 				if lastKnownStatus != common.StatusRunning {
 					shouldUpdate = true
