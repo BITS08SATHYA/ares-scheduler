@@ -8,6 +8,7 @@ import (
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/logger"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler/common"
 	"net/http"
+	"strconv"
 	"time"
 )
 
@@ -180,7 +181,7 @@ func (lss *LocalSchedulerServer) handleSchedule(w http.ResponseWriter, r *http.R
 
 		// Step 4: NOW save Job record in background (after response sent)
 		go func() {
-			lss.log.Info("💾 Saving Pod name to Job record (in background)...")
+			lss.log.Info("💾 Saving Pod name to Job record...")
 
 			jobRecord, err := lss.executor.JobStore.GetJob(context.Background(), req.JobID)
 			if err != nil {
@@ -192,16 +193,34 @@ func (lss *LocalSchedulerServer) handleSchedule(w http.ResponseWriter, r *http.R
 			jobRecord.NodeID = decision.NodeID
 			jobRecord.AllocatedGPUIndices = decision.GPUIndices
 
+			// ✅ FIXED: Better lease ID parsing
 			leaseID := int64(0)
 			if jobRecord.ExecutionLease != nil && jobRecord.ExecutionLease.LeaseID != "" {
-				fmt.Sscanf(jobRecord.ExecutionLease.LeaseID, "%d", &leaseID)
+				parsed, parseErr := strconv.ParseInt(jobRecord.ExecutionLease.LeaseID, 10, 64)
+				if parseErr != nil {
+					lss.log.Error("❌ Failed to parse lease ID '%s': %v",
+						jobRecord.ExecutionLease.LeaseID, parseErr)
+					return
+				}
+				leaseID = parsed
+				lss.log.Info("✅ Using lease ID: %d", leaseID)
+			} else {
+				lss.log.Error("❌ No ExecutionLease found!")
+				return
 			}
+
+			if leaseID == 0 {
+				lss.log.Error("❌ Lease ID is 0 - cannot save!")
+				return
+			}
+
+			lss.log.Info("💾 Saving with leaseID=%d", leaseID)
 
 			err = lss.executor.JobStore.SaveJob(context.Background(), jobRecord, leaseID)
 			if err != nil {
 				lss.log.Error("❌ Failed to save Pod name: %v", err)
 			} else {
-				lss.log.Info("✅ Saved Pod name %s to Job %s (leaseID=%d)", podName, req.JobID, leaseID)
+				lss.log.Info("✅ Saved Pod name %s to Job %s", podName, req.JobID)
 			}
 		}()
 

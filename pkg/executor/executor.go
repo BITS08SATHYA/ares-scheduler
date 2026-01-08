@@ -8,6 +8,7 @@ import (
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/logger"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler/common"
 	_ "k8s.io/client-go/kubernetes"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -591,35 +592,49 @@ func (e *Executor) monitorAndUpdateJob(
 			// STEP 4: Update Job record if status changed
 			// ================================================================
 			if shouldUpdate {
-
 				e.Log.Info("🔄 Updating Job %s: %s → %s", jobID, lastKnownStatus, newJobStatus)
 
 				jobRecord.Status = newJobStatus
 
+				// ✅ CRITICAL FIX: Extract and validate lease ID
 				leaseID := int64(0)
 				if jobRecord.ExecutionLease != nil && jobRecord.ExecutionLease.LeaseID != "" {
-					// Parse leaseID from string to int64
-
-					_, parseErr := fmt.Sscanf(jobRecord.ExecutionLease.LeaseID, "%d", &leaseID)
+					// Use strconv.ParseInt for reliable parsing
+					parsed, parseErr := strconv.ParseInt(jobRecord.ExecutionLease.LeaseID, 10, 64)
 					if parseErr != nil {
-						e.Log.Warn("Failed to parse lease ID: %v (using 0)", parseErr)
-						//leaseID = 0
+						e.Log.Error("❌ CRITICAL: Failed to parse lease ID '%s': %v",
+							jobRecord.ExecutionLease.LeaseID, parseErr)
+						e.Log.Error("Job: %+v", jobRecord)
+						e.Log.Error("ExecutionLease: %+v", jobRecord.ExecutionLease)
+						continue // Skip this update, retry next tick
 					}
+					leaseID = parsed
+					e.Log.Info("✅ Using lease ID: %d for Job update", leaseID)
+				} else {
+					e.Log.Error("❌ CRITICAL: No ExecutionLease found for job %s!", jobID)
+					e.Log.Error("Job: %+v", jobRecord)
+					continue // Skip this update
 				}
 
-				e.Log.Debug("Saving Job with leaseID=%d", leaseID)
+				// Validate lease ID is not zero
+				if leaseID == 0 {
+					e.Log.Error("❌ CRITICAL: Lease ID is 0 for job %s - etcd will reject update!", jobID)
+					continue // Skip this update
+				}
 
-				// The Job was created by JobCoordinator with the lease
-				// Executor just updates status without needing the lease ID
-				// (This is safe because only one Executor monitors each Pod)
+				e.Log.Info("💾 Saving Job to etcd with leaseID=%d", leaseID)
 
+				// Save with correct lease ID
 				err = e.JobStore.SaveJob(ctx, jobRecord, leaseID)
 				if err != nil {
-					e.Log.Error("Failed to update Job %s status to %s: %v", jobID, newJobStatus, err)
+					e.Log.Error("❌ Failed to update Job %s to etcd: %v", jobID, err)
+					e.Log.Error("LeaseID used: %d", leaseID)
+					e.Log.Error("Error type: %T", err)
 					continue // Retry next tick
 				}
+
 				lastKnownStatus = newJobStatus
-				e.Log.Info("✓ Updated Job %s status: %s → %s", jobID, lastKnownStatus, newJobStatus)
+				e.Log.Info("✅ Successfully updated Job %s to status: %s", jobID, newJobStatus)
 			}
 
 			// ================================================================
