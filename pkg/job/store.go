@@ -112,12 +112,17 @@ func (store *ETCDJobStore) SaveJob(ctx context.Context, job *common.Job, leaseID
 
 // GetJob: Retrieve a job from etcd by ID
 func (store *ETCDJobStore) GetJob(ctx context.Context, jobID string) (*common.Job, error) {
+
+	store.log.Debug("Entered Get Job Method()")
+	store.log.Debug("Job ID received: ", jobID)
 	if jobID == "" {
 		return nil, fmt.Errorf("job ID cannot be empty")
 	}
 
 	key := fmt.Sprintf("%s/%s", store.keyPrefix, jobID)
+	store.log.Debug("This is the key: %v with store prefix ", key, store.keyPrefix)
 	jobData, err := store.etcd.Get(ctx, key)
+	store.log.Debug("Job Found: %v", jobData)
 	if err != nil {
 		store.log.Error("Failed to get job %s from etcd: %v", jobID, err)
 		return nil, fmt.Errorf("get from etcd failed: %w", err)
