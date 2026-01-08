@@ -97,7 +97,13 @@ func (ec *ETCDClient) PutWithLease(ctx context.Context, key, value string, lease
 
 // Get: Retrieve a value by key
 func (ec *ETCDClient) Get(ctx context.Context, key string) (string, error) {
+
+	ec.log.Debug("Entered Get Etcd Method()")
+
 	resp, err := ec.cli.Get(ctx, key)
+
+	ec.log.Debug("Get Response: %s", resp)
+
 	if err != nil {
 		ec.log.Error("Failed to get key %s: %v", key, err)
 		return "", err
