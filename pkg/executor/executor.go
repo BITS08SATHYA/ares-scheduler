@@ -8,6 +8,7 @@ import (
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/logger"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler/common"
 	_ "k8s.io/client-go/kubernetes"
+	"runtime/debug"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -470,66 +471,272 @@ func createPodSpec(
 // 3. When Pod completes (Succeeded/Failed), stop monitoring
 //
 // This runs in a background goroutine started by ExecuteJob()
+//func (e *Executor) monitorAndUpdateJob(
+//	ctx context.Context,
+//	execCtx *ExecutionContext,
+//	jobID string,
+//) error {
+//
+//	// FIX: Add panic recovery so we can see crashes
+//	defer func() {
+//		if r := recover(); r != nil {
+//			e.Log.Error("PANIC in monitoring for job %s: %v", jobID, r)
+//		}
+//	}()
+//
+//	e.Log.Info("Starting Pod monitoring for job %s (pod=%s)", jobID, execCtx.PodName)
+//
+//	ticker := time.NewTicker(5 * time.Second)
+//	defer ticker.Stop()
+//
+//	e.Log.Info("Ticker started: %v", ticker.C)
+//	// Track last known status to avoid redundant updates
+//	lastKnownStatus := common.StatusScheduled
+//
+//	for {
+//		e.Log.Info("Inside the for loop:")
+//		select {
+//		case <-ctx.Done():
+//			e.Log.Info("Monitoring stopped for job %s (context done)", jobID)
+//			return ctx.Err()
+//
+//		case <-ticker.C:
+//			// ================================================================
+//			// STEP 1: Get Pod status from Kubernetes
+//			// ================================================================
+//			podInfo, err := e.K8sClient.GetPod(ctx, execCtx.PodName)
+//
+//			if err != nil {
+//				e.Log.Warn("Failed to get Pod status for %s: %v", execCtx.PodName, err)
+//				continue // Retry next tick
+//			}
+//
+//			podStatus := podInfo.Phase
+//			e.Log.Info("Pod %s current status: %s (last known status: %s)",
+//				execCtx.PodName, podStatus, lastKnownStatus)
+//
+//			// ================================================================
+//			// STEP 2: Get Job record from etcd
+//			// ================================================================
+//			jobRecord, err := e.JobStore.GetJob(ctx, jobID)
+//			if err != nil {
+//				e.Log.Error("Failed to get Job record for %s: %v", jobID, err)
+//				continue // Retry next tick
+//			}
+//
+//			// Test (Remove it asap)
+//			e.Log.Info("Job %s is now running", jobID)
+//			e.Log.Info("JobRecord from etcd: %s", jobRecord)
+//			e.Log.Info("Fetched Pod Phase from Kubernetes: %s", podStatus)
+//			e.Log.Info("Pending Value of Pod Status: %s", PhasePending)
+//			e.Log.Info("Running Value of Pod Status: %s", PhaseRunning)
+//			e.Log.Info("Completed Value of Pod Status: %s", PhaseSucceeded)
+//			e.Log.Info("Failed Value of Pod Status: %s", PhaseFailed)
+//			e.Log.Info("Unknown Value of Pod Status: %s", PhaseUnknown)
+//
+//			// ================================================================
+//			// STEP 3: Map Pod status to Job status
+//			// ================================================================
+//			var newJobStatus common.JobStatus
+//			shouldUpdate := false
+//			shouldStop := false
+//
+//			switch podStatus {
+//			case PhasePending:
+//				// Pod is being created (pulling image, scheduling)
+//				newJobStatus = common.StatusPending
+//				if lastKnownStatus != common.StatusPending {
+//					shouldUpdate = true
+//					e.Log.Info("Job %s: Pod is pending", jobID)
+//				}
+//
+//			case PhaseRunning:
+//				// Pod is running/executing
+//				e.Log.Info("Entered Pod Running State:")
+//				newJobStatus = common.StatusRunning
+//				if lastKnownStatus != common.StatusRunning {
+//					shouldUpdate = true
+//					jobRecord.StartTime = time.Now()
+//					e.Log.Info("Job %s: Pod started running", jobID)
+//				}
+//
+//			case PhaseSucceeded:
+//				// Pod completed successfully
+//				newJobStatus = common.StatusSucceeded
+//				shouldUpdate = true
+//				shouldStop = true
+//				jobRecord.EndTime = time.Now()
+//				jobRecord.ExitCode = 0
+//				e.Log.Info(" Job %s: Pod succeeded", jobID)
+//
+//			case PhaseFailed:
+//				// Pod failed
+//				newJobStatus = common.StatusFailed
+//				shouldUpdate = true
+//				shouldStop = true
+//				jobRecord.EndTime = time.Now()
+//				jobRecord.ExitCode = 1
+//
+//				// Try to get failure reason from Pod logs
+//				podLogs, logErr := e.K8sClient.GetPodLogs(ctx, execCtx.PodName)
+//				if logErr == nil && podLogs != "" {
+//					// Truncate logs if too long (max 500 chars)
+//					if len(podLogs) > 500 {
+//						podLogs = podLogs[:500] + "... (truncated)"
+//					}
+//					jobRecord.ErrorMsg = fmt.Sprintf("Pod failed: %s", podLogs)
+//				} else {
+//					jobRecord.ErrorMsg = "Pod failed (logs unavailable)"
+//				}
+//
+//				e.Log.Error("Job %s: Pod failed", jobID)
+//
+//			case PhaseUnknown:
+//				// Pod status unclear (node down, network issue, etc.)
+//				e.Log.Warn("Job %s: Pod status unknown", jobID)
+//				// Don't update - wait for clearer status
+//				continue
+//
+//			default:
+//				e.Log.Warn("Job %s: Unexpected pod status: %s", jobID, podStatus)
+//				continue
+//			}
+//
+//			// ================================================================
+//			// STEP 4: Update Job record if status changed
+//			// ================================================================
+//			if shouldUpdate {
+//				e.Log.Info("🔄 Updating Job %s: %s → %s", jobID, lastKnownStatus, newJobStatus)
+//
+//				jobRecord.Status = newJobStatus
+//
+//				// ✅ CRITICAL FIX: Extract and validate lease ID
+//				leaseID := int64(0)
+//				if jobRecord.ExecutionLease != nil && jobRecord.ExecutionLease.LeaseID != "" {
+//					// Use strconv.ParseInt for reliable parsing
+//					parsed, parseErr := strconv.ParseInt(jobRecord.ExecutionLease.LeaseID, 10, 64)
+//					if parseErr != nil {
+//						e.Log.Error("❌ CRITICAL: Failed to parse lease ID '%s': %v",
+//							jobRecord.ExecutionLease.LeaseID, parseErr)
+//						e.Log.Error("Job: %+v", jobRecord)
+//						e.Log.Error("ExecutionLease: %+v", jobRecord.ExecutionLease)
+//						continue // Skip this update, retry next tick
+//					}
+//					leaseID = parsed
+//					e.Log.Info("✅ Using lease ID: %d for Job update", leaseID)
+//				} else {
+//					e.Log.Error("❌ CRITICAL: No ExecutionLease found for job %s!", jobID)
+//					e.Log.Error("Job: %+v", jobRecord)
+//					continue // Skip this update
+//				}
+//
+//				// Validate lease ID is not zero
+//				if leaseID == 0 {
+//					e.Log.Error("❌ CRITICAL: Lease ID is 0 for job %s - etcd will reject update!", jobID)
+//					continue // Skip this update
+//				}
+//
+//				e.Log.Info("💾 Saving Job to etcd with leaseID=%d", leaseID)
+//
+//				// Save with correct lease ID
+//				err = e.JobStore.SaveJob(ctx, jobRecord, leaseID)
+//				if err != nil {
+//					e.Log.Error("❌ Failed to update Job %s to etcd: %v", jobID, err)
+//					e.Log.Error("LeaseID used: %d", leaseID)
+//					e.Log.Error("Error type: %T", err)
+//					continue // Retry next tick
+//				}
+//
+//				lastKnownStatus = newJobStatus
+//				e.Log.Info("✅ Successfully updated Job %s to status: %s", jobID, newJobStatus)
+//			}
+//
+//			// ================================================================
+//			// STEP 5: Stop monitoring if Pod completed
+//			// ================================================================
+//			if shouldStop {
+//				e.Log.Info("Stopping monitoring for job %s (final status: %s)",
+//					jobID, newJobStatus)
+//				return nil
+//			}
+//		}
+//	}
+//}
+
 func (e *Executor) monitorAndUpdateJob(
 	ctx context.Context,
 	execCtx *ExecutionContext,
 	jobID string,
 ) error {
 
-	// FIX: Add panic recovery so we can see crashes
+	// Panic recovery
 	defer func() {
 		if r := recover(); r != nil {
-			e.Log.Error("PANIC in monitoring for job %s: %v", jobID, r)
+			e.Log.Error("🚨 PANIC in monitoring for job %s: %v", jobID, r)
+			debug.PrintStack() // Print full stack trace
 		}
 	}()
 
-	e.Log.Info("Starting Pod monitoring for job %s (pod=%s)", jobID, execCtx.PodName)
+	e.Log.Info("👁️ Starting Pod monitoring for job %s (pod=%s)", jobID, execCtx.PodName)
 
+	// ✅ Check context
+	e.Log.Info("Context type: %T", ctx)
+	e.Log.Info("Context done channel: %v", ctx.Done())
+
+	// Create ticker
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
-	// Track last known status to avoid redundant updates
+	e.Log.Info("✅ Ticker created: %p", ticker)
+	e.Log.Info("✅ Ticker channel: %p", ticker.C)
+
+	// Track status
 	lastKnownStatus := common.StatusScheduled
+	tickCount := 0
+
+	e.Log.Info("🔄 Entering monitoring loop...")
 
 	for {
+		tickCount++
+		e.Log.Info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+		e.Log.Info("Loop iteration #%d for job %s", tickCount, jobID)
+		e.Log.Info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+
 		select {
 		case <-ctx.Done():
-			e.Log.Info("Monitoring stopped for job %s (context done)", jobID)
+			e.Log.Info("❌ Context cancelled for job %s (reason: %v)", jobID, ctx.Err())
 			return ctx.Err()
 
-		case <-ticker.C:
+		case tickTime := <-ticker.C:
+			e.Log.Info("⏰ TICK #%d received at %s for job %s", tickCount, tickTime.Format("15:04:05"), jobID)
+
 			// ================================================================
 			// STEP 1: Get Pod status from Kubernetes
 			// ================================================================
+			e.Log.Info("📡 Fetching Pod status for %s...", execCtx.PodName)
 			podInfo, err := e.K8sClient.GetPod(ctx, execCtx.PodName)
 
 			if err != nil {
-				e.Log.Warn("Failed to get Pod status for %s: %v", execCtx.PodName, err)
-				continue // Retry next tick
+				e.Log.Error("❌ Failed to get Pod %s: %v (will retry next tick)", execCtx.PodName, err)
+				e.Log.Info("🔄 Continuing to next tick...")
+				continue
 			}
 
 			podStatus := podInfo.Phase
-			e.Log.Info("Pod %s current status: %s (last known status: %s)",
-				execCtx.PodName, podStatus, lastKnownStatus)
+			e.Log.Info("📊 Pod %s status: %s (last known: %s)", execCtx.PodName, podStatus, lastKnownStatus)
 
 			// ================================================================
 			// STEP 2: Get Job record from etcd
 			// ================================================================
+			e.Log.Info("📥 Fetching Job record from etcd for %s...", jobID)
 			jobRecord, err := e.JobStore.GetJob(ctx, jobID)
 			if err != nil {
-				e.Log.Error("Failed to get Job record for %s: %v", jobID, err)
-				continue // Retry next tick
+				e.Log.Error("❌ Failed to get Job record: %v (will retry next tick)", err)
+				e.Log.Info("🔄 Continuing to next tick...")
+				continue
 			}
 
-			// Test (Remove it asap)
-			e.Log.Info("Job %s is now running", jobID)
-			e.Log.Info("JobRecord from etcd: %s", jobRecord)
-			e.Log.Info("Fetched Pod Phase from Kubernetes: %s", podStatus)
-			e.Log.Info("Pending Value of Pod Status: %s", PhasePending)
-			e.Log.Info("Running Value of Pod Status: %s", PhaseRunning)
-			e.Log.Info("Completed Value of Pod Status: %s", PhaseSucceeded)
-			e.Log.Info("Failed Value of Pod Status: %s", PhaseFailed)
-			e.Log.Info("Unknown Value of Pod Status: %s", PhaseUnknown)
+			e.Log.Info("✅ Job record fetched, current status in etcd: %s", jobRecord.Status)
 
 			// ================================================================
 			// STEP 3: Map Pod status to Job status
@@ -538,64 +745,60 @@ func (e *Executor) monitorAndUpdateJob(
 			shouldUpdate := false
 			shouldStop := false
 
+			e.Log.Info("🔍 Checking Pod phase: %s", podStatus)
+
 			switch podStatus {
 			case PhasePending:
-				// Pod is being created (pulling image, scheduling)
 				newJobStatus = common.StatusPending
 				if lastKnownStatus != common.StatusPending {
 					shouldUpdate = true
-					e.Log.Info("Job %s: Pod is pending", jobID)
+					e.Log.Info("→ Status change detected: %s → PENDING", lastKnownStatus)
 				}
 
 			case PhaseRunning:
-				// Pod is running/executing
-				e.Log.Info("Entered Pod Running State:")
 				newJobStatus = common.StatusRunning
 				if lastKnownStatus != common.StatusRunning {
 					shouldUpdate = true
 					jobRecord.StartTime = time.Now()
-					e.Log.Info("Job %s: Pod started running", jobID)
+					e.Log.Info("→ Status change detected: %s → RUNNING", lastKnownStatus)
+				} else {
+					e.Log.Info("→ Still RUNNING (no update needed)")
 				}
 
 			case PhaseSucceeded:
-				// Pod completed successfully
 				newJobStatus = common.StatusSucceeded
 				shouldUpdate = true
 				shouldStop = true
 				jobRecord.EndTime = time.Now()
 				jobRecord.ExitCode = 0
-				e.Log.Info(" Job %s: Pod succeeded", jobID)
+				e.Log.Info("→ Status change detected: %s → SUCCEEDED (final)", lastKnownStatus)
 
 			case PhaseFailed:
-				// Pod failed
 				newJobStatus = common.StatusFailed
 				shouldUpdate = true
 				shouldStop = true
 				jobRecord.EndTime = time.Now()
 				jobRecord.ExitCode = 1
 
-				// Try to get failure reason from Pod logs
 				podLogs, logErr := e.K8sClient.GetPodLogs(ctx, execCtx.PodName)
 				if logErr == nil && podLogs != "" {
-					// Truncate logs if too long (max 500 chars)
 					if len(podLogs) > 500 {
-						podLogs = podLogs[:500] + "... (truncated)"
+						podLogs = podLogs[:500] + "..."
 					}
 					jobRecord.ErrorMsg = fmt.Sprintf("Pod failed: %s", podLogs)
 				} else {
 					jobRecord.ErrorMsg = "Pod failed (logs unavailable)"
 				}
-
-				e.Log.Error("Job %s: Pod failed", jobID)
+				e.Log.Error("→ Status change detected: %s → FAILED (final)", lastKnownStatus)
 
 			case PhaseUnknown:
-				// Pod status unclear (node down, network issue, etc.)
-				e.Log.Warn("Job %s: Pod status unknown", jobID)
-				// Don't update - wait for clearer status
+				e.Log.Warn("→ Pod status UNKNOWN, skipping update")
+				e.Log.Info("🔄 Continuing to next tick...")
 				continue
 
 			default:
-				e.Log.Warn("Job %s: Unexpected pod status: %s", jobID, podStatus)
+				e.Log.Warn("→ Unexpected pod status: %s, skipping update", podStatus)
+				e.Log.Info("🔄 Continuing to next tick...")
 				continue
 			}
 
@@ -603,59 +806,64 @@ func (e *Executor) monitorAndUpdateJob(
 			// STEP 4: Update Job record if status changed
 			// ================================================================
 			if shouldUpdate {
-				e.Log.Info("🔄 Updating Job %s: %s → %s", jobID, lastKnownStatus, newJobStatus)
+				e.Log.Info("💾 UPDATE REQUIRED: %s → %s", lastKnownStatus, newJobStatus)
 
 				jobRecord.Status = newJobStatus
 
-				// ✅ CRITICAL FIX: Extract and validate lease ID
+				// Extract lease ID
 				leaseID := int64(0)
 				if jobRecord.ExecutionLease != nil && jobRecord.ExecutionLease.LeaseID != "" {
-					// Use strconv.ParseInt for reliable parsing
 					parsed, parseErr := strconv.ParseInt(jobRecord.ExecutionLease.LeaseID, 10, 64)
 					if parseErr != nil {
-						e.Log.Error("❌ CRITICAL: Failed to parse lease ID '%s': %v",
-							jobRecord.ExecutionLease.LeaseID, parseErr)
-						e.Log.Error("Job: %+v", jobRecord)
-						e.Log.Error("ExecutionLease: %+v", jobRecord.ExecutionLease)
-						continue // Skip this update, retry next tick
+						e.Log.Error("❌ Lease ID parse failed: %v", parseErr)
+						e.Log.Error("   Lease ID string: '%s'", jobRecord.ExecutionLease.LeaseID)
+						e.Log.Info("🔄 Continuing to next tick...")
+						continue
 					}
 					leaseID = parsed
-					e.Log.Info("✅ Using lease ID: %d for Job update", leaseID)
+					e.Log.Info("✅ Lease ID: %d", leaseID)
 				} else {
-					e.Log.Error("❌ CRITICAL: No ExecutionLease found for job %s!", jobID)
-					e.Log.Error("Job: %+v", jobRecord)
-					continue // Skip this update
+					e.Log.Error("❌ No ExecutionLease found!")
+					e.Log.Info("🔄 Continuing to next tick...")
+					continue
 				}
 
-				// Validate lease ID is not zero
 				if leaseID == 0 {
-					e.Log.Error("❌ CRITICAL: Lease ID is 0 for job %s - etcd will reject update!", jobID)
-					continue // Skip this update
+					e.Log.Error("❌ Lease ID is 0, cannot save!")
+					e.Log.Info("🔄 Continuing to next tick...")
+					continue
 				}
 
-				e.Log.Info("💾 Saving Job to etcd with leaseID=%d", leaseID)
+				e.Log.Info("📤 Calling SaveJob(jobID=%s, leaseID=%d, status=%s)...", jobID, leaseID, newJobStatus)
 
-				// Save with correct lease ID
-				err = e.JobStore.SaveJob(ctx, jobRecord, leaseID)
-				if err != nil {
-					e.Log.Error("❌ Failed to update Job %s to etcd: %v", jobID, err)
-					e.Log.Error("LeaseID used: %d", leaseID)
-					e.Log.Error("Error type: %T", err)
-					continue // Retry next tick
+				saveErr := e.JobStore.SaveJob(ctx, jobRecord, leaseID)
+
+				if saveErr != nil {
+					e.Log.Error("❌❌❌ SaveJob FAILED! ❌❌❌")
+					e.Log.Error("   Error: %v", saveErr)
+					e.Log.Error("   Error type: %T", saveErr)
+					e.Log.Error("   JobID: %s", jobID)
+					e.Log.Error("   LeaseID: %d", leaseID)
+					e.Log.Error("   Status: %s", newJobStatus)
+					e.Log.Info("🔄 Continuing to next tick...")
+					continue
 				}
 
 				lastKnownStatus = newJobStatus
-				e.Log.Info("✅ Successfully updated Job %s to status: %s", jobID, newJobStatus)
+				e.Log.Info("✅✅✅ SaveJob SUCCESS! Job now: %s ✅✅✅", newJobStatus)
+			} else {
+				e.Log.Info("ℹ️ No update needed (status unchanged)")
 			}
 
 			// ================================================================
 			// STEP 5: Stop monitoring if Pod completed
 			// ================================================================
 			if shouldStop {
-				e.Log.Info("Stopping monitoring for job %s (final status: %s)",
-					jobID, newJobStatus)
+				e.Log.Info("🏁 Pod completed, stopping monitoring (final status: %s)", newJobStatus)
 				return nil
 			}
+
+			e.Log.Info("✅ Tick #%d complete, waiting for next tick...", tickCount)
 		}
 	}
 }
