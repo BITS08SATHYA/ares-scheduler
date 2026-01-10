@@ -7,9 +7,9 @@ metadata:
   labels:
     app: ares-global
 spec:
-  replicas: 1  # Single replica for MVP (no leader election needed)
+  replicas: 1
   strategy:
-    type: Recreate  # Ensure clean shutdown before new Pod starts
+    type: Recreate
   selector:
     matchLabels:
       app: ares-global
@@ -31,13 +31,9 @@ spec:
             - containerPort: 8080
               name: http
               protocol: TCP
-
-          # CORRECTED: Only pass flags that exist in cmd/global/main.go
           args:
             - --gateway.port=8080
-            - --etcd.endpoint=etcd-0.etcd.ares-system.svc.cluster.local:2379
-#            - --etcd.endpoint=etcd-0.etcd.ares-system.svc.cluster.local:2379,etcd-1.etcd.ares-system.svc.cluster.local:2379,etcd-2.etcd.ares-system.svc.cluster.local:2379
-            #,etcd-1.etcd.ares-system.svc.cluster.local:2379,etcd-2.etcd.ares-system.svc.cluster.local:2379
+            - --etcd.endpoint=http://etcd-client.ares-system.svc.cluster.local:2379  # ✅ FIXED
             - --redis.addr=redis-external:6379
             - --log.level=info
           env:
@@ -53,10 +49,8 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: status.podIP
-            # Control plane's own address (for workers to register)
             - name: CONTROL_PLANE_ADDR
               value: "http://ares-global.ares-system.svc.cluster.local:8080"
-
           resources:
             requests:
               memory: "512Mi"
@@ -64,7 +58,6 @@ spec:
             limits:
               memory: "1Gi"
               cpu: "1000m"
-
           livenessProbe:
             httpGet:
               path: /health
@@ -73,7 +66,6 @@ spec:
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 3
-
           readinessProbe:
             httpGet:
               path: /health
@@ -82,12 +74,8 @@ spec:
             periodSeconds: 5
             timeoutSeconds: 3
             failureThreshold: 3
-
-          # Graceful shutdown
           lifecycle:
             preStop:
               exec:
                 command: ["/bin/sh", "-c", "sleep 5"]
-
-      # Ensure clean restarts
       terminationGracePeriodSeconds: 30

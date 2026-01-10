@@ -177,8 +177,15 @@ func main() {
 	// ========================================================================
 
 	log.Info("Connecting to etcd...")
-	etcdEndpoints := []string{"etcd-0.etcd.ares-system.svc.cluster.local:2379"}
+	//etcdEndpoints := []string{"etcd-0.etcd.ares-system.svc.cluster.local:2379"}
+	//etcdClient, err := etcd.NewETCDClient(etcdEndpoints, 5*time.Second)
+
+	etcdEndpoints := []string{
+		//"http://etcd-client.ares-system.svc.cluster.local:2379",
+		"http://34.48.35.8:2379",
+	}
 	etcdClient, err := etcd.NewETCDClient(etcdEndpoints, 5*time.Second)
+
 	if err != nil {
 		log.Error("Failed to connect to etcd: %v", err)
 		os.Exit(1)
