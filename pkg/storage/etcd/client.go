@@ -100,7 +100,10 @@ func (ec *ETCDClient) Get(ctx context.Context, key string) (string, error) {
 
 	ec.log.Debug("Entered Get Etcd Method()")
 
-	resp, err := ec.cli.Get(ctx, key)
+	getCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+
+	resp, err := ec.cli.Get(getCtx, key)
 
 	ec.log.Debug("Get Response: %s", resp)
 
