@@ -117,13 +117,6 @@ func (jc *JobCoordinator) ScheduleJob(
 
 	jc.log.Info("Acquired lease for job %s (leaseID=%d, heartbeat started)", jobID, leaseID)
 
-	// Ensure we release lease on error
-	defer func() {
-		if err != nil {
-			jc.leaseManager.ReleaseLeaseForJob(context.Background(), jobID)
-		}
-	}()
-
 	// ========================================================================
 	// STEP 3: Create job record with lease attachment
 	// ========================================================================
@@ -183,6 +176,16 @@ func (jc *JobCoordinator) ScheduleJob(
 	if err != nil {
 		jc.log.Warn("Failed to update job status (non-fatal): %v", err)
 	}
+
+	// Ensure we release lease on error
+	defer func() {
+		if err != nil {
+			err := jc.leaseManager.ReleaseLeaseForJob(context.Background(), jobID)
+			if err != nil {
+				return
+			}
+		}
+	}()
 
 	// ========================================================================
 	// STEP 6: Record in idempotency cache

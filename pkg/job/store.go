@@ -20,6 +20,9 @@ type JobStore interface {
 	// SaveJob: Save or update a job
 	SaveJob(ctx context.Context, job *common.Job, leaseId int64) error
 
+	// SaveJobFinal saves a completed job without a lease (permanent storage)
+	SaveJobFinal(ctx context.Context, job *common.Job) error
+
 	// GetJob: Retrieve a job by ID
 	GetJob(ctx context.Context, jobID string) (*common.Job, error)
 
@@ -107,6 +110,22 @@ func (store *ETCDJobStore) SaveJob(ctx context.Context, job *common.Job, leaseID
 	}
 
 	store.log.Info("Saved job %s (status: %s)", job.ID, job.Status)
+	return nil
+}
+
+func (store *ETCDJobStore) SaveJobFinal(ctx context.Context, job *common.Job) error {
+	key := fmt.Sprintf("/ares/jobs/%s", job.ID)
+	data, err := json.Marshal(job)
+	if err != nil {
+		return fmt.Errorf("failed to marshal job: %w", err)
+	}
+
+	// save without lease - job is completed, no need for lease
+	if err := store.etcd.PutWithoutLease(ctx, key, string(data)); err != nil {
+		return fmt.Errorf("failed to save final job: %w", err)
+	}
+
+	store.log.Info("[JobStore] Saved Final Job %s (status: %s) -- No Lease", job.ID, job.Status)
 	return nil
 }
 

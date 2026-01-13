@@ -2,6 +2,7 @@ package etcd
 
 import (
 	"context"
+	"fmt"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/logger"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.etcd.io/etcd/client/v3/concurrency"
@@ -93,6 +94,23 @@ func (ec *ETCDClient) PutWithLease(ctx context.Context, key, value string, lease
 
 	ec.log.Info("Put key with lease: %s (leaseID: %d)", key, leaseID)
 	return nil
+}
+
+// Persist the completed job to the store even after the lease expiry
+func (ec *ETCDClient) PutWithoutLease(ctx context.Context, key, value string) error {
+
+	putctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+
+	_, err := ec.cli.Put(putctx, key, value)
+	if err != nil {
+		return fmt.Errorf("Failed to put key %s: %w", key, err)
+	}
+
+	ec.log.Info("[etcd] Saved (Job) key permanently (no lease): %s", key)
+
+	return nil
+
 }
 
 // Get: Retrieve a value by key
