@@ -574,7 +574,7 @@ func (e *Executor) monitorAndUpdateJob(
 
 			case PhaseSucceeded:
 				newJobStatus = common.StatusSucceeded
-				shouldUpdate = true
+				shouldUpdate = false
 				shouldStop = true
 				jobRecord.EndTime = time.Now()
 				jobRecord.ExitCode = 0
@@ -585,20 +585,17 @@ func (e *Executor) monitorAndUpdateJob(
 				// Thus avoiding, split-brain situation. Here, the job completed successfully, meaning that
 				// executor give up the lease and job (auto deletes from etcd) and /getJobByJobID returns
 				// no such job exists! To mitigate this, I did save the job in the Etcd store without leaseID.
+				// Save without lease
 				saveErr := e.JobStore.SaveJobFinal(ctx, jobRecord)
-
 				if saveErr != nil {
-					e.Log.Info("Succeeded Job Persisted Permanently")
-					e.Log.Error("   Error: %v", saveErr)
-					e.Log.Error("   Error type: %T", saveErr)
-					e.Log.Error("   JobID: %s", jobID)
-					e.Log.Error("   Status: %s", newJobStatus)
+					e.Log.Error("❌ Failed to persist SUCCEEDED job: %v", saveErr)
 					continue
 				}
+				e.Log.Info("✅ Succeeded Job Persisted Permanently (no lease)")
 
 			case PhaseFailed:
 				newJobStatus = common.StatusFailed
-				shouldUpdate = true
+				shouldUpdate = false
 				shouldStop = true
 				jobRecord.EndTime = time.Now()
 				jobRecord.ExitCode = 1
@@ -613,16 +610,14 @@ func (e *Executor) monitorAndUpdateJob(
 					jobRecord.ErrorMsg = "Pod failed (logs unavailable)"
 				}
 				e.Log.Error("→ Status change detected: %s → FAILED (final)", lastKnownStatus)
-				saveErr := e.JobStore.SaveJobFinal(ctx, jobRecord)
 
+				// Save without lease
+				saveErr := e.JobStore.SaveJobFinal(ctx, jobRecord)
 				if saveErr != nil {
-					e.Log.Info("Failed Job Persisted Permanently")
-					e.Log.Error("   Error: %v", saveErr)
-					e.Log.Error("   Error type: %T", saveErr)
-					e.Log.Error("   JobID: %s", jobID)
-					e.Log.Error("   Status: %s", newJobStatus)
+					e.Log.Error("❌ Failed to persist FAILED job: %v", saveErr)
 					continue
 				}
+				e.Log.Info("✅ Failed Job Persisted Permanently (no lease)")
 
 			case PhaseUnknown:
 				e.Log.Warn("→ Pod status UNKNOWN, skipping update")
