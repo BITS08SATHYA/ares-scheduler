@@ -576,6 +576,7 @@ func (e *Executor) monitorAndUpdateJob(
 				newJobStatus = common.StatusSucceeded
 				shouldUpdate = false
 				shouldStop = true
+				jobRecord.Status = newJobStatus
 				jobRecord.EndTime = time.Now()
 				jobRecord.ExitCode = 0
 				e.Log.Info("→ Status change detected: %s → SUCCEEDED (final)", lastKnownStatus)
@@ -597,6 +598,7 @@ func (e *Executor) monitorAndUpdateJob(
 				newJobStatus = common.StatusFailed
 				shouldUpdate = false
 				shouldStop = true
+				jobRecord.Status = newJobStatus
 				jobRecord.EndTime = time.Now()
 				jobRecord.ExitCode = 1
 
