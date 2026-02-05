@@ -167,32 +167,3 @@ func (l *Logger) GetLevel() LogLevel {
 func (l *Logger) SetName(name string) {
 	l.name = name
 }
-
-// ============================================================================
-// USAGE EXAMPLES
-// ============================================================================
-
-/*
-Basic usage:
-
-  log := logger.Get()
-
-  log.Info("Starting application")
-  log.Debug("Debug info: %v", value)
-  log.Warn("Warning: %s", msg)
-  log.Error("Error: %v", err)
-
-  // Graceful shutdown
-  defer log.Sync()
-
-In main.go:
-
-  log := initializeLogger(*logLevel)
-  defer func() {
-    if log != nil {
-      _ = log.Sync()  // Safe to call, error is ignored (best effort)
-    }
-  }()
-*/
-
-// ============================================================================
