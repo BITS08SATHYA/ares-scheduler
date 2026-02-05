@@ -594,6 +594,23 @@ func (e *Executor) monitorAndUpdateJob(
 				}
 				e.Log.Info("✅ Succeeded Job Persisted Permanently (no lease)")
 
+				// Clean up: move from ActiveJobs -> CompletedJobs
+				e.JobsMu.Lock()
+				delete(e.ActiveJobs, execCtx.JobID)
+
+				e.CompletedJobs[execCtx.JobID] = &ExecutionResult{
+					JobID:       execCtx.JobID,
+					PodName:     execCtx.PodName,
+					Status:      StatusSuccessful,
+					Phase:       PhaseSucceeded,
+					StartTime:   execCtx.StartTime,
+					EndTime:     time.Now(),
+					Duration:    time.Since(execCtx.StartTime),
+					CompletedAt: time.Now(),
+				}
+				e.JobsMu.Unlock()
+				atomic.AddUint64(&e.TotalSuccessful, 1)
+
 			case PhaseFailed:
 				newJobStatus = common.StatusFailed
 				shouldUpdate = false
@@ -620,6 +637,23 @@ func (e *Executor) monitorAndUpdateJob(
 					continue
 				}
 				e.Log.Info("✅ Failed Job Persisted Permanently (no lease)")
+
+				// Clean up: move from ActiveJobs → CompletedJobs
+				e.JobsMu.Lock()
+				delete(e.ActiveJobs, execCtx.JobID)
+				e.CompletedJobs[execCtx.JobID] = &ExecutionResult{
+					JobID:        execCtx.JobID,
+					PodName:      execCtx.PodName,
+					Status:       StatusFailed,
+					Phase:        PhaseFailed,
+					StartTime:    execCtx.StartTime,
+					EndTime:      time.Now(),
+					Duration:     time.Since(execCtx.StartTime),
+					ErrorMessage: jobRecord.ErrorMsg,
+					CompletedAt:  time.Now(),
+				}
+				e.JobsMu.Unlock()
+				atomic.AddUint64(&e.TotalFailed, 1)
 
 			case PhaseUnknown:
 				e.Log.Warn("→ Pod status UNKNOWN, skipping update")

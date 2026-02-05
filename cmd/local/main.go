@@ -457,14 +457,16 @@ func main() {
 			runningJobCount := len(activeJobs)
 
 			gpusInUse := 0
+			memInUse := 0.0
 			for _, aj := range activeJobs {
 				gpusInUse += len(aj.GPUIndices)
+				memInUse += float64(executorConfig.DefaultMemoryMB) / 1024.0
 			}
 
 			safeLoad := map[string]interface{}{
 				"cluster_id":      *clusterID,
 				"gpus_in_use":     gpusInUse,
-				"mem_gb_in_use":   safeGetFloat64(load, "mem_gb_in_use", 0.0),
+				"mem_gb_in_use":   memInUse,
 				"cpus_in_use":     safeGetInt(load, "cpus_in_use", 0),
 				"running_jobs":    runningJobCount,
 				"pending_jobs":    safeGetInt(load, "pending_jobs", 0),
