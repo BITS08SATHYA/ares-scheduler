@@ -452,12 +452,21 @@ func main() {
 				load = make(map[string]interface{})
 			}
 
+			// Get Real Running Job metrics from Executor (source of truth)
+			activeJobs := myExecutor.ListActiveJobs()
+			runningJobCount := len(activeJobs)
+
+			gpusInUse := 0
+			for _, aj := range activeJobs {
+				gpusInUse += len(aj.GPUIndices)
+			}
+
 			safeLoad := map[string]interface{}{
 				"cluster_id":      *clusterID,
-				"gpus_in_use":     safeGetInt(load, "gpus_in_use", 0),
+				"gpus_in_use":     gpusInUse,
 				"mem_gb_in_use":   safeGetFloat64(load, "mem_gb_in_use", 0.0),
 				"cpus_in_use":     safeGetInt(load, "cpus_in_use", 0),
-				"running_jobs":    safeGetInt(load, "running_jobs", 0),
+				"running_jobs":    runningJobCount,
 				"pending_jobs":    safeGetInt(load, "pending_jobs", 0),
 				"total_gpus":      totalGPUs,
 				"total_memory_gb": *nodeMemoryGB,
