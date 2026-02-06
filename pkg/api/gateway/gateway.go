@@ -14,6 +14,7 @@ import (
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/lease"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/orchestrator"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/storage/etcd"
+	"strconv"
 
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler/common"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler/global"
@@ -540,6 +541,7 @@ func (ag *APIGateway) RegisterRoutes() *http.ServeMux {
 	mux.HandleFunc("/info/clusters", ag.wrapHandler(ag.handleListClusters))
 
 	// Job control
+	mux.HandleFunc("/jobs", ag.wrapHandler(ag.handleListJobs))
 	mux.HandleFunc("/job/cancel", ag.wrapHandler(ag.handleCancelJob))
 	mux.HandleFunc("/job/retry", ag.wrapHandler(ag.handleRetryJob))
 
@@ -761,6 +763,85 @@ func (ag *APIGateway) handleJobStatus(w http.ResponseWriter, r *http.Request) {
 	ag.log.Info("Job status query: %s (status=%s)", jobID, jobRecord.Status)
 }
 
+// handleListJobs: GET /jobs?status=X&cluster_id=X&limit=X
+func (ag *APIGateway) handleListJobs(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		ag.respondError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED",
+			fmt.Sprintf("expected GET, got %s", r.Method))
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	// Build filter from query params
+	filter := &job.JobFilter{}
+
+	if statusStr := r.URL.Query().Get("status"); statusStr != "" {
+		status := common.JobStatus(statusStr)
+		filter.Status = &status
+	}
+
+	if clusterID := r.URL.Query().Get("cluster_id"); clusterID != "" {
+		filter.Cluster = clusterID
+	}
+
+	if tenantID := r.URL.Query().Get("tenant_id"); tenantID != "" {
+		filter.Tenant = tenantID
+	}
+
+	if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
+		limit, err := strconv.Atoi(limitStr)
+		if err == nil && limit > 0 {
+			filter.Limit = limit
+		}
+	}
+
+	jobs, err := ag.jobCoordinator.ListJobs(ctx, filter)
+	if err != nil {
+		ag.respondError(w, http.StatusInternalServerError, "LIST_FAILED",
+			fmt.Sprintf("failed to list jobs: %v", err))
+		atomic.AddUint64(&ag.totalErrors, 1)
+		return
+	}
+
+	// Build response
+	jobResponses := make([]map[string]interface{}, 0, len(jobs))
+	for _, j := range jobs {
+		jobResp := map[string]interface{}{
+			"job_id":      j.ID,
+			"request_id":  j.Spec.RequestID,
+			"name":        j.Spec.Name,
+			"status":      j.Status,
+			"cluster_id":  j.ClusterID,
+			"node_id":     j.NodeID,
+			"pod_name":    j.PodName,
+			"gpu_count":   j.Spec.GPUCount,
+			"priority":    j.Spec.Priority,
+			"attempts":    j.Attempts,
+			"submit_time": formatTime(j.SubmitTime),
+		}
+		if !j.StartTime.IsZero() {
+			jobResp["start_time"] = formatTime(j.StartTime)
+		}
+		if !j.EndTime.IsZero() {
+			jobResp["end_time"] = formatTime(j.EndTime)
+		}
+		if j.ErrorMsg != "" {
+			jobResp["error_msg"] = j.ErrorMsg
+		}
+		jobResponses = append(jobResponses, jobResp)
+	}
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":   true,
+		"jobs":      jobResponses,
+		"count":     len(jobResponses),
+		"timestamp": time.Now().Format(time.RFC3339),
+	})
+}
+
 // formatTime: Helper to format time.Time to RFC3339 string
 func formatTime(t time.Time) string {
 	if t.IsZero() {
@@ -921,30 +1002,97 @@ func (ag *APIGateway) handleCapacity(w http.ResponseWriter, r *http.Request) {
 
 func (ag *APIGateway) handleCancelJob(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		ag.respondError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", fmt.Sprintf("expected POST, got %s", r.Method))
+		ag.respondError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED",
+			fmt.Sprintf("expected POST, got %s", r.Method))
 		return
 	}
+
 	jobID := r.URL.Query().Get("job_id")
 	if jobID == "" {
 		ag.respondError(w, http.StatusBadRequest, "MISSING_PARAM", "job_id query parameter required")
 		return
 	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	// Get job to extract lease ID
+	jobRecord, err := ag.jobCoordinator.GetJobStatus(ctx, jobID)
+	if err != nil || jobRecord == nil {
+		ag.respondError(w, http.StatusNotFound, "JOB_NOT_FOUND",
+			fmt.Sprintf("job %s not found", jobID))
+		return
+	}
+
+	// Extract lease ID
+	var leaseID int64
+	if jobRecord.ExecutionLease != nil && jobRecord.ExecutionLease.LeaseID != "" {
+		leaseID, _ = strconv.ParseInt(jobRecord.ExecutionLease.LeaseID, 10, 64)
+	}
+
+	// Call coordinator cancel
+	err = ag.jobCoordinator.CancelJob(ctx, jobID, leaseID)
+	if err != nil {
+		ag.respondError(w, http.StatusConflict, "CANCEL_FAILED", err.Error())
+		atomic.AddUint64(&ag.totalErrors, 1)
+		return
+	}
+
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "job_id": jobID, "message": "Job cancelled"})
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":   true,
+		"job_id":    jobID,
+		"message":   fmt.Sprintf("Job %s cancelled", jobID),
+		"timestamp": time.Now().Format(time.RFC3339),
+	})
 }
 
 func (ag *APIGateway) handleRetryJob(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		ag.respondError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", fmt.Sprintf("expected POST, got %s", r.Method))
+		ag.respondError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED",
+			fmt.Sprintf("expected POST, got %s", r.Method))
 		return
 	}
+
 	jobID := r.URL.Query().Get("job_id")
 	if jobID == "" {
 		ag.respondError(w, http.StatusBadRequest, "MISSING_PARAM", "job_id query parameter required")
 		return
 	}
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "job_id": jobID, "message": "Job retry initiated"})
+
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
+	// Get job to extract lease ID
+	jobRecord, err := ag.jobCoordinator.GetJobStatus(ctx, jobID)
+	if err != nil || jobRecord == nil {
+		ag.respondError(w, http.StatusNotFound, "JOB_NOT_FOUND",
+			fmt.Sprintf("job %s not found", jobID))
+		return
+	}
+
+	// Extract lease ID
+	var leaseID int64
+	if jobRecord.ExecutionLease != nil && jobRecord.ExecutionLease.LeaseID != "" {
+		leaseID, _ = strconv.ParseInt(jobRecord.ExecutionLease.LeaseID, 10, 64)
+	}
+
+	// Call coordinator retry (runs in background due to backoff)
+	go func() {
+		retryCtx := context.Background()
+		err := ag.jobCoordinator.RetryJob(retryCtx, jobID, leaseID)
+		if err != nil {
+			ag.log.Error("Retry failed for job %s: %v", jobID, err)
+		}
+	}()
+
+	w.WriteHeader(http.StatusAccepted)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":   true,
+		"job_id":    jobID,
+		"message":   fmt.Sprintf("Job %s retry initiated (attempt %d/%d)", jobID, jobRecord.Attempts+1, jobRecord.Spec.MaxRetries),
+		"timestamp": time.Now().Format(time.RFC3339),
+	})
 }
 
 // ============================================================================

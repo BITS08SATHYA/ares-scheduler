@@ -512,3 +512,8 @@ func (jc *JobCoordinator) CancelJob(ctx context.Context, jobID string, leaseID i
 func (jc *JobCoordinator) GetJobStatus(ctx context.Context, jobID string) (*common.Job, error) {
 	return jc.jobStore.GetJob(ctx, jobID)
 }
+
+// ListJobs: List all jobs with optional filter
+func (jc *JobCoordinator) ListJobs(ctx context.Context, filter *job.JobFilter) ([]*common.Job, error) {
+	return jc.jobStore.ListJobs(ctx, filter)
+}
