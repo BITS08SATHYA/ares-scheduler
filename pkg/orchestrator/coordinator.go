@@ -279,9 +279,34 @@ func (jc *JobCoordinator) MonitorJob(ctx context.Context, jobID string, leaseID 
 				jobRecord = latest
 			}
 
+			//// Check if job completed
+			//if jobRecord.Status == common.StatusSucceeded || jobRecord.Status == common.StatusFailed {
+			//	jc.log.Info("Job %s completed (status=%s)", jobID, jobRecord.Status)
+			//	jc.leaseManager.ReleaseLeaseForJob(context.Background(), jobID)
+			//	return nil
+			//}
+
 			// Check if job completed
-			if jobRecord.Status == common.StatusSucceeded || jobRecord.Status == common.StatusFailed {
-				jc.log.Info("Job %s completed (status=%s)", jobID, jobRecord.Status)
+			if jobRecord.Status == common.StatusSucceeded {
+				jc.log.Info("Job %s succeeded", jobID)
+				jc.leaseManager.ReleaseLeaseForJob(context.Background(), jobID)
+				return nil
+			}
+
+			if jobRecord.Status == common.StatusFailed {
+				// Auto-retry if attempts remaining
+				if jobRecord.Spec.MaxRetries > 0 && jobRecord.Attempts < jobRecord.Spec.MaxRetries {
+					jc.log.Info("Job %s failed, auto-retrying (attempt %d/%d)",
+						jobID, jobRecord.Attempts+1, jobRecord.Spec.MaxRetries)
+					go func() {
+						retryErr := jc.RetryJob(context.Background(), jobID, leaseID)
+						if retryErr != nil {
+							jc.log.Error("Auto-retry failed for job %s: %v", jobID, retryErr)
+						}
+					}()
+					return nil // Stop monitoring this instance, retry creates new monitor
+				}
+				jc.log.Info("Job %s failed (no retries left)", jobID)
 				jc.leaseManager.ReleaseLeaseForJob(context.Background(), jobID)
 				return nil
 			}
@@ -410,7 +435,7 @@ func (jc *JobCoordinator) CompleteJob(
 // RETRY JOB
 // ============================================================================
 
-// RetryJob retries a failed job with exponential backoff
+// RetryJob retries a failed job with exponential backoff + jitter
 func (jc *JobCoordinator) RetryJob(ctx context.Context, jobID string, leaseID int64) error {
 	// Fencing check before retry
 	if err := jc.checkFencingToken(ctx, jobID, leaseID); err != nil {
@@ -426,14 +451,28 @@ func (jc *JobCoordinator) RetryJob(ctx context.Context, jobID string, leaseID in
 		return fmt.Errorf("max retries exceeded (%d)", jobRecord.Spec.MaxRetries)
 	}
 
-	// Calculate backoff (exponential: 1, 2, 4, 8, 16... max 300s)
-	backoffSeconds := 1 << uint(jobRecord.Attempts)
-	if backoffSeconds > 300 {
-		backoffSeconds = 300
+	// Calculate backoff with jitter (exponential: 1, 2, 4, 8, 16... max 300s)
+	// Jitter prevents thundering herd when many jobs fail simultaneously
+	baseBackoff := 1 << uint(jobRecord.Attempts)
+	if baseBackoff > 300 {
+		baseBackoff = 300
+	}
+	jitterRange := baseBackoff / 4
+	if jitterRange < 1 {
+		jitterRange = 1
+	}
+	backoffSeconds := baseBackoff + (int(time.Now().UnixNano()) % (2 * jitterRange)) - jitterRange
+	if backoffSeconds < 1 {
+		backoffSeconds = 1
 	}
 
-	jc.log.Info("Retrying job %s in %d seconds (attempt %d/%d)",
-		jobID, backoffSeconds, jobRecord.Attempts+1, jobRecord.Spec.MaxRetries)
+	// Record retry schedule (visible via GET /status/job)
+	jobRecord.NextRetryAt = time.Now().Add(time.Duration(backoffSeconds) * time.Second)
+	jobRecord.Status = common.StatusRetrying
+	_ = jc.jobStore.SaveJobFinal(ctx, jobRecord)
+
+	jc.log.Info("Retrying job %s in %ds (attempt %d/%d, backoff=%ds, jitter applied)",
+		jobID, backoffSeconds, jobRecord.Attempts+1, jobRecord.Spec.MaxRetries, baseBackoff)
 
 	select {
 	case <-time.After(time.Duration(backoffSeconds) * time.Second):
@@ -446,7 +485,7 @@ func (jc *JobCoordinator) RetryJob(ctx context.Context, jobID string, leaseID in
 	jobRecord.Status = common.StatusPending
 	jobRecord.NextRetryAt = time.Time{}
 
-	err = jc.jobStore.SaveJob(ctx, jobRecord, leaseID)
+	err = jc.jobStore.SaveJobFinal(ctx, jobRecord)
 	if err != nil {
 		return fmt.Errorf("save job failed: %w", err)
 	}

@@ -57,6 +57,7 @@ const (
 	StatusRunning   JobStatus = "RUNNING"   // Pod is executing
 	StatusSucceeded JobStatus = "SUCCEEDED" // Completed OK
 	StatusFailed    JobStatus = "FAILED"    // Failed, may retry
+	StatusRetrying  JobStatus = "RETRYING"
 )
 
 // Job: Mutable runtime state (the "execution instance")
