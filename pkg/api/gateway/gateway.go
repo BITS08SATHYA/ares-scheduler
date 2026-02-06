@@ -464,6 +464,10 @@ func NewAPIGatewayWithCoordinator(
 	clusterManager.RegisterEventListener(globalScheduler)
 	log.Info("✓ GlobalScheduler will be notified of cluster join/leaves")
 
+	// ★ Start health watchdog to detect crashed clusters
+	go clusterManager.StartHealthWatchdog(context.Background(), 30*time.Second)
+	log.Info("✓ Health watchdog started (30s heartbeat timeout)")
+
 	// ========================================================================
 	// LAYER 8: API Gateway (this)
 	// ========================================================================

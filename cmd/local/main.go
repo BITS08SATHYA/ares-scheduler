@@ -496,6 +496,15 @@ func main() {
 	log.Info("Received signal: %v", sig)
 	log.Info("Shutting down gracefully...")
 
+	// ★ Deregister from control plane before stopping
+	log.Info("Deregistering cluster from control plane...")
+	deregErr := cluster.DeregisterCluster(ctx, *controlPlane, *clusterID)
+	if deregErr != nil {
+		log.Warn("Deregistration failed (non-fatal): %v", deregErr)
+	} else {
+		log.Info("✓ Cluster deregistered from control plane")
+	}
+
 	if err := server.Stop(10 * time.Second); err != nil {
 		log.Error("Shutdown error: %v", err)
 		os.Exit(1)

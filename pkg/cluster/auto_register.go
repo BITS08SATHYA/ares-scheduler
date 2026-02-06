@@ -332,3 +332,32 @@ func safeGetFloat64(m map[string]interface{}, key string, defaultVal float64) fl
 	// Fallback
 	return defaultVal
 }
+
+// DeregisterCluster: Notify control plane this cluster is leaving
+func DeregisterCluster(ctx context.Context, controlPlaneURL string, clusterID string) error {
+	reqBody := map[string]string{"cluster_id": clusterID}
+	bodyBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return fmt.Errorf("marshal failed: %w", err)
+	}
+
+	url := fmt.Sprintf("%s/clusters/deregister", controlPlaneURL)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return fmt.Errorf("create request failed: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("deregister request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("deregister failed: status %d", resp.StatusCode)
+	}
+
+	return nil
+}

@@ -275,6 +275,8 @@ func (ag *APIGateway) handleClusterHeartbeat(w http.ResponseWriter, r *http.Requ
 		ag.respondError(w, http.StatusNotFound, "CLUSTER_NOT_FOUND", err.Error())
 		return
 	}
+	// updating the timestamp of the Clusters' LastHeartBeat to the Global control plane
+	ag.clusterManager.UpdateHeartbeatTimestamp(hbReq.ClusterID)
 
 	// ========================================================================
 	// Update GlobalScheduler's copy with same load info

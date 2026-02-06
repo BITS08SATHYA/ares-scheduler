@@ -262,6 +262,85 @@ func (cm *ClusterManager) ListHealthyClusters() []*Cluster {
 	return healthy
 }
 
+// ============================================================================
+// HEALTH WATCHDOG (Feature 9 - Dynamic Cluster Registration)
+// ============================================================================
+
+// StartHealthWatchdog: Background goroutine that detects crashed clusters
+// by checking for stale heartbeats. Marks them unhealthy so GlobalScheduler
+// stops routing jobs to dead clusters.
+func (cm *ClusterManager) StartHealthWatchdog(ctx context.Context, timeout time.Duration) {
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+
+	cm.log.Info("Health watchdog started (stale heartbeat timeout=%v)", timeout)
+
+	for {
+		select {
+		case <-ctx.Done():
+			cm.log.Info("Health watchdog stopped")
+			return
+		case <-ticker.C:
+			cm.sweepStaleHeartbeats(ctx, timeout)
+		}
+	}
+}
+
+func (cm *ClusterManager) sweepStaleHeartbeats(ctx context.Context, timeout time.Duration) {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+
+	now := time.Now()
+	for _, c := range cm.clusters {
+		if c.LastHeartbeatAt.IsZero() {
+			continue
+		}
+
+		timeSinceHeartbeat := now.Sub(c.LastHeartbeatAt)
+
+		if timeSinceHeartbeat > timeout && c.IsHealthy {
+			cm.log.Warn("Cluster %s marked UNHEALTHY: no heartbeat for %v", c.ClusterID, timeSinceHeartbeat)
+			c.IsHealthy = false
+
+			health := &ClusterHealth{
+				ClusterID:     c.ClusterID,
+				State:         c.State,
+				IsHealthy:     false,
+				LastHeartbeat: c.LastHeartbeatAt,
+				HeartbeatAge:  timeSinceHeartbeat,
+				ErrorMessage:  fmt.Sprintf("no heartbeat for %v", timeSinceHeartbeat),
+				Timestamp:     now,
+			}
+			go cm.notifyClusterHealthChange(ctx, c.ClusterID, health)
+
+		} else if timeSinceHeartbeat <= timeout && !c.IsHealthy {
+			cm.log.Info("Cluster %s recovered: heartbeat resumed", c.ClusterID)
+			c.IsHealthy = true
+
+			health := &ClusterHealth{
+				ClusterID:     c.ClusterID,
+				State:         c.State,
+				IsHealthy:     true,
+				LastHeartbeat: c.LastHeartbeatAt,
+				HeartbeatAge:  timeSinceHeartbeat,
+				Timestamp:     now,
+			}
+			go cm.notifyClusterHealthChange(ctx, c.ClusterID, health)
+		}
+	}
+}
+
+// UpdateHeartbeatTimestamp: Mark that we received a heartbeat
+func (cm *ClusterManager) UpdateHeartbeatTimestamp(clusterID string) {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+
+	if c, exists := cm.clusters[clusterID]; exists {
+		c.LastHeartbeatAt = time.Now()
+		c.IsHealthy = true
+	}
+}
+
 // CountClusters: Get total cluster count
 func (cm *ClusterManager) CountClusters() int {
 	cm.mu.RLock()
