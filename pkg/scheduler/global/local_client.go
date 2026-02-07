@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/logger"
@@ -27,8 +28,10 @@ type LocalSchedulerClient struct {
 
 // LocalScheduleRequest: Request to schedule job on local cluster
 type LocalScheduleRequest struct {
-	JobID   string          `json:"job_id"`
-	JobSpec *common.JobSpec `json:"job_spec"`
+	JobID        string          `json:"job_id"`
+	JobSpec      *common.JobSpec `json:"job_spec"`
+	LeaseID      int64           `json:"lease_id,omitempty"`
+	FencingToken string          `json:"fencing_token,omitempty"`
 }
 
 // LocalScheduleResponse: Response from local scheduler
@@ -84,10 +87,22 @@ func (c *LocalSchedulerClient) ScheduleJob(
 		return nil, fmt.Errorf("job spec cannot be nil")
 	}
 
-	// Prepare request
+	// Prepare request with fencing token
+	var leaseID int64
+	var fencingToken string
+	if jobRecord.ExecutionLease != nil && jobRecord.ExecutionLease.LeaseID != "" {
+		parsed, parseErr := strconv.ParseInt(jobRecord.ExecutionLease.LeaseID, 10, 64)
+		if parseErr == nil {
+			leaseID = parsed
+			fencingToken = fmt.Sprintf("ares-fence-%s-%d", jobRecord.ID, leaseID)
+		}
+	}
+
 	req := &LocalScheduleRequest{
-		JobID:   jobRecord.ID,
-		JobSpec: jobRecord.Spec,
+		JobID:        jobRecord.ID,
+		JobSpec:      jobRecord.Spec,
+		LeaseID:      leaseID,
+		FencingToken: fencingToken,
 	}
 
 	reqBody, err := json.Marshal(req)

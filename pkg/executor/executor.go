@@ -193,6 +193,8 @@ type K8Decision struct {
 	Command          []string
 	Args             []string
 	Image            string
+	LeaseID          int64  // Fencing: Prevents split-brain at pod level
+	FencingToken     string // Fencing: Human-readable fencing token for validation
 }
 
 // ============================================================================
@@ -419,6 +421,10 @@ func createPodSpec(
 		"ARES_NODE_ID":       decision.NodeID,
 		"ARES_ASSIGNED_GPUS": join(gpuDeviceStrs, ","),
 		"ARES_GPU_COUNT":     fmt.Sprintf("%d", len(decision.GPUIndices)),
+		// ★ Fencing token: Pod uses this to validate it's the rightful owner
+		// before writing results. Prevents split-brain when lease changes hands.
+		"ARES_LEASE_ID":      fmt.Sprintf("%d", decision.LeaseID),
+		"ARES_FENCING_TOKEN": decision.FencingToken,
 	}
 
 	// GPU environment variables (if GPUs assigned)

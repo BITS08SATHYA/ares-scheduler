@@ -93,11 +93,13 @@ func (lss *LocalSchedulerServer) handleSchedule(w http.ResponseWriter, r *http.R
 
 	// Parse request
 	var req struct {
-		JobID   string          `json:"job_id"`
-		JobSpec *common.JobSpec `json:"job_spec"`
-		Command []string        `json:"command,omitempty"` // ✅ ADDED
-		Args    []string        `json:"args,omitempty"`    // ✅ ADDED
-		Image   string          `json:"image,omitempty"`   // ✅ ADDED
+		JobID        string          `json:"job_id"`
+		JobSpec      *common.JobSpec `json:"job_spec"`
+		Command      []string        `json:"command,omitempty"`
+		Args         []string        `json:"args,omitempty"`
+		Image        string          `json:"image,omitempty"`
+		LeaseID      int64           `json:"lease_id,omitempty"`
+		FencingToken string          `json:"fencing_token,omitempty"`
 	}
 
 	err := json.NewDecoder(r.Body).Decode(&req)
@@ -139,6 +141,8 @@ func (lss *LocalSchedulerServer) handleSchedule(w http.ResponseWriter, r *http.R
 			Command:          req.Command,
 			Args:             req.Args,
 			Image:            req.Image,
+			LeaseID:          req.LeaseID,
+			FencingToken:     req.FencingToken,
 		}
 
 		//  FIXED: Set defaults if not provided
