@@ -12,6 +12,7 @@ import (
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/cluster"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/logger"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler/common"
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler/drf"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/storage/redis"
 	_ "sort"
 	"sync"
@@ -42,6 +43,9 @@ type GlobalScheduler struct {
 	// Reference to ClusterManager (for event subscription)
 	clusterManager *cluster.ClusterManager
 
+	// DRF: Fair resource Allocation
+	drfManager *drf.DRFManager
+
 	// Metrics
 	metricsMu sync.RWMutex
 	metrics   *cluster.GlobalMetrics
@@ -65,6 +69,7 @@ func NewGlobalScheduler(
 		log:              logger.Get(),
 		clusters:         make(map[string]*cluster.ClusterInfo),
 		clusterManager:   clusterManager,
+		drfManager:       drf.NewDRFManager(nil),
 		metrics: &cluster.GlobalMetrics{
 			TotalJobsScheduled: 0,
 			TotalJobsFailed:    0,
@@ -305,6 +310,25 @@ func (gs *GlobalScheduler) ScheduleJob(
 		return nil, fmt.Errorf("Invalid GPU count: %d", jobRecord.Spec.GPUCount)
 	}
 
+	// ★ DRF Fairness Check
+	if gs.drfManager != nil && jobRecord.Spec.TenantID != "" {
+		drfDecision := gs.drfManager.CheckFairness(
+			ctx,
+			jobRecord.Spec.TenantID,
+			jobRecord.Spec.GPUCount,
+			jobRecord.Spec.CPUMillis/1000, // Convert millicores to cores
+			float64(jobRecord.Spec.MemoryMB)/1024.0, // Convert MB to GB
+		)
+		if !drfDecision.Allowed {
+			gs.recordSchedulingFailure()
+			return nil, &common.QuotaExceededError{
+				TenantID: jobRecord.Spec.TenantID,
+			}
+		}
+		gs.log.Info("DRF check passed for tenant %s (dominant=%.1f%% %s)",
+			jobRecord.Spec.TenantID, drfDecision.DominantShare*100, drfDecision.DominantType)
+	}
+
 	// Step 1: Select best cluster (ONLY decision made by global scheduler)
 	bestCluster, clusterScore, err := gs.SelectBestCluster(ctx, jobRecord.Spec, "")
 	if err != nil {
@@ -343,6 +367,16 @@ func (gs *GlobalScheduler) ScheduleJob(
 	}
 
 	gs.recordSchedulingSuccess(bestCluster.ClusterID)
+
+	// ★ DRF: Track resource usage for this tenant
+	if gs.drfManager != nil && jobRecord.Spec.TenantID != "" {
+		gs.drfManager.OnJobScheduled(
+			jobRecord.Spec.TenantID,
+			jobRecord.Spec.GPUCount,
+			jobRecord.Spec.CPUMillis/1000,
+			float64(jobRecord.Spec.MemoryMB)/1024.0,
+		)
+	}
 
 	gs.log.Info("Scheduled job: %s to cluster %s in region %s (score=%.1f, addr=%s)",
 		jobRecord.ID, bestCluster.ClusterID, bestCluster.Region, decision.ClusterScore,
@@ -820,6 +854,15 @@ func (gs *GlobalScheduler) OnClusterJoin(ctx context.Context, clusterObj *cluste
 	gs.log.Info("GlobalScheduler: Added cluster %s to cache (region=%s, gpus=%d)",
 		clusterObj.ClusterID, clusterObj.Region, clusterObj.TotalGPUs)
 
+	// ★ Update DRF capacity
+	if gs.drfManager != nil {
+		total := gs.GetTotalCapacity()
+		totalGPUs, _ := total["total_gpus"].(int)
+		totalCPUs, _ := total["total_cpus"].(int)
+		totalMem, _ := total["total_memory"].(float64)
+		gs.drfManager.UpdateCapacity(totalGPUs, totalCPUs, totalMem)
+	}
+
 	return nil
 }
 
@@ -838,6 +881,15 @@ func (gs *GlobalScheduler) OnClusterLeave(ctx context.Context, clusterID string)
 	gs.clustersMu.Unlock()
 
 	gs.log.Info("GlobalScheduler: Removed cluster %s from cache", clusterID)
+
+	// ★ Update DRF capacity
+	if gs.drfManager != nil {
+		total := gs.GetTotalCapacity()
+		totalGPUs, _ := total["total_gpus"].(int)
+		totalCPUs, _ := total["total_cpus"].(int)
+		totalMem, _ := total["total_memory"].(float64)
+		gs.drfManager.UpdateCapacity(totalGPUs, totalCPUs, totalMem)
+	}
 
 	return nil
 }
@@ -872,6 +924,15 @@ func (gs *GlobalScheduler) OnClusterHealthChange(
 
 		gs.log.Info("GlobalScheduler: Updated health for cluster %s (healthy=%v, reachable=%v)",
 			clusterID, health.IsHealthy, clusterInfo.IsReachable)
+	}
+
+	// ★ Update DRF capacity
+	if gs.drfManager != nil {
+		total := gs.GetTotalCapacity()
+		totalGPUs, _ := total["total_gpus"].(int)
+		totalCPUs, _ := total["total_cpus"].(int)
+		totalMem, _ := total["total_memory"].(float64)
+		gs.drfManager.UpdateCapacity(totalGPUs, totalCPUs, totalMem)
 	}
 
 	return nil
