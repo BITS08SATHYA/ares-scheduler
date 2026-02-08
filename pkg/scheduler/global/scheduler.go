@@ -13,6 +13,7 @@ import (
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/logger"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler/common"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler/drf"
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler/preemption"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/storage/redis"
 	_ "sort"
 	"sync"
@@ -44,7 +45,8 @@ type GlobalScheduler struct {
 	clusterManager *cluster.ClusterManager
 
 	// DRF: Fair resource Allocation
-	drfManager *drf.DRFManager
+	drfManager        *drf.DRFManager
+	preemptionManager *preemption.PreemptionManager
 
 	// Metrics
 	metricsMu sync.RWMutex
@@ -64,12 +66,13 @@ func NewGlobalScheduler(
 	log.Info("Layer 7: Global Scheduled Initialized")
 
 	gs := &GlobalScheduler{
-		controlPlaneName: controlPlaneName,
-		redisClient:      redisClient,
-		log:              logger.Get(),
-		clusters:         make(map[string]*cluster.ClusterInfo),
-		clusterManager:   clusterManager,
-		drfManager:       drf.NewDRFManager(nil),
+		controlPlaneName:  controlPlaneName,
+		redisClient:       redisClient,
+		log:               logger.Get(),
+		clusters:          make(map[string]*cluster.ClusterInfo),
+		clusterManager:    clusterManager,
+		drfManager:        drf.NewDRFManager(nil),
+		preemptionManager: preemption.NewPreemptionManager(nil),
 		metrics: &cluster.GlobalMetrics{
 			TotalJobsScheduled: 0,
 			TotalJobsFailed:    0,
@@ -310,13 +313,14 @@ func (gs *GlobalScheduler) ScheduleJob(
 		return nil, fmt.Errorf("Invalid GPU count: %d", jobRecord.Spec.GPUCount)
 	}
 
+	// Step 0
 	// ★ DRF Fairness Check
 	if gs.drfManager != nil && jobRecord.Spec.TenantID != "" {
 		drfDecision := gs.drfManager.CheckFairness(
 			ctx,
 			jobRecord.Spec.TenantID,
 			jobRecord.Spec.GPUCount,
-			jobRecord.Spec.CPUMillis/1000, // Convert millicores to cores
+			jobRecord.Spec.CPUMillis/1000,           // Convert millicores to cores
 			float64(jobRecord.Spec.MemoryMB)/1024.0, // Convert MB to GB
 		)
 		if !drfDecision.Allowed {
@@ -332,8 +336,40 @@ func (gs *GlobalScheduler) ScheduleJob(
 	// Step 1: Select best cluster (ONLY decision made by global scheduler)
 	bestCluster, clusterScore, err := gs.SelectBestCluster(ctx, jobRecord.Spec, "")
 	if err != nil {
-		gs.recordSchedulingFailure()
-		return nil, fmt.Errorf("cluster selection failed: %w", err)
+		// ★ PREEMPTION: If no resources, try to evict a lower-priority job
+		if gs.preemptionManager != nil && jobRecord.Spec.Priority >= 50 {
+			gs.log.Info("No resources available, checking preemption for job %s (pri=%d)",
+				jobRecord.ID, jobRecord.Spec.Priority)
+
+			runningJobs := gs.getRunningJobsFromClusters(ctx)
+			decision := gs.preemptionManager.FindPreemptionVictim(ctx, jobRecord.Spec, runningJobs)
+
+			if decision.ShouldPreempt && decision.Victim != nil {
+				gs.log.Info("PREEMPTION: Evicting job %s (pri=%d) for job %s (pri=%d)",
+					decision.Victim.JobID, decision.Victim.Priority,
+					jobRecord.ID, jobRecord.Spec.Priority)
+
+				gs.preemptionManager.RecordPreemption(
+					jobRecord.ID, decision.Victim.JobID,
+					jobRecord.Spec.Priority, decision.Victim.Priority, "")
+
+				gs.cancelJobOnCluster(ctx, decision.Victim.JobID)
+
+				// Retry scheduling after freeing resources
+				bestCluster, clusterScore, err = gs.SelectBestCluster(ctx, jobRecord.Spec, "")
+				if err != nil {
+					gs.recordSchedulingFailure()
+					return nil, fmt.Errorf("scheduling failed even after preemption: %w", err)
+				}
+				// Fall through to Step 2
+			} else {
+				gs.recordSchedulingFailure()
+				return nil, fmt.Errorf("cluster selection failed (preemption: %s): %w", decision.Reason, err)
+			}
+		} else {
+			gs.recordSchedulingFailure()
+			return nil, fmt.Errorf("cluster selection failed: %w", err)
+		}
 	}
 
 	// Step 2
@@ -982,4 +1018,19 @@ func (gs *GlobalScheduler) ListClusters() []*cluster.ClusterInfo {
 	}
 
 	return clusters
+}
+
+// getRunningJobsFromClusters: Get all running jobs across clusters (for preemption)
+func (gs *GlobalScheduler) getRunningJobsFromClusters(ctx context.Context) []*common.Job {
+	// Query job store for running jobs
+	// For now, return empty — will be populated when job store is accessible
+	gs.log.Debug("Querying running jobs for preemption analysis")
+	return make([]*common.Job, 0)
+}
+
+// cancelJobOnCluster: Cancel a running job to free resources for preemption
+func (gs *GlobalScheduler) cancelJobOnCluster(ctx context.Context, jobID string) {
+	gs.log.Info("Cancelling preempted job %s", jobID)
+	// This will be wired to call the local scheduler's cancel endpoint
+	// For now, log the intent
 }
