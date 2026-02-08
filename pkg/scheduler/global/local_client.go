@@ -28,10 +28,14 @@ type LocalSchedulerClient struct {
 
 // LocalScheduleRequest: Request to schedule job on local cluster
 type LocalScheduleRequest struct {
-	JobID        string          `json:"job_id"`
-	JobSpec      *common.JobSpec `json:"job_spec"`
-	LeaseID      int64           `json:"lease_id,omitempty"`
-	FencingToken string          `json:"fencing_token,omitempty"`
+	JobID             string          `json:"job_id"`
+	JobSpec           *common.JobSpec `json:"job_spec"`
+	LeaseID           int64           `json:"lease_id,omitempty"`
+	FencingToken      string          `json:"fencing_token,omitempty"`
+	CheckpointEnabled bool            `json:"checkpoint_enabled,omitempty"`
+	CheckpointPath    string          `json:"checkpoint_path,omitempty"`
+	CheckpointRestore string          `json:"checkpoint_restore,omitempty"`
+	CheckpointMeta    string          `json:"checkpoint_meta,omitempty"`
 }
 
 // LocalScheduleResponse: Response from local scheduler
@@ -99,10 +103,14 @@ func (c *LocalSchedulerClient) ScheduleJob(
 	}
 
 	req := &LocalScheduleRequest{
-		JobID:        jobRecord.ID,
-		JobSpec:      jobRecord.Spec,
-		LeaseID:      leaseID,
-		FencingToken: fencingToken,
+		JobID:             jobRecord.ID,
+		JobSpec:           jobRecord.Spec,
+		LeaseID:           leaseID,
+		FencingToken:      fencingToken,
+		CheckpointEnabled: jobRecord.Spec.CheckpointEnabled,
+		CheckpointPath:    fmt.Sprintf("%s/%s", trimTrailingSlash(jobRecord.Spec.CheckpointPath), jobRecord.ID),
+		CheckpointRestore: jobRecord.LastCheckpointPath,
+		CheckpointMeta:    jobRecord.LastCheckpointMeta,
 	}
 
 	reqBody, err := json.Marshal(req)
@@ -190,4 +198,11 @@ func (c *LocalSchedulerClient) GetClusterHealth(
 	}
 
 	return health, nil
+}
+
+func trimTrailingSlash(path string) string {
+	if len(path) > 0 && path[len(path)-1] == '/' {
+		return path[:len(path)-1]
+	}
+	return path
 }

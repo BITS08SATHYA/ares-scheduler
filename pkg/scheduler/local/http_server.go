@@ -93,13 +93,17 @@ func (lss *LocalSchedulerServer) handleSchedule(w http.ResponseWriter, r *http.R
 
 	// Parse request
 	var req struct {
-		JobID        string          `json:"job_id"`
-		JobSpec      *common.JobSpec `json:"job_spec"`
-		Command      []string        `json:"command,omitempty"`
-		Args         []string        `json:"args,omitempty"`
-		Image        string          `json:"image,omitempty"`
-		LeaseID      int64           `json:"lease_id,omitempty"`
-		FencingToken string          `json:"fencing_token,omitempty"`
+		JobID             string          `json:"job_id"`
+		JobSpec           *common.JobSpec `json:"job_spec"`
+		Command           []string        `json:"command,omitempty"`
+		Args              []string        `json:"args,omitempty"`
+		Image             string          `json:"image,omitempty"`
+		LeaseID           int64           `json:"lease_id,omitempty"`
+		FencingToken      string          `json:"fencing_token,omitempty"`
+		CheckpointEnabled bool            `json:"checkpoint_enabled,omitempty"`
+		CheckpointPath    string          `json:"checkpoint_path,omitempty"`
+		CheckpointRestore string          `json:"checkpoint_restore,omitempty"`
+		CheckpointMeta    string          `json:"checkpoint_meta,omitempty"`
 	}
 
 	err := json.NewDecoder(r.Body).Decode(&req)
@@ -143,6 +147,11 @@ func (lss *LocalSchedulerServer) handleSchedule(w http.ResponseWriter, r *http.R
 			Image:            req.Image,
 			LeaseID:          req.LeaseID,
 			FencingToken:     req.FencingToken,
+			// checkpoint
+			CheckpointEnabled: req.CheckpointEnabled,
+			CheckpointPath:    req.CheckpointPath,
+			CheckpointRestore: req.CheckpointRestore,
+			CheckpointMeta:    req.CheckpointMeta,
 		}
 
 		//  FIXED: Set defaults if not provided

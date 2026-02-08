@@ -183,18 +183,22 @@ var DefaultExecutorConfig = &ExecutorConfig{
 }
 
 type K8Decision struct {
-	JobID            string
-	NodeID           string
-	GPUIndices       []int
-	NodeScore        float64
-	GPUAffinityScore float64
-	PlacementReasons []string
-	ScheduledAt      time.Time
-	Command          []string
-	Args             []string
-	Image            string
-	LeaseID          int64  // Fencing: Prevents split-brain at pod level
-	FencingToken     string // Fencing: Human-readable fencing token for validation
+	JobID             string
+	NodeID            string
+	GPUIndices        []int
+	NodeScore         float64
+	GPUAffinityScore  float64
+	PlacementReasons  []string
+	ScheduledAt       time.Time
+	Command           []string
+	Args              []string
+	Image             string
+	LeaseID           int64  // Fencing: Prevents split-brain at pod level
+	FencingToken      string // Fencing: Human-readable fencing token for validation
+	CheckpointEnabled bool
+	CheckpointPath    string // Where to write checkpoints
+	CheckpointRestore string // Last checkpoint to restore from (empty = fresh)
+	CheckpointMeta    string // Metadata from last checkpoint
 }
 
 // ============================================================================
@@ -425,6 +429,16 @@ func createPodSpec(
 		// before writing results. Prevents split-brain when lease changes hands.
 		"ARES_LEASE_ID":      fmt.Sprintf("%d", decision.LeaseID),
 		"ARES_FENCING_TOKEN": decision.FencingToken,
+	}
+
+	// ★ Checkpointing: inject restore path if job has a previous checkpoint
+	if decision.CheckpointEnabled {
+		envVars["ARES_CHECKPOINT_ENABLED"] = "true"
+		envVars["ARES_CHECKPOINT_PATH"] = decision.CheckpointPath
+		if decision.CheckpointRestore != "" {
+			envVars["ARES_CHECKPOINT_RESTORE"] = decision.CheckpointRestore
+			envVars["ARES_CHECKPOINT_META"] = decision.CheckpointMeta
+		}
 	}
 
 	// GPU environment variables (if GPUs assigned)

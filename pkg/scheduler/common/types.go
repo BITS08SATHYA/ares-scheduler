@@ -29,6 +29,11 @@ type JobSpec struct {
 	PreferNVLink   bool // Want NVLink-connected GPUs (900 GB/s)
 	PreferSameNUMA bool // Want same-NUMA placement
 
+	// Checkpointing
+	CheckpointEnabled  bool   // Whether job supports checkpointing
+	CheckpointPath     string // Base path for checkpoints (e.g., s3://bucket/checkpoints/)
+	CheckpointInterval int    // Seconds between checkpoints (default: 300 = 5 min)
+
 	// Resources
 	MemoryMB  int // Memory in megabytes
 	CPUMillis int // CPU in millicores (1000 = 1 core)
@@ -93,6 +98,11 @@ type Job struct {
 	// Results
 	ExitCode int    // 0 = success
 	ErrorMsg string // Why it failed
+
+	// Checkpointing
+	LastCheckpointPath string    // Path to last checkpoint (e.g., s3://bucket/job123/epoch-47)
+	LastCheckpointTime time.Time // When last checkpoint was saved
+	LastCheckpointMeta string    // Optional metadata (e.g., "epoch=47,loss=0.023")
 
 	// Metrics (Feature 22)
 	Metrics map[string]interface{}
