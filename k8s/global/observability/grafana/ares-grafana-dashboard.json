@@ -1,0 +1,1446 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 100,
+      "title": "📊 OVERVIEW",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 90
+              },
+              {
+                "color": "green",
+                "value": 98
+              }
+            ]
+          },
+          "unit": "percent"
+        }
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 1
+      },
+      "id": 1,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "title": "Success Rate",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "ares_http_success_rate_percent",
+          "legendFormat": ""
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "none"
+        }
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 4,
+        "y": 1
+      },
+      "id": 2,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "title": "Jobs Scheduled",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "ares_jobs_scheduled_total",
+          "legendFormat": ""
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "unit": "none"
+        }
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 8,
+        "y": 1
+      },
+      "id": 3,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "title": "Active Jobs",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "ares_jobs_active",
+          "legendFormat": ""
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "none"
+        }
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 12,
+        "y": 1
+      },
+      "id": 4,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "title": "Healthy Clusters",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "ares_clusters_healthy",
+          "legendFormat": ""
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "steps": [
+              {
+                "color": "purple",
+                "value": null
+              }
+            ]
+          },
+          "unit": "none"
+        }
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 16,
+        "y": 1
+      },
+      "id": 5,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "title": "Total GPUs",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "ares_gpus_total",
+          "legendFormat": ""
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 50
+              },
+              {
+                "color": "red",
+                "value": 100
+              }
+            ]
+          },
+          "unit": "ms"
+        }
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 20,
+        "y": 1
+      },
+      "id": 6,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "title": "Avg Scheduling Latency",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "ares_scheduling_latency_avg_ms",
+          "legendFormat": ""
+        }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 5
+      },
+      "id": 101,
+      "title": "⚡ SCHEDULING ENGINE",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 6
+      },
+      "id": 10,
+      "options": {
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "title": "Job Throughput",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "rate(ares_jobs_scheduled_total[5m])",
+          "legendFormat": "Scheduled/s"
+        },
+        {
+          "expr": "rate(ares_jobs_completed_total[5m])",
+          "legendFormat": "Completed/s"
+        },
+        {
+          "expr": "rate(ares_jobs_failed_total[5m])",
+          "legendFormat": "Failed/s"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 6
+      },
+      "id": 11,
+      "title": "Scheduling Latency",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "ares_scheduling_latency_avg_ms",
+          "legendFormat": "Avg Latency"
+        },
+        {
+          "expr": "ares_scheduling_latency_max_ms",
+          "legendFormat": "Max Latency"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 14
+      },
+      "id": 12,
+      "title": "Jobs by Priority",
+      "type": "piechart",
+      "targets": [
+        {
+          "expr": "ares_jobs_priority_high_total",
+          "legendFormat": "High (≥80)"
+        },
+        {
+          "expr": "ares_jobs_priority_medium_total",
+          "legendFormat": "Medium (40-79)"
+        },
+        {
+          "expr": "ares_jobs_priority_low_total",
+          "legendFormat": "Low (<40)"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 14
+      },
+      "id": 13,
+      "title": "Jobs by Status",
+      "type": "piechart",
+      "targets": [
+        {
+          "expr": "ares_jobs_active",
+          "legendFormat": "Active"
+        },
+        {
+          "expr": "ares_jobs_queued",
+          "legendFormat": "Queued"
+        },
+        {
+          "expr": "ares_jobs_succeeded_total",
+          "legendFormat": "Succeeded"
+        },
+        {
+          "expr": "ares_jobs_failed_total",
+          "legendFormat": "Failed"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 14
+      },
+      "id": 14,
+      "title": "HTTP Endpoint Traffic",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "rate(ares_http_schedule_requests_total[5m])",
+          "legendFormat": "/schedule"
+        },
+        {
+          "expr": "rate(ares_http_status_requests_total[5m])",
+          "legendFormat": "/status"
+        },
+        {
+          "expr": "rate(ares_http_cancel_requests_total[5m])",
+          "legendFormat": "/cancel"
+        },
+        {
+          "expr": "rate(ares_http_retry_requests_total[5m])",
+          "legendFormat": "/retry"
+        }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 22
+      },
+      "id": 102,
+      "title": "🖥️ CLUSTER HEALTH",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 23
+      },
+      "id": 20,
+      "title": "Cluster Health",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "ares_clusters_healthy",
+          "legendFormat": "Healthy"
+        },
+        {
+          "expr": "ares_clusters_unhealthy",
+          "legendFormat": "Unhealthy"
+        },
+        {
+          "expr": "ares_clusters_total",
+          "legendFormat": "Total"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 23
+      },
+      "id": 21,
+      "title": "Cluster Events",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "rate(ares_cluster_heartbeats_total[5m])",
+          "legendFormat": "Heartbeats/s"
+        },
+        {
+          "expr": "rate(ares_cluster_joins_total[5m])",
+          "legendFormat": "Joins/s"
+        },
+        {
+          "expr": "rate(ares_cluster_leaves_total[5m])",
+          "legendFormat": "Leaves/s"
+        },
+        {
+          "expr": "rate(ares_cluster_failovers_total[5m])",
+          "legendFormat": "Failovers/s"
+        }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 31
+      },
+      "id": 103,
+      "title": "🎮 GPU TOPOLOGY",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Available"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "green",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "In Use"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "orange",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 32
+      },
+      "id": 30,
+      "title": "GPU Utilization",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "ares_gpus_total",
+          "legendFormat": "Total"
+        },
+        {
+          "expr": "ares_gpus_in_use",
+          "legendFormat": "In Use"
+        },
+        {
+          "expr": "ares_gpus_available",
+          "legendFormat": "Available"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 32
+      },
+      "id": 31,
+      "title": "Interconnect Placements",
+      "type": "piechart",
+      "targets": [
+        {
+          "expr": "ares_gpu_nvlink_placements_total",
+          "legendFormat": "NVLink (900 GB/s)"
+        },
+        {
+          "expr": "ares_gpu_pcie_placements_total",
+          "legendFormat": "PCIe (32 GB/s)"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 32
+      },
+      "id": 32,
+      "title": "NUMA Locality",
+      "type": "piechart",
+      "targets": [
+        {
+          "expr": "ares_gpu_same_numa_placements_total",
+          "legendFormat": "Same NUMA ✓"
+        },
+        {
+          "expr": "ares_gpu_cross_numa_placements_total",
+          "legendFormat": "Cross NUMA ✗"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 40
+      },
+      "id": 33,
+      "title": "GPU Types Scheduled",
+      "type": "barchart",
+      "targets": [
+        {
+          "expr": "ares_gpu_a100_scheduled_total",
+          "legendFormat": "A100"
+        },
+        {
+          "expr": "ares_gpu_h100_scheduled_total",
+          "legendFormat": "H100"
+        },
+        {
+          "expr": "ares_gpu_v100_scheduled_total",
+          "legendFormat": "V100"
+        },
+        {
+          "expr": "ares_gpu_t4_scheduled_total",
+          "legendFormat": "T4"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 40
+              },
+              {
+                "color": "green",
+                "value": 70
+              }
+            ]
+          },
+          "unit": "short",
+          "max": 100
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 40
+      },
+      "id": 34,
+      "title": "Avg Topology Score",
+      "type": "gauge",
+      "targets": [
+        {
+          "expr": "ares_gpu_topology_score_avg * 100",
+          "legendFormat": ""
+        }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 48
+      },
+      "id": 104,
+      "title": "🛡️ RELIABILITY (Exactly-Once / Retry / Preemption / Checkpoint)",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 49
+      },
+      "id": 40,
+      "title": "Exactly-Once Guarantees",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "rate(ares_dedup_blocked_total[5m])",
+          "legendFormat": "Duplicates Blocked/s"
+        },
+        {
+          "expr": "rate(ares_fencing_tokens_validated_total[5m])",
+          "legendFormat": "Fencing Validated/s"
+        },
+        {
+          "expr": "rate(ares_fencing_tokens_rejected_total[5m])",
+          "legendFormat": "Fencing Rejected/s"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 49
+      },
+      "id": 41,
+      "title": "Lease Lifecycle",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "rate(ares_leases_acquired_total[5m])",
+          "legendFormat": "Acquired/s"
+        },
+        {
+          "expr": "rate(ares_leases_renewed_total[5m])",
+          "legendFormat": "Renewed/s"
+        },
+        {
+          "expr": "rate(ares_leases_expired_total[5m])",
+          "legendFormat": "Expired/s"
+        },
+        {
+          "expr": "rate(ares_leases_released_total[5m])",
+          "legendFormat": "Released/s"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 49
+      },
+      "id": 42,
+      "title": "Retry & Preemption",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "rate(ares_retries_total[5m])",
+          "legendFormat": "Retries/s"
+        },
+        {
+          "expr": "rate(ares_retries_exhausted_total[5m])",
+          "legendFormat": "Exhausted/s"
+        },
+        {
+          "expr": "rate(ares_preemptions_total[5m])",
+          "legendFormat": "Preemptions/s"
+        },
+        {
+          "expr": "rate(ares_checkpoints_restored_total[5m])",
+          "legendFormat": "Checkpoint Restores/s"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        }
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 57
+      },
+      "id": 43,
+      "title": "Checkpoints Saved",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "ares_checkpoints_recorded_total",
+          "legendFormat": ""
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        }
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 57
+      },
+      "id": 44,
+      "title": "Checkpoints Restored",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "ares_checkpoints_restored_total",
+          "legendFormat": ""
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "steps": [
+              {
+                "color": "orange",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        }
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 57
+      },
+      "id": 45,
+      "title": "Total Preemptions",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "ares_preemptions_total",
+          "legendFormat": ""
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "steps": [
+              {
+                "color": "yellow",
+                "value": null
+              }
+            ]
+          },
+          "unit": "s"
+        }
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 57
+      },
+      "id": 46,
+      "title": "Avg Backoff Wait",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "ares_retry_backoff_avg_seconds",
+          "legendFormat": ""
+        }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 61
+      },
+      "id": 105,
+      "title": "⚖️ DRF FAIRNESS",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.7
+              },
+              {
+                "color": "green",
+                "value": 0.9
+              }
+            ]
+          },
+          "unit": "short",
+          "min": 0,
+          "max": 1
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 62
+      },
+      "id": 50,
+      "title": "Jain's Fairness Index",
+      "type": "gauge",
+      "targets": [
+        {
+          "expr": "ares_drf_fairness_index",
+          "legendFormat": ""
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 62
+      },
+      "id": 51,
+      "title": "DRF Decisions",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "rate(ares_drf_checks_passed_total[5m])",
+          "legendFormat": "Allowed/s"
+        },
+        {
+          "expr": "rate(ares_drf_checks_denied_total[5m])",
+          "legendFormat": "Denied/s"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 62
+      },
+      "id": 52,
+      "title": "Tenant Dominant Shares",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "ares_drf_max_tenant_share",
+          "legendFormat": "Max Share"
+        },
+        {
+          "expr": "ares_drf_min_tenant_share",
+          "legendFormat": "Min Share"
+        }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 70
+      },
+      "id": 106,
+      "title": "🔄 CRDT REPLICATION",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 71
+      },
+      "id": 60,
+      "title": "CRDT Sync Activity",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "rate(ares_crdt_sync_rounds_total[5m])",
+          "legendFormat": "Sync Rounds/s"
+        },
+        {
+          "expr": "rate(ares_crdt_merges_total[5m])",
+          "legendFormat": "Merges/s"
+        },
+        {
+          "expr": "rate(ares_crdt_sync_failures_total[5m])",
+          "legendFormat": "Failures/s"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 71
+      },
+      "id": 61,
+      "title": "CRDT Conflicts Resolved",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "rate(ares_crdt_conflicts_total[5m])",
+          "legendFormat": "Conflicts/s"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 71
+      },
+      "id": 62,
+      "title": "CRDT Replication Bandwidth",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "rate(ares_crdt_bytes_sent_total[5m])",
+          "legendFormat": "Sent/s"
+        },
+        {
+          "expr": "rate(ares_crdt_bytes_recv_total[5m])",
+          "legendFormat": "Received/s"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        }
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 0,
+        "y": 79
+      },
+      "id": 63,
+      "title": "Healthy CRDT Peers",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "ares_crdt_peers_healthy",
+          "legendFormat": ""
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        }
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 8,
+        "y": 79
+      },
+      "id": 64,
+      "title": "Total CRDT Merges",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "ares_crdt_merges_total",
+          "legendFormat": ""
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 100
+              },
+              {
+                "color": "red",
+                "value": 500
+              }
+            ]
+          },
+          "unit": "short"
+        }
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 16,
+        "y": 79
+      },
+      "id": 65,
+      "title": "Total Conflicts Resolved",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "ares_crdt_conflicts_total",
+          "legendFormat": ""
+        }
+      ]
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 39,
+  "tags": [
+    "ares",
+    "gpu-scheduler",
+    "distributed-systems",
+    "kubernetes"
+  ],
+  "templating": {
+    "list": [
+      {
+        "current": {
+          "selected": false,
+          "text": "Prometheus",
+          "value": "Prometheus"
+        },
+        "hide": 0,
+        "includeAll": false,
+        "label": "Data Source",
+        "multi": false,
+        "name": "DS_PROMETHEUS",
+        "options": [],
+        "query": "prometheus",
+        "refresh": 1,
+        "type": "datasource"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "title": "Ares GPU Scheduler - Production Dashboard",
+  "uid": "ares-scheduler-main",
+  "version": 1
+}
