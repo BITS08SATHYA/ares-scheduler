@@ -569,6 +569,11 @@ func (ag *APIGateway) RegisterRoutes() *http.ServeMux {
 	mux.HandleFunc("/crdt/state", ag.syncManager.HandleStateRequest)
 	mux.HandleFunc("/crdt/sync-exchange", ag.syncManager.HandleSyncExchange)
 
+	// gang scheduling
+	mux.HandleFunc("/gang/submit", ag.wrapHandler(ag.handleSubmitGang))
+	mux.HandleFunc("/gang/status", ag.wrapHandler(ag.handleGangStatus))
+	mux.HandleFunc("/gang/cancel", ag.wrapHandler(ag.handleCancelGang))
+
 	ag.registerClusterRoutes(mux)
 
 	return mux

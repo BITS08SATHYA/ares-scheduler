@@ -13,6 +13,7 @@ import (
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/logger"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler/common"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler/drf"
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler/gang"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler/preemption"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/storage/redis"
 	_ "sort"
@@ -51,6 +52,8 @@ type GlobalScheduler struct {
 	// Metrics
 	metricsMu sync.RWMutex
 	metrics   *cluster.GlobalMetrics
+
+	gangManager *gang.GangManager
 }
 
 // NewGlobalScheduler: Initialized GlobalScheduler with ClusterManager
@@ -73,6 +76,7 @@ func NewGlobalScheduler(
 		clusterManager:    clusterManager,
 		drfManager:        drf.NewDRFManager(nil),
 		preemptionManager: preemption.NewPreemptionManager(nil),
+		gangManager:       gang.NewGangManager(nil),
 		metrics: &cluster.GlobalMetrics{
 			TotalJobsScheduled: 0,
 			TotalJobsFailed:    0,
@@ -311,6 +315,13 @@ func (gs *GlobalScheduler) ScheduleJob(
 
 	if jobRecord.Spec.GPUCount < 0 || jobRecord.Spec.GPUCount > 256 {
 		return nil, fmt.Errorf("Invalid GPU count: %d", jobRecord.Spec.GPUCount)
+	}
+
+	// ★ GANG SCHEDULING: If this is a gang job, route to gang manager
+	if gs.gangManager != nil && jobRecord.Spec.GangID != "" {
+		gs.log.Info("Gang job detected: %s (gang=%s, member=%d)",
+			jobRecord.ID, jobRecord.Spec.GangID, jobRecord.Spec.GangMemberIdx)
+		return gs.scheduleGangJob(ctx, jobRecord)
 	}
 
 	// Step 0
@@ -1033,4 +1044,44 @@ func (gs *GlobalScheduler) cancelJobOnCluster(ctx context.Context, jobID string)
 	gs.log.Info("Cancelling preempted job %s", jobID)
 	// This will be wired to call the local scheduler's cancel endpoint
 	// For now, log the intent
+}
+
+// scheduleGangJob: Route gang jobs to the gang manager
+func (gs *GlobalScheduler) scheduleGangJob(
+	ctx context.Context,
+	jobRecord *common.Job,
+) (*cluster.GlobalSchedulingDecision, error) {
+
+	// Check if gang already exists, if not create it
+	gangState := gs.gangManager.GetGang(jobRecord.Spec.GangID)
+	if gangState == nil {
+		spec := &gang.GangSpec{
+			GangID:        jobRecord.Spec.GangID,
+			Name:          jobRecord.Spec.Name,
+			MinMembers:    jobRecord.Spec.GangSize,
+			GPUsPerMember: jobRecord.Spec.GPUCount,
+			TotalGPUs:     jobRecord.Spec.GangSize * jobRecord.Spec.GPUCount,
+			RequireNVLink: jobRecord.Spec.PreferNVLink,
+			Priority:      jobRecord.Spec.Priority,
+			JobTemplate:   jobRecord.Spec,
+		}
+
+		var err error
+		gangState, err = gs.gangManager.SubmitGang(ctx, spec)
+		if err != nil {
+			return nil, fmt.Errorf("gang submission failed: %w", err)
+		}
+	}
+
+	// Return a decision indicating gang is pending coordination
+	return &cluster.GlobalSchedulingDecision{
+		JobID:            jobRecord.ID,
+		ClusterID:        "gang-pending",
+		PlacementReasons: []string{fmt.Sprintf("gang %s: waiting for %d members", jobRecord.Spec.GangID, jobRecord.Spec.GangSize)},
+		ScheduledAt:      time.Now(),
+	}, nil
+}
+
+func (gs *GlobalScheduler) GetGangManager() *gang.GangManager {
+	return gs.gangManager
 }
