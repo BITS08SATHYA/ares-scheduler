@@ -111,7 +111,7 @@ func TestGPUMetadata(t *testing.T) {
 			assert.NotEmpty(t, gpu.Type, "GPU %d: Type should not be empty", i)
 			assert.Greater(t, gpu.MemoryGB, 0.0, "GPU %d: MemoryGB should be > 0", i)
 
-			// Check memory consistency (MemoryGB >= AvailableMemGB)
+			// Check memory crdt (MemoryGB >= AvailableMemGB)
 			if gpu.MemoryGB > 0 {
 				assert.GreaterOrEqual(t, gpu.MemoryGB, gpu.AvailableMemGB,
 					"GPU %d: Total memory should be >= available memory", i)

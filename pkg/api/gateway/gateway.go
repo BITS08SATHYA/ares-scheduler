@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/cluster"
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/crdt"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/executor"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/idempotency"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/lease"
@@ -293,6 +294,10 @@ type APIGateway struct {
 	handlerMu sync.RWMutex
 
 	metrics *Metrics // Prometheus metrics
+
+	// CRDT: Eventual consistency (Feature 16)
+	crdtStore   *crdt.CRDTStateStore
+	syncManager *crdt.SyncManager
 }
 
 // GatewayConfig: Configuration for API gateway
@@ -469,6 +474,14 @@ func NewAPIGatewayWithCoordinator(
 	log.Info("✓ Health watchdog started (30s heartbeat timeout)")
 
 	// ========================================================================
+	// LAYER 11: CRDT State Store (Eventual Consistency)
+	// ========================================================================
+	crdtStore := crdt.NewCRDTStateStore(controlPlaneAddr)
+	syncManager := crdt.NewSyncManager(crdtStore, nil)
+	go syncManager.StartSyncLoop(context.Background())
+	log.Info("✓ CRDT state store and sync manager initialized")
+
+	// ========================================================================
 	// LAYER 8: API Gateway (this)
 	// ========================================================================
 
@@ -491,6 +504,8 @@ func NewAPIGatewayWithCoordinator(
 		completedJobs:   make(map[string]*executor.ExecutionResult),
 		podRegistry:     make(map[string]*executor.PodInfo),
 		metrics:         &Metrics{},
+		crdtStore:       crdtStore,
+		syncManager:     syncManager,
 		//k8sClient:       mockK8sClient, //
 	}
 
@@ -548,6 +563,11 @@ func (ag *APIGateway) RegisterRoutes() *http.ServeMux {
 	mux.HandleFunc("/jobs", ag.wrapHandler(ag.handleListJobs))
 	mux.HandleFunc("/job/cancel", ag.wrapHandler(ag.handleCancelJob))
 	mux.HandleFunc("/job/retry", ag.wrapHandler(ag.handleRetryJob))
+
+	// crdt
+	mux.HandleFunc("/crdt/sync", ag.syncManager.HandleSyncPush)
+	mux.HandleFunc("/crdt/state", ag.syncManager.HandleStateRequest)
+	mux.HandleFunc("/crdt/sync-exchange", ag.syncManager.HandleSyncExchange)
 
 	ag.registerClusterRoutes(mux)
 

@@ -130,10 +130,15 @@ func (ag *APIGateway) handleRegisterCluster(w http.ResponseWriter, r *http.Reque
 	}
 
 	clusterObj, err := ag.clusterManager.JoinCluster(r.Context(), clusterConfig)
+
 	if err != nil {
 		ag.log.Error("ClusterManager.JoinCluster failed: %v", err)
 		ag.respondError(w, http.StatusConflict, "REGISTRATION_FAILED", err.Error())
 		return
+	}
+
+	if ag.crdtStore != nil {
+		ag.crdtStore.RegisterCluster(clusterConfig.ClusterID, clusterConfig.Region, clusterConfig.Zone)
 	}
 
 	ag.log.Info("ClusterManager: Cluster %s joined", clusterObj.ClusterID)
@@ -225,6 +230,10 @@ func (ag *APIGateway) handleDeregisterCluster(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	if ag.crdtStore != nil {
+		ag.crdtStore.DeregisterCluster(deregReq.ClusterID)
+	}
+
 	ag.log.Info("Cluster %s deregistered", deregReq.ClusterID)
 
 	response := &ClusterDeregistrationResponse{
@@ -265,7 +274,8 @@ func (ag *APIGateway) handleClusterHeartbeat(w http.ResponseWriter, r *http.Requ
 
 	err := ag.clusterManager.UpdateClusterLoad(r.Context(),
 		hbReq.ClusterID,
-		hbReq.GPUsInUse, hbReq.CPUsInUse,
+		hbReq.GPUsInUse,
+		hbReq.CPUsInUse,
 		hbReq.MemGBInUse,
 		hbReq.RunningJobs,
 		hbReq.PendingJobs,
@@ -277,6 +287,16 @@ func (ag *APIGateway) handleClusterHeartbeat(w http.ResponseWriter, r *http.Requ
 	}
 	// updating the timestamp of the Clusters' LastHeartBeat to the Global control plane
 	ag.clusterManager.UpdateHeartbeatTimestamp(hbReq.ClusterID)
+
+	// ★ CRDT: Update cluster load in CRDT state store
+	if ag.crdtStore != nil {
+		ag.crdtStore.UpdateClusterLoad(
+			hbReq.ClusterID,
+			hbReq.GPUsInUse,
+			hbReq.MemGBInUse,
+			hbReq.RunningJobs,
+		)
+	}
 
 	// ========================================================================
 	// Update GlobalScheduler's copy with same load info

@@ -21,7 +21,7 @@ import (
 
 // ClusterRegistry: Central registry of all clusters in federation
 // Maintains list of clusters, their status, and federation metadata
-// Supports eventual consistency for multi-control-plane deployments
+// Supports eventual crdt for multi-control-plane deployments
 type ClusterRegistry struct {
 	log   *logger.Logger
 	redis *redis.RedisClient
@@ -175,7 +175,7 @@ func (cr *ClusterRegistry) GetClustersByState(state ClusterState) []*Cluster {
 // ============================================================================
 
 // SyncWithFederation: Sync registry with Redis (for multi-control-plane setup)
-// Call periodically to ensure consistency across multiple control planes
+// Call periodically to ensure crdt across multiple control planes
 func (cr *ClusterRegistry) SyncWithFederation(ctx context.Context) error {
 	cr.mu.Lock()
 	defer cr.mu.Unlock()
@@ -304,7 +304,7 @@ func (cr *ClusterRegistry) GetFederationStatus() map[string]interface{} {
 // FEDERATION VERIFICATION
 // ============================================================================
 
-// VerifyFederationConsistency: Check for consistency issues
+// VerifyFederationConsistency: Check for crdt issues
 // Returns: List of inconsistencies found
 func (cr *ClusterRegistry) VerifyFederationConsistency(ctx context.Context) []string {
 	cr.mu.RLock()
@@ -348,7 +348,7 @@ func (cr *ClusterRegistry) VerifyFederationConsistency(ctx context.Context) []st
 	return issues
 }
 
-// RepairFederationConsistency: Attempt to fix consistency issues
+// RepairFederationConsistency: Attempt to fix crdt issues
 func (cr *ClusterRegistry) RepairFederationConsistency(ctx context.Context) error {
 	cr.mu.Lock()
 	defer cr.mu.Unlock()
@@ -363,6 +363,6 @@ func (cr *ClusterRegistry) RepairFederationConsistency(ctx context.Context) erro
 		}
 	}
 
-	cr.log.Info("Repaired federation consistency")
+	cr.log.Info("Repaired federation crdt")
 	return nil
 }
