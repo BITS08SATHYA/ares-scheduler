@@ -25,6 +25,9 @@ type JobSpec struct {
 	GPUCount int    // How many GPUs needed
 	GPUType  string // "A100", "H100", "V100", "T4"
 
+	// Heterogeneous hardware type
+	DeviceType string // "GPU", "TPU", "FPGA", "" (default = GPU)
+
 	// Topology Preferences (Feature 4 - Topology-Aware)
 	PreferNVLink   bool // Want NVLink-connected GPUs (900 GB/s)
 	PreferSameNUMA bool // Want same-NUMA placement

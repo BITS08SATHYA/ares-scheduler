@@ -180,6 +180,14 @@ func (gs *GlobalScheduler) SelectBestCluster(
 
 		clusterInfo, _ := gs.clusterManager.GetClusterInfo(_cluster.ClusterID)
 
+		// ★ Device type filter (Heterogeneous Hardware)
+		if jobSpec.DeviceType != "" && jobSpec.DeviceType != "GPU" {
+			if !containsType(clusterInfo.DeviceTypes, jobSpec.DeviceType) {
+				gs.log.Debug("Skipping cluster %s: no %s devices", _cluster.ClusterID, jobSpec.DeviceType)
+				continue
+			}
+		}
+
 		score := gs.scoreCluster(clusterInfo, jobSpec, preferredRegion)
 
 		if bestScore == nil || score.Score > bestScore.Score {
@@ -196,6 +204,16 @@ func (gs *GlobalScheduler) SelectBestCluster(
 		bestCluster.ClusterID, bestCluster.Region, bestScore.Score, bestScore.Reasons)
 
 	return bestCluster, bestScore, nil
+}
+
+// containsType: Check if a device type exists in cluster's device list
+func containsType(deviceTypes []string, target string) bool {
+	for _, dt := range deviceTypes {
+		if dt == target {
+			return true
+		}
+	}
+	return false
 }
 
 // scoreCluster: Calculate fitness score for a cluster
@@ -320,7 +338,7 @@ func (gs *GlobalScheduler) ScheduleJob(
 			ctx,
 			jobRecord.Spec.TenantID,
 			jobRecord.Spec.GPUCount,
-			jobRecord.Spec.CPUMillis/1000,           // Convert millicores to cores
+			jobRecord.Spec.CPUMillis/1000, // Convert millicores to cores
 			float64(jobRecord.Spec.MemoryMB)/1024.0, // Convert MB to GB
 		)
 		if !drfDecision.Allowed {

@@ -227,6 +227,13 @@ type ClusterInfo struct {
 	RunningJobsCount   int
 	LastHeartbeat      time.Time
 	LocalSchedulerAddr string // URL to contact local scheduler
+
+	// Heterogeneous Hardware
+	DeviceTypes   []string // ["GPU"], ["TPU"], ["GPU", "FPGA"]
+	TPUChipsTotal int      // Total TPU chips (0 if no TPUs)
+	TPUChipsAvail int      // Available TPU chips
+	FPGACount     int      // Total FPGAs
+	FPGAAvail     int      // Available FPGAs
 }
 
 // ClusterScore: Score for cluster selection
