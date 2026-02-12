@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/idempotency"
@@ -154,11 +155,18 @@ func (jc *JobCoordinator) ScheduleJob(
 
 	globalDecision, err := jc.globalScheduler.ScheduleJob(ctx, jobRecord)
 	if err != nil {
-		jc.log.Error("Global scheduling failed for job %s: %v", jobID, err)
-		jobRecord.Status = common.StatusFailed
-		jobRecord.ErrorMsg = fmt.Sprintf("scheduling failed: %v", err)
+		jc.log.Warn("Global scheduling failed for job %s: %v (queueing for retry)", jobID, err)
+		jobRecord.Status = common.StatusQueued
+		jobRecord.ErrorMsg = fmt.Sprintf("queued: %v", err)
 		jc.jobStore.SaveJob(context.Background(), jobRecord, leaseID)
-		return nil, fmt.Errorf("global scheduling failed: %w", err)
+
+		// Return success to the user — job is accepted but queued
+		return &SchedulingResult{
+			JobID:            jobID,
+			ClusterID:        "queued",
+			CreatedAt:        time.Now(),
+			PlacementReasons: []string{fmt.Sprintf("queued: waiting for resources (%v)", err)},
+		}, nil
 	}
 
 	jc.log.Debug("GlobalDecision json (body): ", globalDecision)
@@ -555,4 +563,91 @@ func (jc *JobCoordinator) GetJobStatus(ctx context.Context, jobID string) (*comm
 // ListJobs: List all jobs with optional filter
 func (jc *JobCoordinator) ListJobs(ctx context.Context, filter *job.JobFilter) ([]*common.Job, error) {
 	return jc.jobStore.ListJobs(ctx, filter)
+}
+
+// StartReconcileLoop: Background loop that retries QUEUED jobs when resources free up.
+// This is the heartbeat of the scheduler — without it, queued jobs never run.
+//
+// How it works:
+//  1. Every N seconds, scan etcd for jobs with status QUEUED
+//  2. For each queued job, try to schedule it
+//  3. If successful → status becomes SCHEDULED → RUNNING
+//  4. If still no resources → stays QUEUED → retry next round
+//
+// This is identical to how Kubernetes scheduler works:
+//
+//	kube-scheduler has a scheduling queue + retry loop
+func (jc *JobCoordinator) StartReconcileLoop(ctx context.Context, interval time.Duration) {
+	jc.log.Info("RECONCILER: Starting reconcile loop (interval=%s)", interval)
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			jc.log.Info("RECONCILER: Stopped")
+			return
+		case <-ticker.C:
+			jc.reconcileQueuedJobs(ctx)
+		}
+	}
+}
+
+// reconcileQueuedJobs: Try to schedule all QUEUED jobs
+func (jc *JobCoordinator) reconcileQueuedJobs(ctx context.Context) {
+	// Get all queued jobs
+	queuedStatus := common.StatusQueued
+	filter := &job.JobFilter{
+		Status: &queuedStatus,
+		Limit:  50, // Process up to 50 per round
+	}
+
+	jobs, err := jc.jobStore.ListJobs(ctx, filter)
+	if err != nil {
+		jc.log.Warn("RECONCILER: Failed to list queued jobs: %v", err)
+		return
+	}
+
+	if len(jobs) == 0 {
+		return
+	}
+
+	jc.log.Info("RECONCILER: Found %d queued jobs, attempting to schedule", len(jobs))
+
+	for _, jobRecord := range jobs {
+		// Try to schedule
+		globalDecision, err := jc.globalScheduler.ScheduleJob(ctx, jobRecord)
+		if err != nil {
+			jc.log.Debug("RECONCILER: Job %s still unschedulable: %v", jobRecord.ID, err)
+			continue // Stay queued, try again next round
+		}
+
+		// Success! Update job record
+		jobRecord.Status = common.StatusScheduled
+		jobRecord.ClusterID = globalDecision.ClusterID
+		jobRecord.NodeID = globalDecision.NodeID
+		jobRecord.ScheduleTime = time.Now()
+		jobRecord.ErrorMsg = ""
+
+		var leaseID int64
+		if jobRecord.ExecutionLease != nil {
+			leaseID, _ = strconv.ParseInt(jobRecord.ExecutionLease.LeaseID, 10, 64)
+		}
+
+		err = jc.jobStore.SaveJob(ctx, jobRecord, leaseID)
+		if err != nil {
+			jc.log.Warn("RECONCILER: Failed to save scheduled job %s: %v", jobRecord.ID, err)
+			continue
+		}
+
+		// Start monitoring
+		go func(jID string, lID int64) {
+			monitorCtx := context.Background()
+			jc.MonitorJob(monitorCtx, jID, lID)
+		}(jobRecord.ID, leaseID)
+
+		jc.log.Info("RECONCILER: ★ Job %s scheduled to cluster %s (was queued)",
+			jobRecord.ID, globalDecision.ClusterID)
+	}
 }

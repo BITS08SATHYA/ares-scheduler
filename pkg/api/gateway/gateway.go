@@ -473,6 +473,10 @@ func NewAPIGatewayWithCoordinator(
 	go clusterManager.StartHealthWatchdog(context.Background(), 30*time.Second)
 	log.Info("✓ Health watchdog started (30s heartbeat timeout)")
 
+	// ★ Start reconcile loop for queued jobs
+	go jobCoordinator.StartReconcileLoop(context.Background(), 10*time.Second)
+	log.Info("✓ Reconcile loop started (10s interval)")
+
 	// ========================================================================
 	// LAYER 11: CRDT State Store (Eventual Consistency)
 	// ========================================================================
