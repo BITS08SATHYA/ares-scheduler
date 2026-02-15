@@ -142,9 +142,9 @@ func (lss *LocalSchedulerServer) handleSchedule(w http.ResponseWriter, r *http.R
 			GPUAffinityScore: decision.GPUAffinityScore,
 			PlacementReasons: decision.PlacementReasons,
 			ScheduledAt:      decision.ScheduledAt,
-			Command:          req.Command,
-			Args:             req.Args,
-			Image:            req.Image,
+			Command:          req.JobSpec.Command,
+			Args:             req.JobSpec.Args,
+			Image:            req.JobSpec.Image,
 			LeaseID:          req.LeaseID,
 			FencingToken:     req.FencingToken,
 			// checkpoint
