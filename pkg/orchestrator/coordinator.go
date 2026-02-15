@@ -179,6 +179,8 @@ func (jc *JobCoordinator) ScheduleJob(
 	jobRecord.Status = common.StatusScheduled
 	jobRecord.ClusterID = globalDecision.ClusterID
 	jobRecord.ScheduleTime = time.Now()
+	// Attached the executionToken (fencing Token) attached to the job record that goes to the pod (during execution)
+	jobRecord.ExecutionToken = fmt.Sprintf("ares-fence-%s-%d", jobID, leaseID)
 
 	err = jc.jobStore.SaveJob(ctx, jobRecord, leaseID)
 	if err != nil {
