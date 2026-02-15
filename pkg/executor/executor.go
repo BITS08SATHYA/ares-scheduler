@@ -404,7 +404,15 @@ func createPodSpec(
 ) *PodSpec {
 
 	// Build image name
-	imageName := ex.Config.DefaultJobImage
+	//imageName := ex.Config.DefaultJobImage
+
+	imageName := decision.Image // Use the image from the job spec
+	//imageName := decision.Image
+	ex.Log.Debug("Checking-1 Original Payload Passed Image Name: %s", imageName)
+
+	if imageName == "" {
+		imageName = ex.Config.DefaultJobImage // Fall back to default only if empty
+	}
 
 	if ex.Config.ImageRegistry != "" && !contains(imageName, "/") {
 		imageName = fmt.Sprintf("%s/%s", ex.Config.ImageRegistry, imageName)

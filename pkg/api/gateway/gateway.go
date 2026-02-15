@@ -558,13 +558,14 @@ func (ag *APIGateway) RegisterRoutes() *http.ServeMux {
 	mux.HandleFunc("/status/datacenter", ag.wrapHandler(ag.handleDatacenterStatus))
 	mux.HandleFunc("/status/federation", ag.wrapHandler(ag.handleFederationStatus))
 	mux.HandleFunc("/status/cluster", ag.wrapHandler(ag.handleClusterStatus))
+	mux.HandleFunc("/status/jobs", ag.wrapHandler(ag.handleListJobs))
 
 	// Info
 	mux.HandleFunc("/info/capacity", ag.wrapHandler(ag.handleCapacity))
 	mux.HandleFunc("/info/clusters", ag.wrapHandler(ag.handleListClusters))
 
 	// Job control
-	mux.HandleFunc("/jobs", ag.wrapHandler(ag.handleListJobs))
+
 	mux.HandleFunc("/job/cancel", ag.wrapHandler(ag.handleCancelJob))
 	mux.HandleFunc("/job/retry", ag.wrapHandler(ag.handleRetryJob))
 
