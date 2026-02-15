@@ -51,6 +51,11 @@ type JobSpec struct {
 
 	// SLA (Feature 22 - Global Metrics)
 	TargetLatencyMs int // Target latency in ms
+
+	// Gang Scheduling (Feature 10)
+	GangID        string `json:"gang_id,omitempty"`
+	GangSize      int    `json:"gang_size,omitempty"`
+	GangMemberIdx int    `json:"gang_member_idx,omitempty"`
 }
 
 // JobStatus: Current state of a job
