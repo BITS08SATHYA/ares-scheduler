@@ -26,6 +26,17 @@ type JobCoordinator struct {
 	jobStore        job.JobStore
 	globalScheduler *global.GlobalScheduler
 	log             *logger.Logger
+	metricsRecorder *MetricsRecorder
+}
+
+// Metrics Recorder
+type MetricsRecorder struct {
+	OnDuplicateBlocked  func()
+	OnLeaseAcquired     func()
+	OnJobPriority       func(int)
+	OnSchedulingLatency func(time.Duration)
+	OnFencingTokenSet   func()
+	OnJobCompleted      func(bool)
 }
 
 type SchedulingResult struct {
@@ -46,6 +57,7 @@ func NewJobCoordinator(
 	leaseManager *lease.LeaseManager,
 	jobStore job.JobStore,
 	globalScheduler *global.GlobalScheduler,
+	metricsRecorder *MetricsRecorder,
 ) *JobCoordinator {
 	return &JobCoordinator{
 		idempotencyMgr:  idempotencyMgr,
@@ -53,6 +65,7 @@ func NewJobCoordinator(
 		jobStore:        jobStore,
 		globalScheduler: globalScheduler,
 		log:             logger.Get(),
+		metricsRecorder: metricsRecorder,
 	}
 }
 
@@ -86,7 +99,10 @@ func (jc *JobCoordinator) ScheduleJob(
 
 	cachedResult, isDuplicate, err := jc.idempotencyMgr.CheckDuplicate(ctx, jobSpec.RequestID)
 	if isDuplicate {
-		jc.log.Info("Duplicate request detected: %s, returning cached result", jobSpec.RequestID)
+		if jc.metricsRecorder != nil && jc.metricsRecorder.OnDuplicateBlocked != nil {
+			jc.metricsRecorder.OnDuplicateBlocked()
+		}
+		jc.log.Debug("Duplicate request detected: %s, returning cached result", jobSpec.RequestID)
 		result := &SchedulingResult{
 			JobID:     cachedResult.JobID,
 			CreatedAt: cachedResult.SubmitTime,
@@ -114,6 +130,10 @@ func (jc *JobCoordinator) ScheduleJob(
 	if err != nil {
 		jc.log.Error("Lease acquisition error: %v", err)
 		return nil, fmt.Errorf("lease error: %w", err)
+	}
+
+	if jc.metricsRecorder != nil && jc.metricsRecorder.OnLeaseAcquired != nil {
+		jc.metricsRecorder.OnLeaseAcquired()
 	}
 
 	jc.log.Info("Acquired lease for job %s (leaseID=%d, heartbeat started)", jobID, leaseID)
@@ -152,8 +172,11 @@ func (jc *JobCoordinator) ScheduleJob(
 	// ========================================================================
 	// STEP 4: Call global scheduler (cluster selection)
 	// ========================================================================
-
+	schedStart := time.Now()
 	globalDecision, err := jc.globalScheduler.ScheduleJob(ctx, jobRecord)
+	if jc.metricsRecorder != nil && jc.metricsRecorder.OnSchedulingLatency != nil {
+		jc.metricsRecorder.OnSchedulingLatency(time.Since(schedStart))
+	}
 	if err != nil {
 		jc.log.Warn("Global scheduling failed for job %s: %v (queueing for retry)", jobID, err)
 		jobRecord.Status = common.StatusQueued
@@ -181,6 +204,9 @@ func (jc *JobCoordinator) ScheduleJob(
 	jobRecord.ScheduleTime = time.Now()
 	// Attached the executionToken (fencing Token) attached to the job record that goes to the pod (during execution)
 	jobRecord.ExecutionToken = fmt.Sprintf("ares-fence-%s-%d", jobID, leaseID)
+	if jc.metricsRecorder != nil && jc.metricsRecorder.OnFencingTokenSet != nil {
+		jc.metricsRecorder.OnFencingTokenSet()
+	}
 
 	err = jc.jobStore.SaveJob(ctx, jobRecord, leaseID)
 	if err != nil {
@@ -218,6 +244,10 @@ func (jc *JobCoordinator) ScheduleJob(
 			jc.log.Error("Monitoring failed for job %s: %v", jobID, err)
 		}
 	}()
+
+	if jc.metricsRecorder != nil && jc.metricsRecorder.OnJobPriority != nil {
+		jc.metricsRecorder.OnJobPriority(jobSpec.Priority)
+	}
 
 	// ========================================================================
 	// STEP 9: Return result

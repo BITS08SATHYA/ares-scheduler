@@ -455,11 +455,22 @@ func NewAPIGatewayWithCoordinator(
 
 	log.Info("Layer 10: Initializing job coordinator...")
 
+	// Created metrics instance first
+	metrics := &Metrics{}
+
 	jobCoordinator := orchestrator.NewJobCoordinator(
 		idempotencyManager,
 		leaseManager,
 		jobStore,
 		globalScheduler,
+		&orchestrator.MetricsRecorder{
+			OnDuplicateBlocked:  func() { metrics.RecordDuplicateBlocked() },
+			OnLeaseAcquired:     func() { metrics.RecordLease("acquired") },
+			OnJobPriority:       func(p int) { metrics.RecordJobPriority(p) },
+			OnSchedulingLatency: func(d time.Duration) { metrics.RecordSchedulingLatency(d) },
+			OnFencingTokenSet:   func() { metrics.RecordFencingToken(true) },
+			OnJobCompleted:      func(ok bool) { metrics.RecordJobCompleted(ok) },
+		},
 	)
 
 	log.Info("✓ Layer 10: JobCoordinator")
@@ -599,6 +610,9 @@ func (ag *APIGateway) wrapHandler(handler func(http.ResponseWriter, *http.Reques
 		w.Header().Set("X-Ares-Version", "1.0")
 		w.Header().Set("X-Request-ID", ag.generateRequestID())
 
+		// RecordEndpoint
+		ag.metrics.RecordEndpoint(r.URL.Path)
+
 		// Handle OPTIONS (CORS preflight)
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusOK)
@@ -690,6 +704,16 @@ func (ag *APIGateway) handleScheduleJob(w http.ResponseWriter, r *http.Request) 
 
 	// Record Successful Job Scheduling
 	ag.metrics.RecordJobScheduled()
+
+	// Record GPU Type
+	ag.metrics.RecordGPUType(jobSpec.GPUType)
+
+	// Record GPU Topology Placement
+	ag.metrics.RecordTopologyPlacement(
+		jobSpec.PreferNVLink,
+		jobSpec.PreferSameNUMA,
+		result.ClusterScore,
+	)
 
 	// BUILD RESPONSE
 	w.WriteHeader(http.StatusOK)

@@ -200,6 +200,8 @@ func (ag *APIGateway) handleRegisterCluster(w http.ResponseWriter, r *http.Reque
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(response)
 
+	ag.metrics.RecordClusterJoin()
+
 	ag.log.Info("CLUSTER REGISTRATION COMPLETE: %s", clusterObj.ClusterID)
 }
 
@@ -244,6 +246,10 @@ func (ag *APIGateway) handleDeregisterCluster(w http.ResponseWriter, r *http.Req
 
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(response)
+
+	ag.metrics.RecordClusterLeave()
+
+	ag.log.Info("CLUSTER REGISTRATION COMPLETE: %s", response.ClusterID)
 }
 
 // ============================================================================
@@ -321,6 +327,14 @@ func (ag *APIGateway) handleClusterHeartbeat(w http.ResponseWriter, r *http.Requ
 
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(response)
+
+	ag.metrics.RecordHeartbeat()
+
+	ag.metrics.SetGPUCounts(
+		int32(clusterInfo.TotalGPUs),
+		int32(hbReq.GPUsInUse),
+		int32(clusterInfo.TotalGPUs-hbReq.GPUsInUse),
+	)
 
 	ag.log.Debug("Heartbeat from %s: gpus=%d/%d, jobs=%d running",
 		hbReq.ClusterID, hbReq.GPUsInUse, clusterInfo.TotalGPUs, hbReq.RunningJobs)
