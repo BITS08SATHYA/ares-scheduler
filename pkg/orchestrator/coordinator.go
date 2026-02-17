@@ -37,6 +37,8 @@ type MetricsRecorder struct {
 	OnSchedulingLatency func(time.Duration)
 	OnFencingTokenSet   func()
 	OnJobCompleted      func(bool)
+	OnJobQueued         func() // ← ADD
+	OnJobDequeued       func()
 }
 
 type SchedulingResult struct {
@@ -181,6 +183,9 @@ func (jc *JobCoordinator) ScheduleJob(
 		jc.log.Warn("Global scheduling failed for job %s: %v (queueing for retry)", jobID, err)
 		jobRecord.Status = common.StatusQueued
 		jobRecord.ErrorMsg = fmt.Sprintf("queued: %v", err)
+		if jc.metricsRecorder != nil && jc.metricsRecorder.OnJobQueued != nil {
+			jc.metricsRecorder.OnJobQueued()
+		}
 		jc.jobStore.SaveJob(context.Background(), jobRecord, leaseID)
 
 		// Return success to the user — job is accepted but queued
@@ -202,6 +207,11 @@ func (jc *JobCoordinator) ScheduleJob(
 	jobRecord.Status = common.StatusScheduled
 	jobRecord.ClusterID = globalDecision.ClusterID
 	jobRecord.ScheduleTime = time.Now()
+
+	if jc.metricsRecorder != nil && jc.metricsRecorder.OnJobDequeued != nil {
+		jc.metricsRecorder.OnJobDequeued()
+	}
+
 	// Attached the executionToken (fencing Token) attached to the job record that goes to the pod (during execution)
 	jobRecord.ExecutionToken = fmt.Sprintf("ares-fence-%s-%d", jobID, leaseID)
 	if jc.metricsRecorder != nil && jc.metricsRecorder.OnFencingTokenSet != nil {
@@ -329,11 +339,17 @@ func (jc *JobCoordinator) MonitorJob(ctx context.Context, jobID string, leaseID 
 			// Check if job completed
 			if jobRecord.Status == common.StatusSucceeded {
 				jc.log.Info("Job %s succeeded", jobID)
+				if jc.metricsRecorder != nil && jc.metricsRecorder.OnJobCompleted != nil {
+					jc.metricsRecorder.OnJobCompleted(true)
+				}
 				jc.leaseManager.ReleaseLeaseForJob(context.Background(), jobID)
 				return nil
 			}
 
 			if jobRecord.Status == common.StatusFailed {
+				if jc.metricsRecorder != nil && jc.metricsRecorder.OnJobCompleted != nil {
+					jc.metricsRecorder.OnJobCompleted(false)
+				}
 				// Auto-retry if attempts remaining
 				if jobRecord.Spec.MaxRetries > 0 && jobRecord.Attempts < jobRecord.Spec.MaxRetries {
 					jc.log.Info("Job %s failed, auto-retrying (attempt %d/%d)",

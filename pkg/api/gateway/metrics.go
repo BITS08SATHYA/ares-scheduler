@@ -198,10 +198,18 @@ func (m *Metrics) RecordJobCompleted(success bool) {
 	}
 }
 
+func (m *Metrics) RecordJobQueued() {
+	atomic.AddInt32(&m.QueuedJobs, 1)
+}
+
+func (m *Metrics) RecordJobDequeued() {
+	atomic.AddInt32(&m.QueuedJobs, -1)
+}
+
 func (m *Metrics) RecordSchedulingLatency(duration time.Duration) {
 	ns := duration.Nanoseconds()
 	atomic.AddInt64(&m.SchedulingLatencySum, ns)
-
+	fmt.Printf("DEBUG LATENCY: duration=%v, ns=%d\n", duration, ns)
 	// Update max (CAS loop)
 	for {
 		current := atomic.LoadInt64(&m.SchedulingLatencyMax)

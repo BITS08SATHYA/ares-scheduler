@@ -470,6 +470,8 @@ func NewAPIGatewayWithCoordinator(
 			OnSchedulingLatency: func(d time.Duration) { metrics.RecordSchedulingLatency(d) },
 			OnFencingTokenSet:   func() { metrics.RecordFencingToken(true) },
 			OnJobCompleted:      func(ok bool) { metrics.RecordJobCompleted(ok) },
+			OnJobQueued:         func() { metrics.RecordJobQueued() },
+			OnJobDequeued:       func() { metrics.RecordJobDequeued() },
 		},
 	)
 
@@ -518,7 +520,7 @@ func NewAPIGatewayWithCoordinator(
 		activeJobs:      make(map[string]*executor.ExecutionContext),
 		completedJobs:   make(map[string]*executor.ExecutionResult),
 		podRegistry:     make(map[string]*executor.PodInfo),
-		metrics:         &Metrics{},
+		metrics:         metrics,
 		crdtStore:       crdtStore,
 		syncManager:     syncManager,
 		//k8sClient:       mockK8sClient, //
@@ -611,7 +613,22 @@ func (ag *APIGateway) wrapHandler(handler func(http.ResponseWriter, *http.Reques
 		w.Header().Set("X-Request-ID", ag.generateRequestID())
 
 		// RecordEndpoint
-		ag.metrics.RecordEndpoint(r.URL.Path)
+		//ag.metrics.RecordEndpoint(r.URL.Path)
+
+		// Map URL paths to endpoint names
+		path := r.URL.Path
+		switch {
+		case strings.HasPrefix(path, "/schedule"):
+			ag.metrics.RecordEndpoint("schedule")
+		case strings.HasPrefix(path, "/status"):
+			ag.metrics.RecordEndpoint("status")
+		case strings.HasPrefix(path, "/job/cancel"):
+			ag.metrics.RecordEndpoint("cancel")
+		case strings.HasPrefix(path, "/job/retry"):
+			ag.metrics.RecordEndpoint("retry")
+		case strings.HasPrefix(path, "/health"):
+			ag.metrics.RecordEndpoint("health")
+		}
 
 		// Handle OPTIONS (CORS preflight)
 		if r.Method == http.MethodOptions {
@@ -955,6 +972,10 @@ func (ag *APIGateway) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	// Prometheus Format (plain text)
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
 	w.WriteHeader(http.StatusOK)
+
+	ag.log.Info("DEBUG METRICS: latency_sum=%d, scheduled_count=%d",
+		atomic.LoadInt64(&ag.metrics.SchedulingLatencySum),
+		atomic.LoadUint64(&ag.metrics.TotalScheduled))
 
 	// Export Metrics in Prometheus format
 	fmt.Fprint(w, ag.metrics.ExportPrometheus())
