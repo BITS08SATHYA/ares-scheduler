@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strconv"
 	"time"
 
@@ -662,6 +663,13 @@ func (jc *JobCoordinator) reconcileQueuedJobs(ctx context.Context) {
 	}
 
 	jc.log.Info("RECONCILER: Found %d queued jobs, attempting to schedule", len(jobs))
+
+	sort.Slice(jobs, func(i, j int) bool {
+		if jobs[i].Spec.Priority != jobs[j].Spec.Priority {
+			return jobs[i].Spec.Priority > jobs[j].Spec.Priority // higher priority first
+		}
+		return jobs[i].SubmitTime.Before(jobs[j].SubmitTime) // FIFO within same priority
+	})
 
 	for _, jobRecord := range jobs {
 		// Try to schedule
