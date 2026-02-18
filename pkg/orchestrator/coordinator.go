@@ -38,8 +38,10 @@ type MetricsRecorder struct {
 	OnSchedulingLatency func(time.Duration)
 	OnFencingTokenSet   func()
 	OnJobCompleted      func(bool)
-	OnJobQueued         func() // ← ADD
+	OnJobQueued         func()
 	OnJobDequeued       func()
+	OnJobRescheduled    func()
+	OnJobE2ELatency     func(time.Duration) // Record End-to-End Latency
 }
 
 type SchedulingResult struct {
@@ -170,6 +172,11 @@ func (jc *JobCoordinator) ScheduleJob(
 		return nil, fmt.Errorf("job persistence failed: %w", err)
 	}
 
+	// Job Priority value is checked and queued before the job gets scheduled
+	if jc.metricsRecorder != nil && jc.metricsRecorder.OnJobPriority != nil {
+		jc.metricsRecorder.OnJobPriority(jobSpec.Priority)
+	}
+
 	jc.log.Info("Job %s persisted (leaseID=%d for auto-cleanup)", jobID, leaseID)
 	jc.log.Info("Executor will monitor Pod and update this Job record")
 	// ========================================================================
@@ -256,10 +263,6 @@ func (jc *JobCoordinator) ScheduleJob(
 		}
 	}()
 
-	if jc.metricsRecorder != nil && jc.metricsRecorder.OnJobPriority != nil {
-		jc.metricsRecorder.OnJobPriority(jobSpec.Priority)
-	}
-
 	// ========================================================================
 	// STEP 9: Return result
 	// ========================================================================
@@ -340,6 +343,13 @@ func (jc *JobCoordinator) MonitorJob(ctx context.Context, jobID string, leaseID 
 			// Check if job completed
 			if jobRecord.Status == common.StatusSucceeded {
 				jc.log.Info("Job %s succeeded", jobID)
+
+				// ★ Record end-to-end latency
+				if jc.metricsRecorder != nil && jc.metricsRecorder.OnJobE2ELatency != nil {
+					e2eLatency := time.Since(jobRecord.SubmitTime)
+					jc.metricsRecorder.OnJobE2ELatency(e2eLatency)
+				}
+
 				if jc.metricsRecorder != nil && jc.metricsRecorder.OnJobCompleted != nil {
 					jc.metricsRecorder.OnJobCompleted(true)
 				}
@@ -695,6 +705,19 @@ func (jc *JobCoordinator) reconcileQueuedJobs(ctx context.Context) {
 		if err != nil {
 			jc.log.Warn("RECONCILER: Failed to save scheduled job %s: %v", jobRecord.ID, err)
 			continue
+		}
+
+		// ★ FIX: Update metrics — job moved from QUEUED → SCHEDULED
+		if jc.metricsRecorder != nil {
+			if jc.metricsRecorder.OnJobDequeued != nil {
+				jc.metricsRecorder.OnJobDequeued() // QueuedJobs--
+			}
+			if jc.metricsRecorder.OnJobRescheduled != nil {
+				jc.metricsRecorder.OnJobRescheduled() // ActiveJobs++
+			}
+			if jc.metricsRecorder.OnJobPriority != nil {
+				jc.metricsRecorder.OnJobPriority(jobRecord.Spec.Priority) // Record priority
+			}
 		}
 
 		// Start monitoring

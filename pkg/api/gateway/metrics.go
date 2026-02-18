@@ -51,6 +51,9 @@ type Metrics struct {
 	SucceededJobs        uint64 // Jobs that succeeded
 	SchedulingLatencySum int64  // Sum of scheduling latency (nanoseconds)
 	SchedulingLatencyMax int64  // Max scheduling latency (nanoseconds)
+	E2ELatencySum        int64  // Sum of end-to-end latency (nanoseconds)
+	E2ELatencyMax        int64  // Max end-to-end latency
+	E2ELatencyCount      uint64 // Count
 
 	// Per-priority counters
 	HighPriorityJobs   uint64 // Priority >= 80
@@ -217,6 +220,22 @@ func (m *Metrics) RecordSchedulingLatency(duration time.Duration) {
 			break
 		}
 		if atomic.CompareAndSwapInt64(&m.SchedulingLatencyMax, current, ns) {
+			break
+		}
+	}
+}
+
+// Recording the Latency End-to-End
+func (m *Metrics) RecordJobE2ELatency(duration time.Duration) {
+	ns := duration.Nanoseconds()
+	atomic.AddInt64(&m.E2ELatencySum, ns)
+	atomic.AddUint64(&m.E2ELatencyCount, 1)
+	for {
+		current := atomic.LoadInt64(&m.E2ELatencyMax)
+		if ns <= current {
+			break
+		}
+		if atomic.CompareAndSwapInt64(&m.E2ELatencyMax, current, ns) {
 			break
 		}
 	}
@@ -447,6 +466,15 @@ func (m *Metrics) GetAvgTopologyScore() float64 {
 	return float64(sum) / float64(count) / 100.0
 }
 
+func (m *Metrics) GetAvgE2ELatency() float64 {
+	count := atomic.LoadUint64(&m.E2ELatencyCount)
+	sum := atomic.LoadInt64(&m.E2ELatencySum)
+	if count == 0 {
+		return 0
+	}
+	return float64(sum) / float64(count) / 1e6 // nanoseconds → milliseconds
+}
+
 // ============================================================================
 // PROMETHEUS EXPORT
 // ============================================================================
@@ -480,6 +508,9 @@ func (m *Metrics) ExportPrometheus() string {
 	output += promGauge("ares_jobs_queued", "Jobs waiting in queue", int64(atomic.LoadInt32(&m.QueuedJobs)))
 	output += promGaugeF("ares_scheduling_latency_avg_ms", "Average scheduling latency in milliseconds", m.GetAvgSchedulingLatency())
 	output += promGaugeF("ares_scheduling_latency_max_ms", "Maximum scheduling latency in milliseconds", float64(atomic.LoadInt64(&m.SchedulingLatencyMax))/1e6)
+	// End-to-End Job completion Latency
+	output += promGaugeF("ares_job_e2e_latency_avg_ms", "Average job end-to-end latency (ms)", m.GetAvgE2ELatency())
+	output += promGaugeF("ares_job_e2e_latency_max_ms", "Max job end-to-end latency (ms)", float64(atomic.LoadInt64(&m.E2ELatencyMax))/1e6)
 
 	output += promCounter("ares_jobs_priority_high_total", "Jobs with priority >= 80", atomic.LoadUint64(&m.HighPriorityJobs))
 	output += promCounter("ares_jobs_priority_medium_total", "Jobs with priority 40-79", atomic.LoadUint64(&m.MediumPriorityJobs))

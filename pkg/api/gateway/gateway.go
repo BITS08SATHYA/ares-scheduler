@@ -472,6 +472,8 @@ func NewAPIGatewayWithCoordinator(
 			OnJobCompleted:      func(ok bool) { metrics.RecordJobCompleted(ok) },
 			OnJobQueued:         func() { metrics.RecordJobQueued() },
 			OnJobDequeued:       func() { metrics.RecordJobDequeued() },
+			OnJobRescheduled:    func() { metrics.RecordJobScheduled() },
+			OnJobE2ELatency:     func(d time.Duration) { metrics.RecordJobE2ELatency(d) },
 		},
 	)
 
