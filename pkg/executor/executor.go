@@ -42,6 +42,9 @@ type Executor struct {
 	PodRegistry map[string]*PodInfo // PodName -> PodInfo
 
 	K8sClient K8sClient
+
+	// Callback when job completes (for resource release)
+	OnJobComplete func(jobID string, nodeID string, gpuCount int, memoryMB int)
 }
 
 // ExecutorConfig: Configuration for executor
@@ -639,6 +642,11 @@ func (e *Executor) monitorAndUpdateJob(
 				e.JobsMu.Unlock()
 				atomic.AddUint64(&e.TotalSuccessful, 1)
 
+				// ★ FIX: Release GPU resources
+				if e.OnJobComplete != nil {
+					e.OnJobComplete(execCtx.JobID, execCtx.NodeID, len(execCtx.GPUIndices), 0)
+				}
+
 			case PhaseFailed:
 				newJobStatus = common.StatusFailed
 				shouldUpdate = false
@@ -682,6 +690,11 @@ func (e *Executor) monitorAndUpdateJob(
 				}
 				e.JobsMu.Unlock()
 				atomic.AddUint64(&e.TotalFailed, 1)
+
+				// ★ FIX: Release GPU resources on failure too
+				if e.OnJobComplete != nil {
+					e.OnJobComplete(execCtx.JobID, execCtx.NodeID, len(execCtx.GPUIndices), 0)
+				}
 
 			case PhaseUnknown:
 				e.Log.Warn("→ Pod status UNKNOWN, skipping update")

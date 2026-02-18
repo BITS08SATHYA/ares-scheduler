@@ -264,45 +264,7 @@ func main() {
 	}
 
 	// ========================================================================
-	// STEP 4: Initialize executor (for pod creation)
-	// ========================================================================
-
-	log.Info("Initializing Executor Config...")
-	executorConfig := &executor.ExecutorConfig{
-		ClusterID:                *clusterID,
-		Namespace:                *namespace,
-		DefaultTimeout:           1 * time.Hour,
-		DefaultMemoryMB:          1024,
-		DefaultCPUMillis:         500,
-		HealthCheckInterval:      5 * time.Second,
-		MaxConcurrentJobs:        1000,
-		ImageRegistry:            "",
-		DefaultJobImage:          "nvidia/cuda:13.0.2-runtime-ubuntu22.04",
-		RestartPolicy:            "OnFailure",
-		ImagePullPolicy:          "Always",
-		EnableGPUSupport:         true,
-		LogCollectionEnabled:     true,
-		MetricsCollectionEnabled: true,
-	}
-
-	// CRITICAL FIX: Pass wrapper directly (common.K8sClient type)
-	// NOT k8sIOClient (which is kubernetes.Interface)
-	var myExecutor *executor.Executor
-	myExecutor, err = executor.NewExecutor(*clusterID,
-		k8sClientWrapper,
-		executorConfig,
-		jobStore,
-		leaseManager,
-	)
-
-	if err != nil {
-		log.Error("Failed to create executor: %v", err)
-		os.Exit(1)
-	}
-	log.Info("Executor initialized with Pod Lifecycle Monitoring")
-
-	// ========================================================================
-	// STEP 5: Initialize local scheduler
+	// STEP 4: Initialize local scheduler
 	// ========================================================================
 
 	log.Info("Initializing local scheduler...")
@@ -352,6 +314,53 @@ func main() {
 	// Verify registration worked
 	registeredNodes := localScheduler.ListNodes()
 	log.Info("Verified: LocalScheduler now has %d registered node(s)", len(registeredNodes))
+
+	// ========================================================================
+	// STEP 5: Initialize executor (for pod creation)
+	// ========================================================================
+
+	log.Info("Initializing Executor Config...")
+	executorConfig := &executor.ExecutorConfig{
+		ClusterID:                *clusterID,
+		Namespace:                *namespace,
+		DefaultTimeout:           1 * time.Hour,
+		DefaultMemoryMB:          1024,
+		DefaultCPUMillis:         500,
+		HealthCheckInterval:      5 * time.Second,
+		MaxConcurrentJobs:        1000,
+		ImageRegistry:            "",
+		DefaultJobImage:          "nvidia/cuda:13.0.2-runtime-ubuntu22.04",
+		RestartPolicy:            "OnFailure",
+		ImagePullPolicy:          "Always",
+		EnableGPUSupport:         true,
+		LogCollectionEnabled:     true,
+		MetricsCollectionEnabled: true,
+	}
+
+	// CRITICAL FIX: Pass wrapper directly (common.K8sClient type)
+	// NOT k8sIOClient (which is kubernetes.Interface)
+	var myExecutor *executor.Executor
+	myExecutor, err = executor.NewExecutor(*clusterID,
+		k8sClientWrapper,
+		executorConfig,
+		jobStore,
+		leaseManager,
+	)
+
+	if err != nil {
+		log.Error("Failed to create executor: %v", err)
+		os.Exit(1)
+	}
+
+	myExecutor.OnJobComplete = func(jobID, nodeID string, gpuCount, memoryMB int) {
+		log.Info("Job %s completed, releasing %d GPUs on node %s", jobID, gpuCount, nodeID)
+		err := localScheduler.ReleaseResources(context.Background(), jobID, nodeID, gpuCount, memoryMB)
+		if err != nil {
+			log.Warn("Resource release failed: %v", err)
+		}
+	}
+
+	log.Info("Executor initialized with Pod Lifecycle Monitoring")
 
 	// ========================================================================
 	// STEP 6: AUTO-REGISTER CLUSTER WITH CONTROL PLANE

@@ -298,7 +298,7 @@ func (m *Metrics) RecordTopologyPlacement(hasNVLink bool, sameNUMA bool, score f
 	} else {
 		atomic.AddUint64(&m.CrossNUMAPlacements, 1)
 	}
-	atomic.AddInt64(&m.TopologyScoreSum, int64(score*100))
+	atomic.AddInt64(&m.TopologyScoreSum, int64(score))
 	atomic.AddUint64(&m.TopologyScoreCount, 1)
 }
 

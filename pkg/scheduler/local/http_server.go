@@ -182,6 +182,18 @@ func (lss *LocalSchedulerServer) handleSchedule(w http.ResponseWriter, r *http.R
 		podName = execCtx.PodName
 		lss.log.Info("Pod created: %s for job %s (monitoring started)", podName, req.JobID)
 
+		// ★ FIX: Reserve GPU resources so next job sees reduced availability
+		reserveErr := lss.scheduler.ReserveResources(
+			jobCtx,
+			req.JobID,
+			decision.NodeID,
+			req.JobSpec.GPUCount,
+			req.JobSpec.MemoryMB,
+		)
+		if reserveErr != nil {
+			lss.log.Warn("Resource reservation failed (non-fatal): %v", reserveErr)
+		}
+
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(map[string]interface{}{
