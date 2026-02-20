@@ -330,11 +330,14 @@ func (ag *APIGateway) handleClusterHeartbeat(w http.ResponseWriter, r *http.Requ
 
 	ag.metrics.RecordHeartbeat()
 
-	ag.metrics.SetGPUCounts(
-		int32(clusterInfo.TotalGPUs),
-		int32(hbReq.GPUsInUse),
-		int32(clusterInfo.TotalGPUs-hbReq.GPUsInUse),
-	)
+	// ★ FIX: Aggregate GPU counts across ALL clusters, not just this one
+	clusters := ag.clusterManager.ListClusters()
+	var totalGPUs, gpusInUse int32
+	for _, c := range clusters {
+		totalGPUs += int32(c.TotalGPUs)
+		gpusInUse += int32(c.GPUsInUse)
+	}
+	ag.metrics.SetGPUCounts(totalGPUs, gpusInUse, totalGPUs-gpusInUse)
 
 	ag.log.Debug("Heartbeat from %s: gpus=%d/%d, jobs=%d running",
 		hbReq.ClusterID, hbReq.GPUsInUse, clusterInfo.TotalGPUs, hbReq.RunningJobs)
