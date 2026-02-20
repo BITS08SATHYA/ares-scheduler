@@ -300,6 +300,94 @@ func (jc *JobCoordinator) ScheduleJob(
 // ✓ Checks if lease still owned (fencing)
 // ✓ Detects job completion
 // ✗ Does NOT directly manipulate pods (executor does that)
+//func (jc *JobCoordinator) MonitorJob(ctx context.Context, jobID string, leaseID int64) error {
+//	jobRecord, err := jc.jobStore.GetJob(ctx, jobID)
+//	if err != nil {
+//		return fmt.Errorf("get job failed: %w", err)
+//	}
+//
+//	ticker := time.NewTicker(5 * time.Second)
+//	defer ticker.Stop()
+//
+//	maxAge := time.Duration(jobRecord.Spec.TimeoutSecs) * time.Second
+//	startTime := time.Now()
+//
+//	for {
+//		select {
+//		case <-ctx.Done():
+//			jc.log.Info("Monitoring stopped for job %s", jobID)
+//			return ctx.Err()
+//
+//		case <-ticker.C:
+//			// CRITICAL: Check fencing token before reading job status
+//			fencingErr := jc.checkFencingToken(ctx, jobID, leaseID)
+//			if fencingErr != nil {
+//				jc.log.Error("FENCING: %v - aborting monitoring for job %s", fencingErr, jobID)
+//				// Don't write anything - prevent split-brain!
+//				return fencingErr
+//			}
+//
+//			// Safe to read job status (we still own the lease)
+//			latest, err := jc.jobStore.GetJob(ctx, jobID)
+//			if err == nil && latest != nil {
+//				jobRecord = latest
+//			}
+//
+//			//// Check if job completed
+//			//if jobRecord.Status == common.StatusSucceeded || jobRecord.Status == common.StatusFailed {
+//			//	jc.log.Info("Job %s completed (status=%s)", jobID, jobRecord.Status)
+//			//	jc.leaseManager.ReleaseLeaseForJob(context.Background(), jobID)
+//			//	return nil
+//			//}
+//
+//			// Check if job completed
+//			if jobRecord.Status == common.StatusSucceeded {
+//				jc.log.Info("Job %s succeeded", jobID)
+//
+//				// ★ Record end-to-end latency
+//				if jc.metricsRecorder != nil && jc.metricsRecorder.OnJobE2ELatency != nil {
+//					e2eLatency := time.Since(jobRecord.SubmitTime)
+//					jc.metricsRecorder.OnJobE2ELatency(e2eLatency)
+//				}
+//
+//				if jc.metricsRecorder != nil && jc.metricsRecorder.OnJobCompleted != nil {
+//					jc.metricsRecorder.OnJobCompleted(true)
+//				}
+//				jc.leaseManager.ReleaseLeaseForJob(context.Background(), jobID)
+//				return nil
+//			}
+//
+//			if jobRecord.Status == common.StatusFailed {
+//				if jc.metricsRecorder != nil && jc.metricsRecorder.OnJobCompleted != nil {
+//					jc.metricsRecorder.OnJobCompleted(false)
+//				}
+//				// Auto-retry if attempts remaining
+//				if jobRecord.Spec.MaxRetries > 0 && jobRecord.Attempts < jobRecord.Spec.MaxRetries {
+//					jc.log.Info("Job %s failed, auto-retrying (attempt %d/%d)",
+//						jobID, jobRecord.Attempts+1, jobRecord.Spec.MaxRetries)
+//					go func() {
+//						retryErr := jc.RetryJob(context.Background(), jobID, leaseID)
+//						if retryErr != nil {
+//							jc.log.Error("Auto-retry failed for job %s: %v", jobID, retryErr)
+//						}
+//					}()
+//					return nil // Stop monitoring this instance, retry creates new monitor
+//				}
+//				jc.log.Info("Job %s failed (no retries left)", jobID)
+//				jc.leaseManager.ReleaseLeaseForJob(context.Background(), jobID)
+//				return nil
+//			}
+//
+//			// Check for timeout
+//			if time.Since(startTime) > maxAge {
+//				jc.log.Error("Job %s timeout after %.0fs", jobID, maxAge.Seconds())
+//				jc.leaseManager.ReleaseLeaseForJob(context.Background(), jobID)
+//				return fmt.Errorf("job timeout")
+//			}
+//		}
+//	}
+//}
+
 func (jc *JobCoordinator) MonitorJob(ctx context.Context, jobID string, leaseID int64) error {
 	jobRecord, err := jc.jobStore.GetJob(ctx, jobID)
 	if err != nil {
@@ -319,39 +407,22 @@ func (jc *JobCoordinator) MonitorJob(ctx context.Context, jobID string, leaseID 
 			return ctx.Err()
 
 		case <-ticker.C:
-			// CRITICAL: Check fencing token before reading job status
-			fencingErr := jc.checkFencingToken(ctx, jobID, leaseID)
-			if fencingErr != nil {
-				jc.log.Error("FENCING: %v - aborting monitoring for job %s", fencingErr, jobID)
-				// Don't write anything - prevent split-brain!
-				return fencingErr
-			}
-
-			// Safe to read job status (we still own the lease)
+			// ★ FIX: Read job status FIRST (before fencing check)
+			// Completed jobs have their lease released by executor,
+			// so fencing check would fail even though the job succeeded.
 			latest, err := jc.jobStore.GetJob(ctx, jobID)
 			if err == nil && latest != nil {
 				jobRecord = latest
 			}
 
-			//// Check if job completed
-			//if jobRecord.Status == common.StatusSucceeded || jobRecord.Status == common.StatusFailed {
-			//	jc.log.Info("Job %s completed (status=%s)", jobID, jobRecord.Status)
-			//	jc.leaseManager.ReleaseLeaseForJob(context.Background(), jobID)
-			//	return nil
-			//}
-
-			// Check if job completed
+			// ★ Check completion BEFORE fencing
 			if jobRecord.Status == common.StatusSucceeded {
 				jc.log.Info("Job %s succeeded", jobID)
-
-				// ★ Record end-to-end latency
-				if jc.metricsRecorder != nil && jc.metricsRecorder.OnJobE2ELatency != nil {
-					e2eLatency := time.Since(jobRecord.SubmitTime)
-					jc.metricsRecorder.OnJobE2ELatency(e2eLatency)
-				}
-
 				if jc.metricsRecorder != nil && jc.metricsRecorder.OnJobCompleted != nil {
 					jc.metricsRecorder.OnJobCompleted(true)
+				}
+				if jc.metricsRecorder != nil && jc.metricsRecorder.OnJobE2ELatency != nil {
+					jc.metricsRecorder.OnJobE2ELatency(time.Since(jobRecord.SubmitTime))
 				}
 				jc.leaseManager.ReleaseLeaseForJob(context.Background(), jobID)
 				return nil
@@ -378,9 +449,21 @@ func (jc *JobCoordinator) MonitorJob(ctx context.Context, jobID string, leaseID 
 				return nil
 			}
 
+			// ★ Only check fencing for IN-PROGRESS jobs
+			// (completed jobs already returned above)
+			fencingErr := jc.checkFencingToken(ctx, jobID, leaseID)
+			if fencingErr != nil {
+				jc.log.Error("FENCING: %v - aborting monitoring for job %s", fencingErr, jobID)
+				return fencingErr
+			}
+
 			// Check for timeout
 			if time.Since(startTime) > maxAge {
 				jc.log.Error("Job %s timeout after %.0fs", jobID, maxAge.Seconds())
+				// ★ FIX: Record timeout as failure
+				if jc.metricsRecorder != nil && jc.metricsRecorder.OnJobCompleted != nil {
+					jc.metricsRecorder.OnJobCompleted(false)
+				}
 				jc.leaseManager.ReleaseLeaseForJob(context.Background(), jobID)
 				return fmt.Errorf("job timeout")
 			}
