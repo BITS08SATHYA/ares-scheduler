@@ -227,6 +227,7 @@ type ClusterInfo struct {
 	RunningJobsCount   int
 	LastHeartbeat      time.Time
 	LocalSchedulerAddr string // URL to contact local scheduler
+	GPUTypes           []string
 }
 
 // ClusterScore: Score for cluster selection
@@ -353,13 +354,14 @@ type ClusterDeregistrationResponse struct {
 // Sent periodically (every 10 seconds) by worker cluster
 // Maps to: POST /cluster-heartbeat
 type ClusterHeartbeatRequest struct {
-	ClusterID   string  `json:"cluster_id"`
-	GPUsInUse   int     `json:"gpus_in_use"`
-	MemGBInUse  float64 `json:"mem_gb_in_use"`
-	CPUsInUse   int     `json:"cpus_in_use"`
-	RunningJobs int     `json:"running_jobs"`
-	PendingJobs int     `json:"pending_jobs"`
-	Status      string  `json:"status"` // "healthy", "degraded", "unhealthy"
+	ClusterID   string   `json:"cluster_id"`
+	GPUsInUse   int      `json:"gpus_in_use"`
+	MemGBInUse  float64  `json:"mem_gb_in_use"`
+	CPUsInUse   int      `json:"cpus_in_use"`
+	RunningJobs int      `json:"running_jobs"`
+	PendingJobs int      `json:"pending_jobs"`
+	Status      string   `json:"status"`              // "healthy", "degraded", "unhealthy"
+	GPUTypes    []string `json:"gpu_types,omitempty"` // ["T4"], ["A10G"], ["A100","H100"]
 }
 
 // ClusterHeartbeatResponse: HTTP response to heartbeat

@@ -1207,17 +1207,18 @@ func (ag *APIGateway) validateScheduleRequest(req *APIRequest) error {
 		return fmt.Errorf("gpu_count must be 0-256, got %d (Feature 13)", req.GPUCount)
 	}
 
-	// GPU type
+	// GPU type - now optional, "any" means auto-discover
 	if req.GPUCount > 0 && strings.TrimSpace(req.GPUType) == "" {
-		return fmt.Errorf("gpu_type required when gpu_count > 0")
+		//return fmt.Errorf("gpu_type required when gpu_count > 0")
+		req.GPUType = "any" // Default to "any" — scheduler will auto-assign
 	}
 
 	validGPUTypes := map[string]bool{
 		"A100": true, "A6000": true, "H100": true, "V100": true,
-		"T4": true, "P100": true, "any": true,
+		"T4": true, "P100": true, "A10G": true, "any": true,
 	}
 	if req.GPUCount > 0 && !validGPUTypes[req.GPUType] {
-		return fmt.Errorf("unsupported gpu_type: %s (Feature 13)", req.GPUType)
+		return fmt.Errorf("unsupported gpu_type: %s ", req.GPUType)
 	}
 
 	// Memory
@@ -1227,7 +1228,7 @@ func (ag *APIGateway) validateScheduleRequest(req *APIRequest) error {
 
 	// Priority (Feature 5 - Priority & Preemption)
 	if req.Priority < 0 || req.Priority > 100 {
-		return fmt.Errorf("priority must be 0-100, got %d (Feature 5)", req.Priority)
+		return fmt.Errorf("priority must be 0-100, got %d ", req.Priority)
 	}
 
 	// Region (Feature 2 - Multi-Region)

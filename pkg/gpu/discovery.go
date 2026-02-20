@@ -119,11 +119,25 @@ func (gd *GPUDiscovery) DiscoverGPUsFromK8s(ctx context.Context) ([]*common.GPUD
 	gpuType := gd.getGPUTypeFromNodeLabels(node)
 
 	// Get memory per GPU (default to T4 memory if not specified)
-	memoryGB := 16.0 // Default for T4
-	if gpuType == "A100" {
+	// Set memory based on GPU type
+	memoryGB := 16.0
+	switch gpuType {
+	case "A100":
 		memoryGB = 80.0
-	} else if gpuType == "H100" {
+	case "H100":
 		memoryGB = 80.0
+	case "H200":
+		memoryGB = 141.0
+	case "A10G":
+		memoryGB = 24.0
+	case "V100":
+		memoryGB = 16.0
+	case "T4":
+		memoryGB = 16.0
+	case "L4":
+		memoryGB = 24.0
+	case "L40":
+		memoryGB = 48.0
 	}
 
 	// Create GPU device entries
@@ -196,38 +210,75 @@ func (gd *GPUDiscovery) DiscoverGPUs(ctx context.Context) ([]*common.GPUDevice, 
 
 // ✅ NEW: Helper to extract GPU type from node labels
 func (gd *GPUDiscovery) getGPUTypeFromNodeLabels(node *corev1.Node) string {
-	// Check GKE GPU accelerator label
+	// Priority 1: Ares custom label (works on any cloud)
+	if gpuType, ok := node.Labels["ares.gpu/type"]; ok {
+		gd.log.Info("GPU type from ares.gpu/type label: %s", gpuType)
+		return strings.ToUpper(gpuType)
+	}
+
+	// Priority 2: GKE accelerator label (auto-set by GKE)
 	if accelerator, ok := node.Labels["cloud.google.com/gke-accelerator"]; ok {
-		if strings.Contains(strings.ToLower(accelerator), "t4") {
-			return "T4"
-		} else if strings.Contains(strings.ToLower(accelerator), "a100") {
-			return "A100"
-		} else if strings.Contains(strings.ToLower(accelerator), "h100") {
-			return "H100"
-		} else if strings.Contains(strings.ToLower(accelerator), "v100") {
-			return "V100"
-		} else if strings.Contains(strings.ToLower(accelerator), "p100") {
-			return "P100"
+		if t := matchGPUType(accelerator); t != "" {
+			gd.log.Info("GPU type from GKE label: %s", t)
+			return t
 		}
 	}
 
-	// Check other cloud providers
+	// Priority 3: NVIDIA device plugin label
+	if gpuProduct, ok := node.Labels["nvidia.com/gpu.product"]; ok {
+		if t := matchGPUType(gpuProduct); t != "" {
+			gd.log.Info("GPU type from nvidia.com/gpu.product label: %s", t)
+			return t
+		}
+	}
+
+	// Priority 4: EKS accelerator label
+	if gpuType, ok := node.Labels["k8s.amazonaws.com/accelerator"]; ok {
+		if t := matchGPUType(gpuType); t != "" {
+			gd.log.Info("GPU type from EKS label: %s", t)
+			return t
+		}
+	}
+
+	// Priority 5: Scan all labels for GPU hints
 	for key, value := range node.Labels {
 		if strings.Contains(key, "gpu") || strings.Contains(key, "accelerator") {
-			// Try to extract GPU type from label value
-			if strings.Contains(strings.ToLower(value), "t4") {
-				return "T4"
-			} else if strings.Contains(strings.ToLower(value), "a100") {
-				return "A100"
-			} else if strings.Contains(strings.ToLower(value), "h100") {
-				return "H100"
+			if t := matchGPUType(value); t != "" {
+				gd.log.Info("GPU type from label %s=%s: %s", key, value, t)
+				return t
 			}
 		}
 	}
 
-	// Default to unknown but don't fail
 	gd.log.Warn("Could not determine GPU type from node labels, defaulting to 'Unknown'")
 	return "Unknown"
+}
+
+// matchGPUType extracts a known GPU type from any string
+func matchGPUType(value string) string {
+	lower := strings.ToLower(value)
+	// Order matters: check more specific strings first (a10g before a100)
+	switch {
+	case strings.Contains(lower, "a10g"):
+		return "A10G"
+	case strings.Contains(lower, "a100"):
+		return "A100"
+	case strings.Contains(lower, "h100"):
+		return "H100"
+	case strings.Contains(lower, "h200"):
+		return "H200"
+	case strings.Contains(lower, "v100"):
+		return "V100"
+	case strings.Contains(lower, "t4"):
+		return "T4"
+	case strings.Contains(lower, "p100"):
+		return "P100"
+	case strings.Contains(lower, "l40"):
+		return "L40"
+	case strings.Contains(lower, "l4"):
+		return "L4"
+	}
+	return ""
 }
 
 // ============================================================================
@@ -516,14 +567,31 @@ func (inv *GPUInventory) AvailableGPUs() int {
 // Returns: Array of GPUs of given type
 // Example: FilterGPUsByType("A100") -> all A100 GPUs
 func (gd *GPUDiscovery) FilterGPUsByType(gpus []*common.GPUDevice, gpuType string) []*common.GPUDevice {
-	filtered := make([]*common.GPUDevice, 0)
+	//filtered := make([]*common.GPUDevice, 0)
+	//for _, gpu := range gpus {
+	//	if gpu.Type == gpuType && gpu.IsHealthy {
+	//		filtered = append(filtered, gpu)
+	//	}
+	//}
+	//return filtered
 
+	// "any" means accept all healthy GPUs — scheduler auto-discovers
+	if gpuType == "any" || gpuType == "" {
+		filtered := make([]*common.GPUDevice, 0)
+		for _, gpu := range gpus {
+			if gpu.IsHealthy {
+				filtered = append(filtered, gpu)
+			}
+		}
+		return filtered
+	}
+
+	filtered := make([]*common.GPUDevice, 0)
 	for _, gpu := range gpus {
 		if gpu.Type == gpuType && gpu.IsHealthy {
 			filtered = append(filtered, gpu)
 		}
 	}
-
 	return filtered
 }
 

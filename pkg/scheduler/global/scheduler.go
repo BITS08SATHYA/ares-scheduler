@@ -281,6 +281,24 @@ func (gs *GlobalScheduler) scoreCluster(
 		score.Reasons = append(score.Reasons, fmt.Sprintf("not-preferred-region=%s", clusterInfo.Region))
 	}
 
+	// Factor 6: GPU type match
+	if jobSpec.GPUType != "" && jobSpec.GPUType != "any" && len(clusterInfo.GPUTypes) > 0 {
+		hasType := false
+		for _, t := range clusterInfo.GPUTypes {
+			if t == jobSpec.GPUType {
+				hasType = true
+				break
+			}
+		}
+		if hasType {
+			score.Score += 20.0
+			score.Reasons = append(score.Reasons, fmt.Sprintf("has-%s", jobSpec.GPUType))
+		} else {
+			score.Score -= 50.0 // Heavy penalty - wrong GPU type
+			score.Reasons = append(score.Reasons, fmt.Sprintf("no-%s", jobSpec.GPUType))
+		}
+	}
+
 	// Cap score
 	if score.Score > 100.0 {
 		score.Score = 100.0
@@ -331,7 +349,7 @@ func (gs *GlobalScheduler) ScheduleJob(
 			ctx,
 			jobRecord.Spec.TenantID,
 			jobRecord.Spec.GPUCount,
-			jobRecord.Spec.CPUMillis/1000,           // Convert millicores to cores
+			jobRecord.Spec.CPUMillis/1000, // Convert millicores to cores
 			float64(jobRecord.Spec.MemoryMB)/1024.0, // Convert MB to GB
 		)
 		if !drfDecision.Allowed {

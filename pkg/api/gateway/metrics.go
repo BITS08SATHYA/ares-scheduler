@@ -90,6 +90,7 @@ type Metrics struct {
 
 	// Per-GPU-type counters
 	A100Scheduled uint64
+	A10GScheduled uint64
 	H100Scheduled uint64
 	V100Scheduled uint64
 	T4Scheduled   uint64
@@ -268,6 +269,8 @@ func (m *Metrics) RecordGPUType(gpuType string) {
 		atomic.AddUint64(&m.H100Scheduled, 1)
 	case "V100":
 		atomic.AddUint64(&m.V100Scheduled, 1)
+	case "A10G":
+		atomic.AddUint64(&m.A10GScheduled, 1)
 	case "T4":
 		atomic.AddUint64(&m.T4Scheduled, 1)
 	default:
@@ -508,6 +511,7 @@ func (m *Metrics) ExportPrometheus() string {
 	output += promGauge("ares_jobs_queued", "Jobs waiting in queue", int64(atomic.LoadInt32(&m.QueuedJobs)))
 	output += promGaugeF("ares_scheduling_latency_avg_ms", "Average scheduling latency in milliseconds", m.GetAvgSchedulingLatency())
 	output += promGaugeF("ares_scheduling_latency_max_ms", "Maximum scheduling latency in milliseconds", float64(atomic.LoadInt64(&m.SchedulingLatencyMax))/1e6)
+	output += promCounter("ares_gpu_a10g_scheduled_total", "Jobs scheduled on A10G GPUs", atomic.LoadUint64(&m.A10GScheduled))
 	// End-to-End Job completion Latency
 	output += promGaugeF("ares_job_e2e_latency_avg_ms", "Average job end-to-end latency (ms)", m.GetAvgE2ELatency())
 	output += promGaugeF("ares_job_e2e_latency_max_ms", "Max job end-to-end latency (ms)", float64(atomic.LoadInt64(&m.E2ELatencyMax))/1e6)
