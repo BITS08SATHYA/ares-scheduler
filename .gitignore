@@ -29,4 +29,7 @@ Thumbs.db
 *.pem
 *.key
 
+# AWS scripts
+aws_gpu_node
+
 #k8s

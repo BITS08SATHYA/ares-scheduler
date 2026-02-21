@@ -1,0 +1,14 @@
+#! /bin/zsh
+eksctl update nodegroup \
+--cluster ares-aws-gpu \
+--name gpu-ng \
+--region us-east-1 \
+--profile sathya-nyu \
+--labels ares.gpu=true
+
+eksctl scale nodegroup \
+--cluster ares-aws-gpu \
+--name gpu-ng \
+--nodes 1 \
+--region us-east-1 \
+--profile sathya-nyu
