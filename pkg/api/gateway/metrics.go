@@ -186,9 +186,16 @@ func (m *Metrics) RecordEndpoint(endpoint string) {
 }
 
 // --- Scheduling ---
-
 func (m *Metrics) RecordJobScheduled() {
 	atomic.AddUint64(&m.TotalScheduled, 1)
+}
+
+func (m *Metrics) RecordJobSubmitted() {
+	// Used by reconciler — tracks re-scheduling attempts separately
+	// Does NOT increment TotalScheduled (that's only for user submissions)
+}
+
+func (m *Metrics) RecordJobRunning() {
 	atomic.AddInt32(&m.ActiveJobs, 1)
 }
 

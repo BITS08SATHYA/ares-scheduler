@@ -472,8 +472,9 @@ func NewAPIGatewayWithCoordinator(
 			OnJobCompleted:      func(ok bool) { metrics.RecordJobCompleted(ok) },
 			OnJobQueued:         func() { metrics.RecordJobQueued() },
 			OnJobDequeued:       func() { metrics.RecordJobDequeued() },
-			OnJobRescheduled:    func() { metrics.RecordJobScheduled() },
+			OnJobRescheduled:    func() { metrics.RecordJobSubmitted() },
 			OnJobE2ELatency:     func(d time.Duration) { metrics.RecordJobE2ELatency(d) },
+			OnJobRunning:        func() { metrics.RecordJobRunning() },
 		},
 	)
 
@@ -722,7 +723,7 @@ func (ag *APIGateway) handleScheduleJob(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Record Successful Job Scheduling
-	ag.metrics.RecordJobScheduled()
+	ag.metrics.RecordJobSubmitted()
 
 	// Record GPU Type
 	ag.metrics.RecordGPUType(jobSpec.GPUType)

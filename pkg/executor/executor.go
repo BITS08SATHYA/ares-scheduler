@@ -43,6 +43,7 @@ type Executor struct {
 
 	K8sClient K8sClient
 
+	OnJobRunning func(jobID string)
 	// Callback when job completes (for resource release)
 	OnJobComplete func(jobID string, nodeID string, gpuCount int, memoryMB int)
 }
@@ -598,6 +599,9 @@ func (e *Executor) monitorAndUpdateJob(
 				if lastKnownStatus != common.StatusRunning {
 					shouldUpdate = true
 					jobRecord.StartTime = time.Now()
+					if e.OnJobRunning != nil {
+						e.OnJobRunning(execCtx.JobID)
+					}
 					e.Log.Info("→ Status change detected: %s → RUNNING", lastKnownStatus)
 				} else {
 					e.Log.Info("→ Still RUNNING (no update needed)")

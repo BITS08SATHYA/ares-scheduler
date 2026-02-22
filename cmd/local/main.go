@@ -359,7 +359,7 @@ func main() {
 			log.Warn("Resource release failed: %v", err)
 		}
 	}
-
+	
 	log.Info("Executor initialized with Pod Lifecycle Monitoring")
 
 	// ========================================================================
