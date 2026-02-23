@@ -9,6 +9,6 @@ eksctl update nodegroup \
 eksctl scale nodegroup \
 --cluster ares-aws-gpu \
 --name gpu-ng \
---nodes 1 \
+--nodes 0 \
 --region us-east-1 \
 --profile sathya-nyu

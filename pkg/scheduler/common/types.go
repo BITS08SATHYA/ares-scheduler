@@ -165,6 +165,17 @@ type GPUTopology struct {
 	// Example: [[0,1], [2,3], [4,5], [6,7]] for 8 A100s
 	NVLinkPairs [][]int
 
+	// NVLink link count per GPU pair: "gpu0-gpu1" -> link count
+	// On p4d.24xlarge (8×A100): NV12 = same NVSwitch (600 GB/s), NV6 = cross-NVSwitch (300 GB/s)
+	// Higher link count = higher bandwidth = better placement score
+	// Example: {"0-1": 12, "0-4": 6} means GPU 0↔1 has 12 links, GPU 0↔4 has 6 links
+	NVLinkCount map[string]int `json:"nvlink_count,omitempty"`
+
+	// NVSwitch domain grouping: domain_id -> []gpu_indices
+	// GPUs within the same NVSwitch domain have maximum NVLink bandwidth
+	// On p4d.24xlarge: domain 0 = [0,1,2,3], domain 1 = [4,5,6,7]
+	NVSwitchDomains map[int][]int `json:"nvswitch_domains,omitempty"`
+
 	// GPU to NUMA node mapping (for memory locality)
 	// Example: {0:0, 1:0, 2:1, 3:1, ...}
 	GPUToNUMA map[int]int

@@ -129,6 +129,17 @@ func (gs *GlobalScheduler) GetHealthStatus() map[string]bool {
 	return status
 }
 
+// GetClusterState: Get cluster info by ID (used for resolving actual GPU types)
+func (gs *GlobalScheduler) GetClusterState(clusterID string) *cluster.ClusterInfo {
+	gs.clustersMu.RLock()
+	defer gs.clustersMu.RUnlock()
+
+	if info, ok := gs.clusters[clusterID]; ok {
+		return info
+	}
+	return nil
+}
+
 // HealthyClusterCount: Count healthy clusters
 func (gs *GlobalScheduler) HealthyClusterCount() int {
 	gs.clustersMu.RLock()

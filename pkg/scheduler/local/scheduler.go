@@ -813,6 +813,36 @@ func (ls *LocalScheduler) GetClusterLoad() map[string]interface{} {
 	}
 }
 
+// GetDiscoveredGPUTypes: Returns the unique GPU types discovered on this cluster's nodes
+// Used by heartbeat to report actual hardware to the global scheduler
+// e.g., ["T4"] for a T4 cluster, ["A100"] for a p4d, ["A100", "H100"] for mixed
+func (ls *LocalScheduler) GetDiscoveredGPUTypes() []string {
+	if ls.gpuDiscovery == nil {
+		return nil
+	}
+
+	ctx := context.Background()
+	gpus, err := ls.gpuDiscovery.DiscoverGPUs(ctx)
+	if err != nil || len(gpus) == 0 {
+		return nil
+	}
+
+	// Deduplicate GPU types
+	typeSet := make(map[string]bool)
+	for _, g := range gpus {
+		if g.Type != "" {
+			typeSet[g.Type] = true
+		}
+	}
+
+	types := make([]string, 0, len(typeSet))
+	for t := range typeSet {
+		types = append(types, t)
+	}
+
+	return types
+}
+
 // ============================================================================
 // RESOURCE ALLOCATION & RESERVATION
 // ============================================================================

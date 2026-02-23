@@ -61,26 +61,6 @@ type ClusterDeregistrationResponse struct {
 }
 
 // ============================================================================
-// CLUSTER HEARTBEAT (Health Update)
-// ============================================================================
-
-type ClusterHeartbeatRequest struct {
-	ClusterID   string  `json:"cluster_id"`
-	GPUsInUse   int     `json:"gpus_in_use"`
-	MemGBInUse  float64 `json:"mem_gb_in_use"`
-	CPUsInUse   int     `json:"cpus_in_use"`
-	RunningJobs int     `json:"running_jobs"`
-	PendingJobs int     `json:"pending_jobs"`
-	Status      string  `json:"status"` // "healthy", "degraded", "unhealthy"
-}
-
-type ClusterHeartbeatResponse struct {
-	Success   bool   `json:"success"`
-	ClusterID string `json:"cluster_id"`
-	Message   string `json:"message"`
-}
-
-// ============================================================================
 // HANDLER: POST /clusters/register
 // ============================================================================
 
@@ -265,7 +245,7 @@ func (ag *APIGateway) handleClusterHeartbeat(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	var hbReq ClusterHeartbeatRequest
+	var hbReq cluster.ClusterHeartbeatRequest
 	json.NewDecoder(r.Body).Decode(&hbReq)
 	defer r.Body.Close()
 
@@ -315,11 +295,18 @@ func (ag *APIGateway) handleClusterHeartbeat(w http.ResponseWriter, r *http.Requ
 		clusterInfo.RunningJobsCount = hbReq.RunningJobs
 		clusterInfo.LastHeartbeat = time.Now()
 
+		// Update GPU types from heartbeat (auto-discovered by local scheduler)
+		// This ensures the global scheduler knows what GPU hardware each cluster has
+		// so metrics correctly track A100/T4/H100/etc. even when jobs request "any"
+		if len(hbReq.GPUTypes) > 0 {
+			clusterInfo.GPUTypes = hbReq.GPUTypes
+		}
+
 		// Note: GlobalScheduler doesn't have UpdateClusterState anymore
 		// But we update the in-memory copy directly above
 	}
 
-	response := &ClusterHeartbeatResponse{
+	response := &cluster.ClusterHeartbeatResponse{
 		Success:   true,
 		ClusterID: hbReq.ClusterID,
 		Message:   "Heartbeat received",

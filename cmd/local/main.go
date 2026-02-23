@@ -359,7 +359,7 @@ func main() {
 			log.Warn("Resource release failed: %v", err)
 		}
 	}
-	
+
 	log.Info("Executor initialized with Pod Lifecycle Monitoring")
 
 	// ========================================================================
@@ -482,6 +482,7 @@ func main() {
 				"total_gpus":      totalGPUs,
 				"total_memory_gb": *nodeMemoryGB,
 				"nodes_count":     safeGetInt(load, "nodes_count", 0),
+				"gpu_types":       localScheduler.GetDiscoveredGPUTypes(),
 			}
 
 			return safeLoad

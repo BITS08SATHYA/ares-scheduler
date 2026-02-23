@@ -27,11 +27,12 @@ import (
 
 // GPUTopologyManager: Manages GPU topology and affinity
 type GPUTopologyManager struct {
-	redisClient *redis.RedisClient
-	log         *logger.Logger
-	discovery   *GPUDiscovery
-	cacheKey    string
-	cacheTTL    time.Duration
+	redisClient  *redis.RedisClient
+	log          *logger.Logger
+	discovery    *GPUDiscovery
+	cacheKey     string
+	cacheTTL     time.Duration
+	nvlinkCounts map[string]int // "gpu0-gpu1" -> NVLink link count (populated during parsing)
 }
 
 // Cache and constants
@@ -112,6 +113,11 @@ func (gtm *GPUTopologyManager) parseNVLinkMatrix(output string) ([][]int, error)
 
 	pairs := make([][]int, 0)
 
+	// Also populate NVLink link counts for bandwidth-aware scoring
+	if gtm.nvlinkCounts == nil {
+		gtm.nvlinkCounts = make(map[string]int)
+	}
+
 	for i, line := range gpuLines {
 		parts := strings.Fields(line)
 		if len(parts) < 2 {
@@ -122,11 +128,132 @@ func (gtm *GPUTopologyManager) parseNVLinkMatrix(output string) ([][]int, error)
 			connectivity := parts[j]
 			if strings.Contains(connectivity, "NV") && j > i {
 				pairs = append(pairs, []int{i, j})
+
+				// Extract NVLink count: "NV12" -> 12, "NV6" -> 6, "NV2" -> 2
+				linkCount := gtm.extractNVLinkCount(connectivity)
+				pairKey := fmt.Sprintf("%d-%d", i, j)
+				gtm.nvlinkCounts[pairKey] = linkCount
+
+				gtm.log.Debug("NVLink pair GPU %d ↔ GPU %d: %s (%d links)",
+					i, j, connectivity, linkCount)
 			}
 		}
 	}
 
 	return pairs, nil
+}
+
+// extractNVLinkCount: Parse NVLink connection string to get link count
+// nvidia-smi topo --matrix outputs: NV1, NV2, NV4, NV6, NV12, etc.
+// The number indicates how many NVLink connections between the GPU pair
+// More links = higher bandwidth:
+//
+//	NV12 = 12 links (~600 GB/s on A100, same NVSwitch)
+//	NV6  = 6 links  (~300 GB/s on A100, cross-NVSwitch)
+//	NV2  = 2 links  (~100 GB/s)
+//	NV1  = 1 link   (~50 GB/s)
+func (gtm *GPUTopologyManager) extractNVLinkCount(connectivity string) int {
+	// Remove "NV" prefix, parse remaining number
+	nvStr := strings.TrimPrefix(connectivity, "NV")
+	// Handle cases like "NV12" -> "12", "NV6" -> "6"
+	// Also handle "NVB" (NVLink Bridge on older architectures) -> treat as 2
+	if nvStr == "B" {
+		return 2
+	}
+	count, err := strconv.Atoi(nvStr)
+	if err != nil {
+		// If we can't parse, at least we know it's NVLink — default to 1
+		gtm.log.Warn("Could not parse NVLink count from '%s', defaulting to 1", connectivity)
+		return 1
+	}
+	return count
+}
+
+// DetectNVSwitchDomains: Identify groups of GPUs on the same NVSwitch
+// On p4d.24xlarge: GPUs 0-3 share NVSwitch-0, GPUs 4-7 share NVSwitch-1
+// GPUs within the same domain have maximum NVLink bandwidth (NV12)
+// GPUs across domains have reduced NVLink bandwidth (NV6)
+//
+// Algorithm: GPUs connected with the highest link count form a domain.
+// Uses union-find on pairs with link count >= threshold (max_links * 0.8)
+func (gtm *GPUTopologyManager) DetectNVSwitchDomains(
+	gpuCount int,
+	nvlinkPairs [][]int,
+	nvlinkCounts map[string]int,
+) map[int][]int {
+
+	if len(nvlinkPairs) == 0 || len(nvlinkCounts) == 0 {
+		return map[int][]int{}
+	}
+
+	// Find max link count (this is the intra-NVSwitch bandwidth)
+	maxLinks := 0
+	for _, count := range nvlinkCounts {
+		if count > maxLinks {
+			maxLinks = count
+		}
+	}
+
+	// Threshold: pairs with >= 80% of max links are in the same NVSwitch domain
+	// On p4d: max=12, threshold=9.6 -> NV12 pairs are same-domain, NV6 are cross-domain
+	threshold := int(float64(maxLinks) * 0.8)
+
+	// Union-Find to group GPUs into domains
+	parent := make([]int, gpuCount)
+	for i := range parent {
+		parent[i] = i
+	}
+
+	var find func(int) int
+	find = func(x int) int {
+		if parent[x] != x {
+			parent[x] = find(parent[x])
+		}
+		return parent[x]
+	}
+
+	union := func(x, y int) {
+		px, py := find(x), find(y)
+		if px != py {
+			parent[px] = py
+		}
+	}
+
+	// Union GPUs that share high-bandwidth NVLink
+	for _, pair := range nvlinkPairs {
+		if len(pair) < 2 {
+			continue
+		}
+		pairKey := fmt.Sprintf("%d-%d", pair[0], pair[1])
+		if count, ok := nvlinkCounts[pairKey]; ok && count >= threshold {
+			union(pair[0], pair[1])
+		}
+	}
+
+	// Build domain map: root GPU index -> list of GPUs in domain
+	domains := make(map[int][]int)
+	for i := 0; i < gpuCount; i++ {
+		root := find(i)
+		domains[root] = append(domains[root], i)
+	}
+
+	// Re-key domains to 0, 1, 2, ... for cleanliness
+	result := make(map[int][]int)
+	domainID := 0
+	for _, gpus := range domains {
+		if len(gpus) > 1 { // Only count groups with multiple GPUs as domains
+			result[domainID] = gpus
+			domainID++
+		}
+	}
+
+	gtm.log.Info("Detected %d NVSwitch domains (max NVLink count=%d, threshold=%d)",
+		len(result), maxLinks, threshold)
+	for id, gpus := range result {
+		gtm.log.Info("  NVSwitch domain %d: GPUs %v", id, gpus)
+	}
+
+	return result
 }
 
 // ============================================================================
@@ -333,10 +460,30 @@ func (gtm *GPUTopologyManager) ScoreGPUPlacement(
 
 	reasons := make([]string, 0)
 
+	// NVLink scoring — now bandwidth-aware using link counts
+	// NV12 (same NVSwitch, ~600 GB/s) scores much higher than NV2 (~100 GB/s)
 	if gtm.hasNVLink(topology.NVLinkPairs, gpu1Index, gpu2Index) {
-		score.Score += 50.0
 		score.HasNVLink = true
-		reasons = append(reasons, "NVLink-connected")
+		linkCount := gtm.getNVLinkCount(topology, gpu1Index, gpu2Index)
+
+		switch {
+		case linkCount >= 12:
+			// NV12: Same NVSwitch domain — maximum bandwidth (~600 GB/s on A100)
+			score.Score += 60.0
+			reasons = append(reasons, fmt.Sprintf("NV%d-same-NVSwitch", linkCount))
+		case linkCount >= 6:
+			// NV6: Cross-NVSwitch — good bandwidth (~300 GB/s on A100)
+			score.Score += 40.0
+			reasons = append(reasons, fmt.Sprintf("NV%d-cross-NVSwitch", linkCount))
+		case linkCount >= 2:
+			// NV2-NV4: Fewer links — moderate bandwidth
+			score.Score += 25.0
+			reasons = append(reasons, fmt.Sprintf("NV%d-limited", linkCount))
+		default:
+			// NV1 or unknown NVLink — still better than PCIe
+			score.Score += 15.0
+			reasons = append(reasons, fmt.Sprintf("NV%d-minimal", linkCount))
+		}
 	}
 
 	if gtm.isSameNUMA(topology.GPUToNUMA, gpu1Index, gpu2Index) {
@@ -360,10 +507,41 @@ func (gtm *GPUTopologyManager) ScoreGPUPlacement(
 
 	score.Reason = strings.Join(reasons, ", ")
 	if score.Reason == "" {
-		score.Reason = "PCIe-connected"
+		score.Reason = "PCIe-only"
 	}
 
 	return score
+}
+
+// getNVLinkCount: Get the NVLink link count between two GPUs
+// Returns link count from topology data or from cached parse results
+// Falls back to 1 if link count is unknown (we know NVLink exists but not how many)
+func (gtm *GPUTopologyManager) getNVLinkCount(topology *common.GPUTopology, gpu1, gpu2 int) int {
+	// Try topology struct first (populated from cache)
+	if topology.NVLinkCount != nil {
+		key1 := fmt.Sprintf("%d-%d", gpu1, gpu2)
+		if count, ok := topology.NVLinkCount[key1]; ok {
+			return count
+		}
+		key2 := fmt.Sprintf("%d-%d", gpu2, gpu1)
+		if count, ok := topology.NVLinkCount[key2]; ok {
+			return count
+		}
+	}
+
+	// Try in-memory parse results (populated during parseNVLinkMatrix)
+	if gtm.nvlinkCounts != nil {
+		key1 := fmt.Sprintf("%d-%d", gpu1, gpu2)
+		if count, ok := gtm.nvlinkCounts[key1]; ok {
+			return count
+		}
+		key2 := fmt.Sprintf("%d-%d", gpu2, gpu1)
+		if count, ok := gtm.nvlinkCounts[key2]; ok {
+			return count
+		}
+	}
+
+	return 1 // Default: we know NVLink exists but not how many links
 }
 
 func (gtm *GPUTopologyManager) ScoreGPUSet(
@@ -374,6 +552,7 @@ func (gtm *GPUTopologyManager) ScoreGPUSet(
 		return 100.0
 	}
 
+	// Base score: average of all pairwise placement scores
 	totalScore := 0.0
 	pairs := 0
 
@@ -385,7 +564,84 @@ func (gtm *GPUTopologyManager) ScoreGPUSet(
 		}
 	}
 
-	return totalScore / float64(pairs)
+	avgScore := totalScore / float64(pairs)
+
+	// NVSwitch domain bonus: reward keeping GPUs within the same NVSwitch domain
+	// For all-reduce, the bottleneck is the WORST link in the communication ring.
+	// If all GPUs are in one NVSwitch domain, the worst link is NV12 (~600 GB/s).
+	// If GPUs span domains, the worst link drops to NV6 (~300 GB/s) — 2x slower.
+	if topology.NVSwitchDomains != nil && len(topology.NVSwitchDomains) > 0 {
+		domainScore := gtm.scoreNVSwitchDomainLocality(gpuIndices, topology.NVSwitchDomains)
+		avgScore += domainScore
+	}
+
+	// Worst-link penalty: for collective operations (all-reduce), performance
+	// is limited by the slowest link in the ring, not the average.
+	// Penalize sets that have one bad pair among otherwise good pairs.
+	if pairs > 1 {
+		worstPairScore := 100.0
+		for i := 0; i < len(gpuIndices)-1; i++ {
+			for j := i + 1; j < len(gpuIndices); j++ {
+				pairScore := gtm.ScoreGPUPlacement(gpuIndices[i], gpuIndices[j], topology)
+				if pairScore.Score < worstPairScore {
+					worstPairScore = pairScore.Score
+				}
+			}
+		}
+		// Blend: 70% average score + 30% worst-link score
+		// This ensures we don't pick a set with 7 great links and 1 terrible one
+		avgScore = avgScore*0.7 + worstPairScore*0.3
+	}
+
+	return avgScore
+}
+
+// scoreNVSwitchDomainLocality: Bonus for keeping GPUs in the same NVSwitch domain
+// Returns 0-25 bonus points based on how well the GPU set fits within NVSwitch domains
+//
+// All GPUs in one domain:  +25 (ideal — all communication at max NVLink bandwidth)
+// Most GPUs in one domain: +15 (good — most communication is fast)
+// Evenly split:            +0  (no bonus — cross-domain traffic is unavoidable)
+func (gtm *GPUTopologyManager) scoreNVSwitchDomainLocality(
+	gpuIndices []int,
+	domains map[int][]int,
+) float64 {
+
+	if len(domains) == 0 {
+		return 0.0
+	}
+
+	// Count how many of our GPUs fall in each domain
+	domainHits := make(map[int]int) // domain_id -> count of our GPUs in it
+	for _, gpuIdx := range gpuIndices {
+		for domainID, domainGPUs := range domains {
+			for _, dGPU := range domainGPUs {
+				if dGPU == gpuIdx {
+					domainHits[domainID]++
+					break
+				}
+			}
+		}
+	}
+
+	// Find the domain with the most of our GPUs
+	maxInOneDomain := 0
+	for _, count := range domainHits {
+		if count > maxInOneDomain {
+			maxInOneDomain = count
+		}
+	}
+
+	// Calculate locality ratio: what fraction of our GPUs are in the best domain?
+	localityRatio := float64(maxInOneDomain) / float64(len(gpuIndices))
+
+	// Scale: 100% locality = +25 bonus, 50% locality = +0 bonus
+	bonus := (localityRatio - 0.5) * 50.0 // Maps 0.5->0, 1.0->25
+	if bonus < 0.0 {
+		bonus = 0.0
+	}
+
+	return bonus
 }
 
 // ============================================================================
@@ -601,10 +857,42 @@ func (gtm *GPUTopologyManager) DetectTopology(ctx context.Context) (*common.GPUT
 	numa, _ := gtm.DetectNUMAMapping(ctx)
 	pcie, _ := gtm.DetectPCIeGeneration(ctx)
 
+	// Detect GPU count for NVSwitch domain detection
+	gpuCount := 0
+	if gtm.discovery != nil {
+		gpus, err := gtm.discovery.DiscoverGPUs(ctx)
+		if err == nil {
+			gpuCount = len(gpus)
+		}
+	}
+	if gpuCount == 0 {
+		// Infer from NVLink pairs
+		for _, pair := range nvlink {
+			for _, idx := range pair {
+				if idx+1 > gpuCount {
+					gpuCount = idx + 1
+				}
+			}
+		}
+	}
+
+	// Build NVLink count map from parsed data
+	nvlinkCountMap := make(map[string]int)
+	if gtm.nvlinkCounts != nil {
+		for k, v := range gtm.nvlinkCounts {
+			nvlinkCountMap[k] = v
+		}
+	}
+
+	// Detect NVSwitch domains
+	nvswitchDomains := gtm.DetectNVSwitchDomains(gpuCount, nvlink, nvlinkCountMap)
+
 	topology = &common.GPUTopology{
-		NVLinkPairs: nvlink,
-		GPUToNUMA:   numa,
-		PCIeGen:     pcie,
+		NVLinkPairs:     nvlink,
+		NVLinkCount:     nvlinkCountMap,
+		NVSwitchDomains: nvswitchDomains,
+		GPUToNUMA:       numa,
+		PCIeGen:         pcie,
 	}
 
 	if err := gtm.cacheTopology(ctx, topology); err != nil {

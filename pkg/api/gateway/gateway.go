@@ -725,8 +725,14 @@ func (ag *APIGateway) handleScheduleJob(w http.ResponseWriter, r *http.Request) 
 	// Record Successful Job Scheduling
 	ag.metrics.RecordJobSubmitted()
 
-	// Record GPU Type
-	ag.metrics.RecordGPUType(jobSpec.GPUType)
+	// Record GPU Type — use ACTUAL assigned GPU type from scheduling result,
+	// not the requested type (which may be "any")
+	actualGPUType := result.ActualGPUType
+	if actualGPUType == "" || actualGPUType == "any" {
+		// Fallback to requested type if actual wasn't resolved
+		actualGPUType = jobSpec.GPUType
+	}
+	ag.metrics.RecordGPUType(actualGPUType)
 
 	// Record GPU Topology Placement
 	ag.metrics.RecordTopologyPlacement(

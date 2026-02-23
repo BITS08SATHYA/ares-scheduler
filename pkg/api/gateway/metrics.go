@@ -43,9 +43,9 @@ type Metrics struct {
 	// ====================================================================
 	// 2. SCHEDULING METRICS
 	// ====================================================================
-	TotalScheduled       uint64 // Jobs successfully scheduled
-	TotalFailed          uint64 // Jobs that failed to schedule
-	ActiveJobs           int32  // Currently running jobs
+	TotalScheduled uint64 // Jobs successfully scheduled
+	TotalFailed    uint64 // Jobs that failed to schedule
+	// ActiveJobs           int32  // Currently running jobs
 	QueuedJobs           int32  // Jobs waiting in queue
 	CompletedJobs        uint64 // Total completed (succeeded + failed)
 	SucceededJobs        uint64 // Jobs that succeeded
@@ -195,12 +195,12 @@ func (m *Metrics) RecordJobSubmitted() {
 	// Does NOT increment TotalScheduled (that's only for user submissions)
 }
 
-func (m *Metrics) RecordJobRunning() {
-	atomic.AddInt32(&m.ActiveJobs, 1)
-}
+//func (m *Metrics) RecordJobRunning() {
+//	atomic.AddInt32(&m.ActiveJobs, 1)
+//}
 
 func (m *Metrics) RecordJobCompleted(success bool) {
-	atomic.AddInt32(&m.ActiveJobs, -1)
+	//atomic.AddInt32(&m.ActiveJobs, -1)
 	atomic.AddUint64(&m.CompletedJobs, 1)
 	if success {
 		atomic.AddUint64(&m.SucceededJobs, 1)
@@ -280,6 +280,8 @@ func (m *Metrics) RecordGPUType(gpuType string) {
 		atomic.AddUint64(&m.A10GScheduled, 1)
 	case "T4":
 		atomic.AddUint64(&m.T4Scheduled, 1)
+	case "any", "":
+		atomic.AddUint64(&m.OtherGPU, 1)
 	default:
 		atomic.AddUint64(&m.OtherGPU, 1)
 	}
@@ -485,6 +487,17 @@ func (m *Metrics) GetAvgE2ELatency() float64 {
 	return float64(sum) / float64(count) / 1e6 // nanoseconds → milliseconds
 }
 
+func (m *Metrics) GetActiveJobs() int64 {
+	scheduled := int64(atomic.LoadUint64(&m.TotalScheduled))
+	completed := int64(atomic.LoadUint64(&m.SucceededJobs))
+	failed := int64(atomic.LoadUint64(&m.TotalFailed))
+	active := scheduled - completed - failed
+	if active < 0 {
+		active = 0
+	}
+	return active
+}
+
 // ============================================================================
 // PROMETHEUS EXPORT
 // ============================================================================
@@ -514,7 +527,11 @@ func (m *Metrics) ExportPrometheus() string {
 	output += promCounter("ares_jobs_failed_total", "Total jobs that failed to schedule", atomic.LoadUint64(&m.TotalFailed))
 	output += promCounter("ares_jobs_completed_total", "Total jobs completed", atomic.LoadUint64(&m.CompletedJobs))
 	output += promCounter("ares_jobs_succeeded_total", "Total jobs succeeded", atomic.LoadUint64(&m.SucceededJobs))
-	output += promGauge("ares_jobs_active", "Currently running jobs", int64(atomic.LoadInt32(&m.ActiveJobs)))
+
+	//output += promGauge("ares_jobs_active", "Currently running jobs", int64(atomic.LoadInt32(&m.ActiveJobs)))
+
+	output += promGauge("ares_jobs_active", "Currently active jobs", m.GetActiveJobs())
+
 	output += promGauge("ares_jobs_queued", "Jobs waiting in queue", int64(atomic.LoadInt32(&m.QueuedJobs)))
 	output += promGaugeF("ares_scheduling_latency_avg_ms", "Average scheduling latency in milliseconds", m.GetAvgSchedulingLatency())
 	output += promGaugeF("ares_scheduling_latency_max_ms", "Maximum scheduling latency in milliseconds", float64(atomic.LoadInt64(&m.SchedulingLatencyMax))/1e6)
@@ -526,6 +543,7 @@ func (m *Metrics) ExportPrometheus() string {
 	output += promCounter("ares_jobs_priority_high_total", "Jobs with priority >= 80", atomic.LoadUint64(&m.HighPriorityJobs))
 	output += promCounter("ares_jobs_priority_medium_total", "Jobs with priority 40-79", atomic.LoadUint64(&m.MediumPriorityJobs))
 	output += promCounter("ares_jobs_priority_low_total", "Jobs with priority < 40", atomic.LoadUint64(&m.LowPriorityJobs))
+	output += promCounter("ares_gpu_other_scheduled_total", "Jobs scheduled on other/any GPUs", atomic.LoadUint64(&m.OtherGPU))
 
 	// Per-region (dynamic)
 	m.RegionScheduled.Range(func(key, value interface{}) bool {

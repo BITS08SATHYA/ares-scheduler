@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/cluster"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/idempotency"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/job"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/lease"
@@ -56,6 +57,7 @@ type SchedulingResult struct {
 	LocalSchedulerAddr string
 	LeaseID            int64 // CRITICAL: Track lease ID for fencing
 	CreatedAt          time.Time
+	ActualGPUType      string // Actual GPU type assigned (e.g., "T4", "A100") — resolved from node discovery
 }
 
 func NewJobCoordinator(
@@ -279,6 +281,7 @@ func (jc *JobCoordinator) ScheduleJob(
 		LocalSchedulerAddr: globalDecision.LocalSchedulerAddr,
 		LeaseID:            leaseID,
 		CreatedAt:          time.Now(),
+		ActualGPUType:      jc.resolveActualGPUType(jobSpec, globalDecision),
 	}
 
 	jc.log.Debug("The final Result (json payload): ", result)
@@ -287,6 +290,33 @@ func (jc *JobCoordinator) ScheduleJob(
 
 	return result, nil
 
+}
+
+// resolveActualGPUType: Determine the actual GPU type assigned to a job
+// When a job requests gpu_type="any", we resolve the actual type from the
+// cluster's known GPU inventory. This ensures Prometheus metrics accurately
+// track which GPU hardware is being utilized (e.g., T4, A100, H100).
+func (jc *JobCoordinator) resolveActualGPUType(
+	jobSpec *common.JobSpec,
+	decision *cluster.GlobalSchedulingDecision,
+) string {
+	// If the job requested a specific GPU type (not "any"), use that
+	if jobSpec.GPUType != "" && jobSpec.GPUType != "any" {
+		return jobSpec.GPUType
+	}
+
+	// Resolve from cluster state — the global scheduler knows what GPU types
+	// each cluster has from heartbeat data
+	if jc.globalScheduler != nil {
+		clusterState := jc.globalScheduler.GetClusterState(decision.ClusterID)
+		if clusterState != nil && len(clusterState.GPUTypes) > 0 {
+			// Return the first (primary) GPU type for this cluster
+			return clusterState.GPUTypes[0]
+		}
+	}
+
+	// Fallback: couldn't resolve
+	return jobSpec.GPUType
 }
 
 // ============================================================================

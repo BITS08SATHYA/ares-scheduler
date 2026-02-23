@@ -225,6 +225,7 @@ func StartHeartbeat(ctx context.Context, config *HeartbeatConfig) {
 				RunningJobs: runningJobs,
 				PendingJobs: pendingJobs,
 				Status:      "healthy", // TODO: Check actual health
+				GPUTypes:    safeGetStringSlice(load, "gpu_types"),
 			}
 
 			// Send heartbeat
@@ -331,6 +332,37 @@ func safeGetFloat64(m map[string]interface{}, key string, defaultVal float64) fl
 
 	// Fallback
 	return defaultVal
+}
+
+// safeGetStringSlice: Safely extract []string from map[string]interface{}
+// Used for extracting gpu_types from heartbeat load data
+func safeGetStringSlice(m map[string]interface{}, key string) []string {
+	if m == nil {
+		return nil
+	}
+
+	val, exists := m[key]
+	if !exists || val == nil {
+		return nil
+	}
+
+	// Direct []string
+	if strSlice, ok := val.([]string); ok {
+		return strSlice
+	}
+
+	// []interface{} (common when unmarshaling JSON)
+	if ifaceSlice, ok := val.([]interface{}); ok {
+		result := make([]string, 0, len(ifaceSlice))
+		for _, item := range ifaceSlice {
+			if s, ok := item.(string); ok {
+				result = append(result, s)
+			}
+		}
+		return result
+	}
+
+	return nil
 }
 
 // DeregisterCluster: Notify control plane this cluster is leaving
