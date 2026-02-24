@@ -490,8 +490,9 @@ func (m *Metrics) GetAvgE2ELatency() float64 {
 func (m *Metrics) GetActiveJobs() int64 {
 	scheduled := int64(atomic.LoadUint64(&m.TotalScheduled))
 	completed := int64(atomic.LoadUint64(&m.SucceededJobs))
+	queued := atomic.LoadInt32(&m.QueuedJobs)
 	failed := int64(atomic.LoadUint64(&m.TotalFailed))
-	active := scheduled - completed - failed
+	active := scheduled - int64(queued) - completed - failed
 	if active < 0 {
 		active = 0
 	}

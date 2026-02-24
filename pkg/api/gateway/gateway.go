@@ -724,7 +724,7 @@ func (ag *APIGateway) handleScheduleJob(w http.ResponseWriter, r *http.Request) 
 
 	// Record Successful Job Scheduling
 	ag.metrics.RecordJobScheduled()
-	ag.metrics.RecordJobSubmitted()
+	//ag.metrics.RecordJobSubmitted()
 
 	// Record GPU Type — use ACTUAL assigned GPU type from scheduling result,
 	// not the requested type (which may be "any")
