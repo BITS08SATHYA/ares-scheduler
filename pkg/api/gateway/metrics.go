@@ -196,7 +196,7 @@ func (m *Metrics) RecordJobSubmitted() {
 }
 
 //func (m *Metrics) RecordJobRunning() {
-//	atomic.AddInt32(&m.ActiveJobs, 1)
+//	atomic.AddInt32(&m.act, 1)
 //}
 
 func (m *Metrics) RecordJobCompleted(success bool) {
@@ -535,7 +535,7 @@ func (m *Metrics) ExportPrometheus() string {
 	output += promGauge("ares_jobs_queued", "Jobs waiting in queue", int64(atomic.LoadInt32(&m.QueuedJobs)))
 	output += promGaugeF("ares_scheduling_latency_avg_ms", "Average scheduling latency in milliseconds", m.GetAvgSchedulingLatency())
 	output += promGaugeF("ares_scheduling_latency_max_ms", "Maximum scheduling latency in milliseconds", float64(atomic.LoadInt64(&m.SchedulingLatencyMax))/1e6)
-	output += promCounter("ares_gpu_a10g_scheduled_total", "Jobs scheduled on A10G GPUs", atomic.LoadUint64(&m.A10GScheduled))
+
 	// End-to-End Job completion Latency
 	output += promGaugeF("ares_job_e2e_latency_avg_ms", "Average job end-to-end latency (ms)", m.GetAvgE2ELatency())
 	output += promGaugeF("ares_job_e2e_latency_max_ms", "Max job end-to-end latency (ms)", float64(atomic.LoadInt64(&m.E2ELatencyMax))/1e6)
@@ -543,7 +543,6 @@ func (m *Metrics) ExportPrometheus() string {
 	output += promCounter("ares_jobs_priority_high_total", "Jobs with priority >= 80", atomic.LoadUint64(&m.HighPriorityJobs))
 	output += promCounter("ares_jobs_priority_medium_total", "Jobs with priority 40-79", atomic.LoadUint64(&m.MediumPriorityJobs))
 	output += promCounter("ares_jobs_priority_low_total", "Jobs with priority < 40", atomic.LoadUint64(&m.LowPriorityJobs))
-	output += promCounter("ares_gpu_other_scheduled_total", "Jobs scheduled on other/any GPUs", atomic.LoadUint64(&m.OtherGPU))
 
 	// Per-region (dynamic)
 	m.RegionScheduled.Range(func(key, value interface{}) bool {
@@ -576,6 +575,8 @@ func (m *Metrics) ExportPrometheus() string {
 	output += promCounter("ares_gpu_h100_scheduled_total", "Jobs scheduled on H100 GPUs", atomic.LoadUint64(&m.H100Scheduled))
 	output += promCounter("ares_gpu_v100_scheduled_total", "Jobs scheduled on V100 GPUs", atomic.LoadUint64(&m.V100Scheduled))
 	output += promCounter("ares_gpu_t4_scheduled_total", "Jobs scheduled on T4 GPUs", atomic.LoadUint64(&m.T4Scheduled))
+	output += promCounter("ares_gpu_a10g_scheduled_total", "Jobs scheduled on A10G GPUs", atomic.LoadUint64(&m.A10GScheduled))
+	output += promCounter("ares_gpu_other_scheduled_total", "Jobs scheduled on other/any GPUs", atomic.LoadUint64(&m.OtherGPU))
 
 	// ── 5. RELIABILITY ───────────────────────────────────────────────────
 
