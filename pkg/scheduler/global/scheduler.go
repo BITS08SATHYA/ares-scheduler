@@ -360,7 +360,7 @@ func (gs *GlobalScheduler) ScheduleJob(
 			ctx,
 			jobRecord.Spec.TenantID,
 			jobRecord.Spec.GPUCount,
-			jobRecord.Spec.CPUMillis/1000, // Convert millicores to cores
+			jobRecord.Spec.CPUMillis/1000,           // Convert millicores to cores
 			float64(jobRecord.Spec.MemoryMB)/1024.0, // Convert MB to GB
 		)
 		if !drfDecision.Allowed {
@@ -1113,4 +1113,13 @@ func (gs *GlobalScheduler) scheduleGangJob(
 
 func (gs *GlobalScheduler) GetGangManager() *gang.GangManager {
 	return gs.gangManager
+}
+
+func (gs *GlobalScheduler) UpdateClusterGPUTypes(clusterID string, gpuTypes []string) {
+	gs.clustersMu.Lock()
+	defer gs.clustersMu.Unlock()
+
+	if info, ok := gs.clusters[clusterID]; ok {
+		info.GPUTypes = gpuTypes
+	}
 }

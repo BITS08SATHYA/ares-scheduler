@@ -300,6 +300,11 @@ func (ag *APIGateway) handleClusterHeartbeat(w http.ResponseWriter, r *http.Requ
 		// so metrics correctly track A100/T4/H100/etc. even when jobs request "any"
 		if len(hbReq.GPUTypes) > 0 {
 			clusterInfo.GPUTypes = hbReq.GPUTypes
+
+			// Sync to GlobalScheduler's internal cluster cache
+			if ag.globalScheduler != nil {
+				ag.globalScheduler.UpdateClusterGPUTypes(hbReq.ClusterID, hbReq.GPUTypes)
+			}
 		}
 
 		// Note: GlobalScheduler doesn't have UpdateClusterState anymore
