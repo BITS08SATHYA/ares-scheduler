@@ -953,7 +953,7 @@ func (gs *GlobalScheduler) OnClusterJoin(ctx context.Context, clusterObj *cluste
 		AvailableMemoryGB:  clusterObj.AvailableMemGB(),
 		RunningJobsCount:   clusterObj.RunningJobs,
 		LastHeartbeat:      time.Time{},
-		LocalSchedulerAddr: "",
+		LocalSchedulerAddr: clusterObj.ControlAddr,
 	}
 
 	// Add to cache
@@ -1110,6 +1110,8 @@ func (gs *GlobalScheduler) UpdateClusterLoad(clusterID string, gpusInUse int, me
 			info.AvailableMemoryGB = 0
 		}
 		info.RunningJobsCount = runningJobs
+		info.IsHealthy = true
+		info.LastHeartbeat = time.Now()
 	}
 }
 
