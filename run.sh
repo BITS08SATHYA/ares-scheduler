@@ -41,12 +41,12 @@ echo "Created Local Scheduler Pod!"
 
 echo "Pods Deployed Successfully!"
 
-#echo "Switching k-worker k8s context in AWS"
-#kubectl config use-context arn:aws:eks:us-east-1:971422715802:cluster/ares-aws-gpu
+echo "Switching k-worker k8s context in AWS"
+kubectl config use-context sathya-nyu@ares-aws-gpu-4.us-east-1.eksctl.io
 #kubectl label node ip-192-168-26-183.ec2.internal ares.gpu/type=A10G
 #kubectl label node ip-192-168-26-183.ec2.internal ares.gpu=true
 #
-#echo "Creating Local Scheduler Pod in AWS"
-#kubectl apply -f $PWD/k8s/local/local-scheduler-aws-1.yaml
-#sleep 5
-#echo "Created Local Scheduler Pod!"
+echo "Creating Local Scheduler Pod in AWS"
+kubectl apply -f $PWD/k8s/local/local-scheduler-aws-1.yaml
+sleep 5
+echo "Created Local Scheduler Pod!"

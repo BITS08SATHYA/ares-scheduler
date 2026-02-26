@@ -240,6 +240,14 @@ func (gd *GPUDiscovery) getGPUTypeFromNodeLabels(node *corev1.Node) string {
 		}
 	}
 
+	// Priority 4.5: Map AWS instance type to GPU type
+	if instanceType, ok := node.Labels["node.kubernetes.io/instance-type"]; ok {
+		if t := mapInstanceTypeToGPU(instanceType); t != "" {
+			gd.log.Info("GPU type from instance-type label: %s", t)
+			return t
+		}
+	}
+
 	// Priority 5: Scan all labels for GPU hints
 	for key, value := range node.Labels {
 		if strings.Contains(key, "gpu") || strings.Contains(key, "accelerator") {
@@ -252,6 +260,26 @@ func (gd *GPUDiscovery) getGPUTypeFromNodeLabels(node *corev1.Node) string {
 
 	gd.log.Warn("Could not determine GPU type from node labels, defaulting to 'Unknown'")
 	return "Unknown"
+}
+
+func mapInstanceTypeToGPU(instanceType string) string {
+	lower := strings.ToLower(instanceType)
+	switch {
+	case strings.HasPrefix(lower, "p5"):
+		return "H100"
+	case strings.HasPrefix(lower, "p4d"), strings.HasPrefix(lower, "p4de"):
+		return "A100"
+	case strings.HasPrefix(lower, "p3"):
+		return "V100"
+	case strings.HasPrefix(lower, "g5"):
+		return "A10G"
+	case strings.HasPrefix(lower, "g4dn"):
+		return "T4"
+	case strings.HasPrefix(lower, "g6"):
+		return "L4"
+	default:
+		return ""
+	}
 }
 
 // matchGPUType extracts a known GPU type from any string
