@@ -154,6 +154,21 @@ func (gs *GlobalScheduler) HealthyClusterCount() int {
 	return count
 }
 
+// GetTotalAvailableGPUs: Sum available GPUs across all healthy clusters
+// Used by reconciler to limit scheduling attempts to actual capacity
+func (gs *GlobalScheduler) GetTotalAvailableGPUs() int {
+	gs.clustersMu.RLock()
+	defer gs.clustersMu.RUnlock()
+
+	total := 0
+	for _, c := range gs.clusters {
+		if c.IsHealthy && c.AvailableGPUs > 0 {
+			total += c.AvailableGPUs
+		}
+	}
+	return total
+}
+
 // ============================================================================
 // CLUSTER SELECTION (Strategic datacenter-level decision)
 // ============================================================================
@@ -209,6 +224,14 @@ func (gs *GlobalScheduler) SelectBestCluster(
 		if bestScore == nil || score.Score > bestScore.Score {
 			bestCluster = clusterInfo
 			bestScore = score
+		} else if score.Score == bestScore.Score {
+			// ★ Tiebreaker: prefer cluster with more available GPUs
+			// Without this, map iteration order is deterministic and one cluster
+			// always wins ties, causing uneven distribution
+			if clusterInfo.AvailableGPUs > bestCluster.AvailableGPUs {
+				bestCluster = clusterInfo
+				bestScore = score
+			}
 		}
 	}
 

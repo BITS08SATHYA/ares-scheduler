@@ -688,7 +688,7 @@ func (jc *JobCoordinator) StartReconcileLoop(ctx context.Context, interval time.
 	}
 }
 
-// reconcileQueuedJobs: Try to schedule all QUEUED jobs
+// reconcileQueuedJobs: Try to schedule QUEUED jobs up to available cluster capacity
 func (jc *JobCoordinator) reconcileQueuedJobs(ctx context.Context) {
 	// Get all queued jobs
 	queuedStatus := common.StatusQueued
@@ -707,7 +707,23 @@ func (jc *JobCoordinator) reconcileQueuedJobs(ctx context.Context) {
 		return
 	}
 
-	jc.log.Info("RECONCILER: Found %d queued jobs, attempting to schedule", len(jobs))
+	// ★ Calculate total available GPU slots across all clusters
+	// Only attempt to schedule that many jobs — no point hammering local
+	// schedulers with requests they'll reject due to GPU busy
+	availableSlots := jc.globalScheduler.GetTotalAvailableGPUs()
+	if availableSlots <= 0 {
+		jc.log.Debug("RECONCILER: No GPU slots available across clusters, skipping %d queued jobs", len(jobs))
+		return
+	}
+
+	// Cap the number of jobs we attempt to the available slots
+	maxAttempts := availableSlots
+	if maxAttempts > len(jobs) {
+		maxAttempts = len(jobs)
+	}
+
+	jc.log.Info("RECONCILER: Found %d queued jobs, %d GPU slots available, attempting %d",
+		len(jobs), availableSlots, maxAttempts)
 
 	sort.Slice(jobs, func(i, j int) bool {
 		if jobs[i].Spec.Priority != jobs[j].Spec.Priority {
@@ -716,7 +732,15 @@ func (jc *JobCoordinator) reconcileQueuedJobs(ctx context.Context) {
 		return jobs[i].SubmitTime.Before(jobs[j].SubmitTime) // FIFO within same priority
 	})
 
+	scheduled := 0
 	for _, jobRecord := range jobs {
+		// ★ Stop once we've filled all available slots
+		if scheduled >= maxAttempts {
+			jc.log.Debug("RECONCILER: Reached available GPU capacity (%d), deferring remaining %d jobs",
+				maxAttempts, len(jobs)-scheduled)
+			break
+		}
+
 		// Try to schedule
 		globalDecision, err := jc.globalScheduler.ScheduleJob(ctx, jobRecord)
 		if err != nil {
@@ -763,5 +787,6 @@ func (jc *JobCoordinator) reconcileQueuedJobs(ctx context.Context) {
 
 		jc.log.Info("RECONCILER: ★ Job %s scheduled to cluster %s (was queued)",
 			jobRecord.ID, globalDecision.ClusterID)
+		scheduled++
 	}
 }
