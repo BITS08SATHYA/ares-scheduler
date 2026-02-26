@@ -1081,6 +1081,17 @@ func (gs *GlobalScheduler) OnClusterStateChange(
 // HELPER: List all clusters from cache
 // ============================================================================
 
+// UpdateClusterGPUTypes: Sync GPU types from heartbeat into gs.clusters cache
+// Called by handleClusterHeartbeat to keep both maps in sync
+func (gs *GlobalScheduler) UpdateClusterGPUTypes(clusterID string, gpuTypes []string) {
+	gs.clustersMu.Lock()
+	defer gs.clustersMu.Unlock()
+
+	if info, ok := gs.clusters[clusterID]; ok {
+		info.GPUTypes = gpuTypes
+	}
+}
+
 // ListClusters: Get all clusters from cache
 func (gs *GlobalScheduler) ListClusters() []*cluster.ClusterInfo {
 	gs.clustersMu.RLock()
