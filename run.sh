@@ -43,8 +43,9 @@ echo "Pods Deployed Successfully!"
 
 echo "Switching k-worker k8s context in AWS"
 kubectl config use-context sathya-nyu@ares-aws-gpu-4.us-east-1.eksctl.io
-#kubectl label node ip-192-168-26-183.ec2.internal ares.gpu/type=A10G
-#kubectl label node ip-192-168-26-183.ec2.internal ares.gpu=true
+#kubectl label node ip-192-168-22-66.ec2.internal ares.gpu/type=A10G
+#kubectl label node ip-192-168-25-172.ec2.internal  ares.gpu=true
+# kubectl apply -f https://raw.githubusercontent.com/NVIDIA/k8s-device-plugin/v0.14.5/nvidia-device-plugin.yml
 #
 echo "Creating Local Scheduler Pod in AWS"
 kubectl apply -f $PWD/k8s/local/local-scheduler-aws-1.yaml

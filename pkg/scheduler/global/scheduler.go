@@ -193,7 +193,16 @@ func (gs *GlobalScheduler) SelectBestCluster(
 			continue
 		}
 
-		clusterInfo, _ := gs.clusterManager.GetClusterInfo(_cluster.ClusterID)
+		// Use gs.clusters (optimistic cache) for scoring — this reflects
+		// in-flight scheduling decisions that heartbeat hasn't confirmed yet
+		clusterInfo := gs.GetClusterState(_cluster.ClusterID)
+		if clusterInfo == nil {
+			// Fallback to clusterManager if not in cache
+			clusterInfo, _ = gs.clusterManager.GetClusterInfo(_cluster.ClusterID)
+		}
+		if clusterInfo == nil {
+			continue
+		}
 
 		score := gs.scoreCluster(clusterInfo, jobSpec, preferredRegion)
 
@@ -207,8 +216,22 @@ func (gs *GlobalScheduler) SelectBestCluster(
 		return nil, nil, fmt.Errorf("no suitable clusters in federation")
 	}
 
-	gs.log.Info("Selected cluster: %s in region %s (score=%.1f, reasons=%v)",
-		bestCluster.ClusterID, bestCluster.Region, bestScore.Score, bestScore.Reasons)
+	// ★ Optimistic state update: immediately reflect this decision locally
+	// Without this, rapid scheduling bursts pile jobs onto one cluster because
+	// heartbeat hasn't arrived yet to report the cluster is busy.
+	// The heartbeat reconciles the real state every 10 seconds.
+	// NOTE: bestCluster points directly into gs.clusters map, so updating
+	// through either reference modifies the same object.
+	gs.clustersMu.Lock()
+	bestCluster.AvailableGPUs -= jobSpec.GPUCount
+	if bestCluster.AvailableGPUs < 0 {
+		bestCluster.AvailableGPUs = 0
+	}
+	bestCluster.RunningJobsCount += 1
+	gs.clustersMu.Unlock()
+
+	gs.log.Info("Selected cluster: %s in region %s (score=%.1f, reasons=%v, gpus_remaining=%d)",
+		bestCluster.ClusterID, bestCluster.Region, bestScore.Score, bestScore.Reasons, bestCluster.AvailableGPUs)
 
 	return bestCluster, bestScore, nil
 }
@@ -265,6 +288,17 @@ func (gs *GlobalScheduler) scoreCluster(
 		score.Reasons = append(score.Reasons, "high-load")
 	} else if score.UtilizationPercent < 20.0 {
 		score.Reasons = append(score.Reasons, "low-load")
+	}
+
+	// Factor 3b: Queue depth penalty (prefer clusters with fewer pending jobs)
+	// If a cluster has jobs queued, it means GPU is saturated — penalize heavily
+	// to spread load across clusters instead of piling onto one
+	pendingJobs := clusterInfo.RunningJobsCount
+	if clusterInfo.TotalGPUs > 0 && clusterInfo.RunningJobsCount >= clusterInfo.TotalGPUs {
+		// Cluster is at capacity — all GPUs busy, new jobs will queue
+		queuePenalty := float64(clusterInfo.RunningJobsCount-clusterInfo.TotalGPUs+1) * 15.0
+		score.Score -= queuePenalty
+		score.Reasons = append(score.Reasons, fmt.Sprintf("at-capacity-jobs=%d-gpus=%d", pendingJobs, clusterInfo.TotalGPUs))
 	}
 
 	// Factor 4: Cluster health (critical)
@@ -1113,13 +1147,4 @@ func (gs *GlobalScheduler) scheduleGangJob(
 
 func (gs *GlobalScheduler) GetGangManager() *gang.GangManager {
 	return gs.gangManager
-}
-
-func (gs *GlobalScheduler) UpdateClusterGPUTypes(clusterID string, gpuTypes []string) {
-	gs.clustersMu.Lock()
-	defer gs.clustersMu.Unlock()
-
-	if info, ok := gs.clusters[clusterID]; ok {
-		info.GPUTypes = gpuTypes
-	}
 }
