@@ -1092,6 +1092,27 @@ func (gs *GlobalScheduler) UpdateClusterGPUTypes(clusterID string, gpuTypes []st
 	}
 }
 
+// UpdateClusterLoad: Reconcile cluster load from heartbeat into gs.clusters cache
+// This is CRITICAL for optimistic state tracking — heartbeat is the source of truth
+// that corrects the optimistic decrements made by SelectBestCluster.
+// Without this, AvailableGPUs would permanently stay at 0 after optimistic decrement.
+func (gs *GlobalScheduler) UpdateClusterLoad(clusterID string, gpusInUse int, memGBInUse float64, runningJobs int) {
+	gs.clustersMu.Lock()
+	defer gs.clustersMu.Unlock()
+
+	if info, ok := gs.clusters[clusterID]; ok {
+		info.AvailableGPUs = info.TotalGPUs - gpusInUse
+		if info.AvailableGPUs < 0 {
+			info.AvailableGPUs = 0
+		}
+		info.AvailableMemoryGB = info.TotalMemoryGB - memGBInUse
+		if info.AvailableMemoryGB < 0 {
+			info.AvailableMemoryGB = 0
+		}
+		info.RunningJobsCount = runningJobs
+	}
+}
+
 // ListClusters: Get all clusters from cache
 func (gs *GlobalScheduler) ListClusters() []*cluster.ClusterInfo {
 	gs.clustersMu.RLock()

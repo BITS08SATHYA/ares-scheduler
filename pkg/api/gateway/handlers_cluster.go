@@ -295,6 +295,17 @@ func (ag *APIGateway) handleClusterHeartbeat(w http.ResponseWriter, r *http.Requ
 		clusterInfo.RunningJobsCount = hbReq.RunningJobs
 		clusterInfo.LastHeartbeat = time.Now()
 
+		// ★ Reconcile load into GlobalScheduler's optimistic cache
+		// This corrects the optimistic decrements made by SelectBestCluster
+		if ag.globalScheduler != nil {
+			ag.globalScheduler.UpdateClusterLoad(
+				hbReq.ClusterID,
+				hbReq.GPUsInUse,
+				hbReq.MemGBInUse,
+				hbReq.RunningJobs,
+			)
+		}
+
 		// Update GPU types from heartbeat (auto-discovered by local scheduler)
 		// This ensures the global scheduler knows what GPU hardware each cluster has
 		// so metrics correctly track A100/T4/H100/etc. even when jobs request "any"
