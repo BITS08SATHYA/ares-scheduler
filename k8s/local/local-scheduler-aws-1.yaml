@@ -46,7 +46,7 @@ spec:
               value: "http://35.245.157.53:8080"
 
             - name: ARES_LOCAL_SCHEDULER_EXTERNAL_ADDR
-              value: "http://a774151fb8b7d451f9109c6ab03a7582-756222864.us-east-1.elb.amazonaws.com:9090"
+              value: "http://a6ce7a8fac4374d52accf3ddcbfb8d74-997286824.us-east-1.elb.amazonaws.com:9090"
 
             - name: WORKER_CLUSTER_ID
               valueFrom:

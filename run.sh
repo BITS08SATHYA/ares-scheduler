@@ -47,6 +47,6 @@ echo "Pods Deployed Successfully!"
 #kubectl label node ip-192-168-26-183.ec2.internal ares.gpu=true
 #
 #echo "Creating Local Scheduler Pod in AWS"
-#kubectl apply -f $PWD/k8s/local/local-scheduler-aws.yaml
+#kubectl apply -f $PWD/k8s/local/local-scheduler-aws-1.yaml
 #sleep 5
 #echo "Created Local Scheduler Pod!"

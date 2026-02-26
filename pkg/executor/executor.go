@@ -10,6 +10,7 @@ import (
 	_ "k8s.io/client-go/kubernetes"
 	"runtime/debug"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -459,11 +460,13 @@ func createPodSpec(
 		envVars["NVIDIA_VISIBLE_DEVICES"] = join(gpuDeviceStrs, ",")
 	}
 
+	safeClusterID := sanitizeLabelValue(ex.ClusterID)
+
 	// Labels for tracking
 	labels := map[string]string{
 		"app":          "ares-job",
 		"job-id":       decision.JobID,
-		"cluster-id":   ex.ClusterID,
+		"cluster-id":   safeClusterID,
 		"scheduled-by": "ares-executor",
 	}
 
@@ -1364,4 +1367,28 @@ func (m *MockK8sClient) SetPodMetrics(podName string, metrics map[string]interfa
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.podMetrics[podName] = metrics
+}
+
+// sanitizeLabelValue: Replace invalid Kubernetes label characters with '-'
+// K8s labels allow: [a-zA-Z0-9._-], max 63 chars, must start/end alphanumeric
+func sanitizeLabelValue(s string) string {
+	result := make([]byte, 0, len(s))
+	for i, c := range s {
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.' {
+			result = append(result, byte(c))
+		} else {
+			result = append(result, '-')
+		}
+		if i >= 62 {
+			break // Max 63 chars
+		}
+	}
+	// Trim leading/trailing non-alphanumeric
+	s2 := string(result)
+	s2 = strings.TrimLeft(s2, "-_.")
+	s2 = strings.TrimRight(s2, "-_.")
+	if s2 == "" {
+		return "unknown"
+	}
+	return s2
 }

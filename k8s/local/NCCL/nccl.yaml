@@ -1,0 +1,55 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nccl-benchmark
+  namespace: ares-system
+spec:
+  restartPolicy: Never
+  containers:
+    - name: nccl-bench
+      image: nvcr.io/nvidia/pytorch:24.01-py3  # Has NCCL + CUDA pre-installed
+      command: ["/bin/bash", "-c"]
+      args:
+        - |
+          # Build nccl-tests
+          cd /opt
+          git clone https://github.com/NVIDIA/nccl-tests.git
+          cd nccl-tests
+          make CUDA_HOME=/usr/local/cuda
+          
+          # Run benchmarks
+          echo "=== nvidia-smi topo ===" 
+          nvidia-smi topo --matrix
+          
+          echo "=== Test 1: Same NVSwitch (GPU 0,1) ==="
+          CUDA_VISIBLE_DEVICES=0,1 ./build/all_reduce_perf -b 8 -e 256M -f 2 -g 2
+          
+          echo "=== Test 2: Cross NVSwitch (GPU 0,4) ==="
+          CUDA_VISIBLE_DEVICES=0,4 ./build/all_reduce_perf -b 8 -e 256M -f 2 -g 2
+          
+          echo "=== Test 3: 4 GPU Same Domain (0,1,2,3) ==="
+          CUDA_VISIBLE_DEVICES=0,1,2,3 ./build/all_reduce_perf -b 8 -e 256M -f 2 -g 4
+          
+          echo "=== Test 4: 4 GPU Cross Domain (0,1,4,5) ==="
+          CUDA_VISIBLE_DEVICES=0,1,4,5 ./build/all_reduce_perf -b 8 -e 256M -f 2 -g 4
+          
+          echo "=== Test 5: 8 GPU Optimal ==="
+          CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 ./build/all_reduce_perf -b 8 -e 256M -f 2 -g 8
+          
+          echo "=== Test 6: 8 GPU Worst ==="
+          CUDA_VISIBLE_DEVICES=0,4,1,5,2,6,3,7 ./build/all_reduce_perf -b 8 -e 256M -f 2 -g 8
+          
+          echo "=== DONE ==="
+          sleep infinity  # Keep pod alive to read logs
+      resources:
+        limits:
+          nvidia.com/gpu: 8  # Request ALL 8 GPUs on p4d/p5
+        requests:
+          nvidia.com/gpu: 8
+      securityContext:
+        capabilities:
+          add: ["IPC_LOCK"]  # Required for NCCL shared memory
+  tolerations:
+    - key: "nvidia.com/gpu"
+      operator: "Exists"
+      effect: "NoSchedule"
