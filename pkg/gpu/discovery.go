@@ -320,7 +320,13 @@ func (gd *GPUDiscovery) queryNvidiaSMI(ctx context.Context) ([]*common.GPUDevice
 	// Command format:
 	// nvidia-smi --query-gpu=index,gpu_uuid,gpu_name,memory.total,memory.free,utilization.gpu,temperature.gpu \
 	//            --format=csv,noheader,nounits
-	cmd := exec.CommandContext(ctx, "/opt/nvidia/bin/nvidia-smi",
+	nvidiaSMI := findNvidiaSMIPath()
+	if nvidiaSMI == "" {
+		gd.log.Warn("nvidia-smi not found in any standard location")
+		return []*common.GPUDevice{}, nil
+	}
+
+	cmd := exec.CommandContext(ctx, nvidiaSMI,
 		"--query-gpu=index,gpu_uuid,gpu_name,memory.total,memory.free,utilization.gpu,temperature.gpu",
 		"--format=csv,noheader,nounits")
 
@@ -766,4 +772,25 @@ func (gd *GPUDiscovery) CheckGPUOversubscription(gpus []*common.GPUDevice) bool 
 		}
 	}
 	return false
+}
+
+// findNvidiaSMIPath: Locate nvidia-smi binary across standard install paths
+// Searches common locations for bare-metal, container, and cloud GPU setups
+func findNvidiaSMIPath() string {
+	paths := []string{
+		"/opt/nvidia/bin/nvidia-smi",
+		"/host-usr/bin/nvidia-smi",
+		"/usr/bin/nvidia-smi",
+		"/usr/local/bin/nvidia-smi",
+		"/usr/local/nvidia/bin/nvidia-smi",
+		"nvidia-smi",
+	}
+
+	for _, path := range paths {
+		if _, err := exec.LookPath(path); err == nil {
+			return path
+		}
+	}
+
+	return ""
 }

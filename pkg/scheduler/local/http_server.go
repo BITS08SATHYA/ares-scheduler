@@ -189,6 +189,7 @@ func (lss *LocalSchedulerServer) handleSchedule(w http.ResponseWriter, r *http.R
 			decision.NodeID,
 			req.JobSpec.GPUCount,
 			req.JobSpec.MemoryMB,
+			decision.GPUIndices,
 		)
 		if reserveErr != nil {
 			lss.log.Warn("Resource reservation failed (non-fatal): %v", reserveErr)

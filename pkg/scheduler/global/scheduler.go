@@ -49,6 +49,11 @@ type GlobalScheduler struct {
 	drfManager        *drf.DRFManager
 	preemptionManager *preemption.PreemptionManager
 
+	// Job store: for querying running jobs (used by preemption)
+	jobStore interface {
+		GetJobsByStatus(ctx context.Context, status common.JobStatus) ([]*common.Job, error)
+	}
+
 	// Metrics
 	metricsMu sync.RWMutex
 	metrics   *cluster.GlobalMetrics
@@ -1169,10 +1174,28 @@ func (gs *GlobalScheduler) ListClusters() []*cluster.ClusterInfo {
 
 // getRunningJobsFromClusters: Get all running jobs across clusters (for preemption)
 func (gs *GlobalScheduler) getRunningJobsFromClusters(ctx context.Context) []*common.Job {
-	// Query job store for running jobs
-	// For now, return empty — will be populated when job store is accessible
-	gs.log.Debug("Querying running jobs for preemption analysis")
-	return make([]*common.Job, 0)
+	if gs.jobStore == nil {
+		gs.log.Warn("Preemption: jobStore not set — cannot query running jobs")
+		return make([]*common.Job, 0)
+	}
+
+	jobs, err := gs.jobStore.GetJobsByStatus(ctx, common.StatusRunning)
+	if err != nil {
+		gs.log.Error("Preemption: failed to query running jobs: %v", err)
+		return make([]*common.Job, 0)
+	}
+
+	gs.log.Debug("Preemption: found %d running jobs for victim selection", len(jobs))
+	return jobs
+}
+
+// SetJobStore: Inject job store for preemption queries
+// Called during wiring (after both GlobalScheduler and JobStore are created)
+func (gs *GlobalScheduler) SetJobStore(store interface {
+	GetJobsByStatus(ctx context.Context, status common.JobStatus) ([]*common.Job, error)
+}) {
+	gs.jobStore = store
+	gs.log.Info("JobStore injected into GlobalScheduler (preemption enabled)")
 }
 
 // cancelJobOnCluster: Cancel a running job to free resources for preemption

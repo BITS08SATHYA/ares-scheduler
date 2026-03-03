@@ -1,0 +1,70 @@
+# Ares Scheduler — Default Configuration
+#
+# Configuration is loaded from environment variables (see pkg/config/loader.go).
+# This file documents all tunable parameters and their defaults.
+# To override, set the corresponding environment variable.
+
+# ============================================================================
+# Infrastructure
+# ============================================================================
+
+etcd:
+  endpoints: ["localhost:2379"]       # ARES_ETCD_ENDPOINTS (comma-separated)
+  dial_timeout: "10s"                 # ARES_ETCD_TIMEOUT
+
+redis:
+  addr: "localhost:6379"              # ARES_REDIS_ADDR
+  password: ""                        # ARES_REDIS_PASSWORD
+  db: 0                               # ARES_REDIS_DB
+
+kubernetes:
+  kubeconfig: "/root/.kube/config"    # ARES_KUBECONFIG
+  namespace: "default"                # ARES_K8S_NAMESPACE
+
+# ============================================================================
+# Scheduler Ports
+# ============================================================================
+
+global_scheduler_port: 8080           # ARES_GLOBAL_SCHEDULER_PORT
+local_scheduler_port: 8081            # ARES_LOCAL_SCHEDULER_PORT
+
+# ============================================================================
+# Observability
+# ============================================================================
+
+log_level: "info"                     # ARES_LOG_LEVEL (debug, info, warn, error)
+enable_metrics: true                  # ARES_ENABLE_METRICS
+enable_tracing: false                 # ARES_ENABLE_TRACING
+
+# ============================================================================
+# Timeouts & Intervals
+# ============================================================================
+
+job_timeout: "30m"                    # ARES_JOB_TIMEOUT
+lease_renewal_interval: "10s"         # ARES_LEASE_RENEWAL_INTERVAL
+health_check_interval: "30s"          # ARES_HEALTH_CHECK_INTERVAL
+
+# ============================================================================
+# DRF (Dominant Resource Fairness)
+# ============================================================================
+
+drf:
+  cpu_weight: 1.0                     # DRF_CPU_WEIGHT
+  gpu_weight: 3.0                     # DRF_GPU_WEIGHT
+  memory_weight: 0.5                  # DRF_MEMORY_WEIGHT
+  fairness_threshold: 0.2             # DRF_FAIRNESS_THRESHOLD
+  update_interval: "30s"              # DRF_UPDATE_INTERVAL_SEC
+
+# ============================================================================
+# Preemption
+# ============================================================================
+
+preemption:
+  enabled: true                       # PREEMPTION_ENABLED
+  grace_period_sec: 30                # GRACE_PERIOD_SEC
+  max_preemptions_per_hour: 10        # MAX_PREEMPTIONS_PER_HOUR
+  max_preemptions_per_day: 100        # MAX_PREEMPTIONS_PER_DAY
+  high_priority_wait_sec: 300         # HIGH_PRIORITY_WAIT_SEC
+  preemptible_priority_max: 50        # PREEMPTIBLE_PRIORITY_MAX
+  prefer_checkpointable: true         # PREFER_CHECKPOINT_JOBS
+  minimum_job_age_sec: 10             # MINIMUM_JOB_AGE_SEC

@@ -43,6 +43,12 @@ type LocalScheduler struct {
 	nodesMu sync.RWMutex
 	nodes   map[string]*NodeState
 
+	// GPU allocation tracking: nodeID -> (gpuIndex -> jobID)
+	// Prevents two jobs from being assigned the same physical GPU.
+	// Without this, SelectBestGPUSet queries all GPUs via discovery
+	// and has no way to know which are already taken.
+	allocatedGPUs map[string]map[int]string
+
 	// Metrics
 	metricsMu sync.RWMutex
 	metrics   *LocalMetrics
@@ -117,6 +123,7 @@ func NewLocalScheduler(
 		gpuDiscovery:    gpuDiscovery,
 		topologyManager: topologyManager,
 		nodes:           make(map[string]*NodeState),
+		allocatedGPUs:   make(map[string]map[int]string),
 		metrics: &LocalMetrics{
 			TotalJobsScheduled: 0,
 			TotalJobsFailed:    0,
@@ -381,6 +388,27 @@ func (ls *LocalScheduler) SelectBestGPUsInNode(
 
 	if len(allGPUs) == 0 {
 		return nil, nil, fmt.Errorf("no GPUs found on node %s", nodeID)
+	}
+
+	// Filter out already-allocated GPUs so two jobs never get the same physical GPU
+	ls.nodesMu.RLock()
+	nodeAllocations := ls.allocatedGPUs[nodeID]
+	ls.nodesMu.RUnlock()
+
+	if len(nodeAllocations) > 0 {
+		freeGPUs := make([]*common.GPUDevice, 0, len(allGPUs))
+		for _, g := range allGPUs {
+			if _, taken := nodeAllocations[g.Index]; !taken {
+				freeGPUs = append(freeGPUs, g)
+			}
+		}
+		ls.log.Debug("Node %s: %d total GPUs, %d allocated, %d free",
+			nodeID, len(allGPUs), len(nodeAllocations), len(freeGPUs))
+		allGPUs = freeGPUs
+	}
+
+	if len(allGPUs) == 0 {
+		return nil, nil, fmt.Errorf("no free GPUs on node %s (all allocated)", nodeID)
 	}
 
 	// Filter by type
@@ -848,7 +876,7 @@ func (ls *LocalScheduler) GetDiscoveredGPUTypes() []string {
 // RESOURCE ALLOCATION & RESERVATION
 // ============================================================================
 
-// ReserveResources: Reserve GPUs and memory on node
+// ReserveResources: Reserve specific GPUs and memory on node
 // Called after job placement decision
 func (ls *LocalScheduler) ReserveResources(
 	ctx context.Context,
@@ -856,6 +884,7 @@ func (ls *LocalScheduler) ReserveResources(
 	nodeID string,
 	gpuCount int,
 	memoryMB int,
+	gpuIndices []int,
 ) error {
 
 	node, err := ls.GetNodeState(nodeID)
@@ -872,11 +901,26 @@ func (ls *LocalScheduler) ReserveResources(
 		return fmt.Errorf("insufficient memory to reserve")
 	}
 
+	// Track which GPU indices are allocated to this job
+	ls.nodesMu.Lock()
+	if ls.allocatedGPUs[nodeID] == nil {
+		ls.allocatedGPUs[nodeID] = make(map[int]string)
+	}
+	for _, idx := range gpuIndices {
+		if existingJob, taken := ls.allocatedGPUs[nodeID][idx]; taken {
+			ls.nodesMu.Unlock()
+			return fmt.Errorf("GPU %d on node %s already allocated to job %s", idx, nodeID, existingJob)
+		}
+		ls.allocatedGPUs[nodeID][idx] = jobID
+	}
+	ls.nodesMu.Unlock()
+
 	// Reserve resources
 	node.AvailableGPUs -= gpuCount
 	node.AvailableMemoryGB -= memoryGB
 	node.RunningJobsCount++
 
+	ls.log.Info("Reserved %d GPUs %v on node %s for job %s", gpuCount, gpuIndices, nodeID, jobID)
 	return ls.UpdateNodeState(ctx, node)
 }
 
@@ -895,6 +939,17 @@ func (ls *LocalScheduler) ReleaseResources(
 		return err
 	}
 
+	// Release tracked GPU indices for this job
+	ls.nodesMu.Lock()
+	if nodeGPUs, exists := ls.allocatedGPUs[nodeID]; exists {
+		for idx, owner := range nodeGPUs {
+			if owner == jobID {
+				delete(nodeGPUs, idx)
+			}
+		}
+	}
+	ls.nodesMu.Unlock()
+
 	// Free resources
 	node.AvailableGPUs += gpuCount
 	node.AvailableMemoryGB += float64(memoryMB) / 1024.0
@@ -904,6 +959,7 @@ func (ls *LocalScheduler) ReleaseResources(
 		node.RunningJobsCount = 0
 	}
 
+	ls.log.Info("Released %d GPUs on node %s from job %s", gpuCount, nodeID, jobID)
 	return ls.UpdateNodeState(ctx, node)
 }
 
