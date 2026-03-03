@@ -13,7 +13,6 @@ import (
 	"errors"
 	"fmt"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/storage/etcd"
-	"math"
 	"sync"
 	"time"
 )
@@ -525,33 +524,6 @@ func isValidTransition(from, to JobState) bool {
 	}
 
 	return false
-}
-
-// PrepareRetry prepares a failed job for retry
-func (js *JobStore) PrepareRetry(ctx context.Context, jobID string) (time.Duration, error) {
-	js.mu.Lock()
-	defer js.mu.Unlock()
-
-	job, err := js.GetJob(ctx, jobID)
-	if err != nil {
-		return 0, fmt.Errorf("get job: %w", err)
-	}
-
-	if job.Attempts >= job.MaxRetries {
-		return 0, fmt.Errorf("max retries exceeded (%d)", job.MaxRetries)
-	}
-
-	backoffSeconds := math.Min(math.Pow(2, float64(job.Attempts)), 300)
-	jitterFraction := float64(time.Now().UnixNano()%100) / 100.0 * 0.1
-	backoffSeconds *= (1.0 + jitterFraction)
-	backoff := time.Duration(backoffSeconds) * time.Second
-
-	job.Attempts++
-	job.LastRetryTime = time.Now()
-	job.Status = JobStatePending
-
-	js.log.Infof("job %s prepared for retry %d (backoff: %v)", jobID, job.Attempts, backoff)
-	return backoff, nil
 }
 
 // Helper methods (abbreviated for space)
