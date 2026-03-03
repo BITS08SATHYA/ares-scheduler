@@ -113,6 +113,30 @@ func (ec *ETCDClient) PutWithoutLease(ctx context.Context, key, value string) er
 
 }
 
+// PutIfVersion: Atomic write that only succeeds if the key's ModRevision
+// matches the expected value. This is the proper fencing pattern — instead of
+// "read lease, check owner, then write job" (TOCTOU vulnerable), we do
+// "write job only if lease revision hasn't changed" (atomic).
+func (ec *ETCDClient) PutIfVersion(ctx context.Context, fenceKey string, expectedVersion int64, writeKey string, writeValue string) (bool, error) {
+	txn := ec.cli.Txn(ctx)
+
+	// Condition: the fence key's ModRevision equals what we last saw
+	cond := clientv3.Compare(clientv3.ModRevision(fenceKey), "=", expectedVersion)
+
+	// If true: write the job data
+	thenOp := clientv3.OpPut(writeKey, writeValue)
+
+	// If false: get current value (for debugging)
+	elseOp := clientv3.OpGet(fenceKey)
+
+	resp, err := txn.If(cond).Then(thenOp).Else(elseOp).Commit()
+	if err != nil {
+		return false, fmt.Errorf("fenced write failed: %w", err)
+	}
+
+	return resp.Succeeded, nil
+}
+
 // Get: Retrieve a value by key
 func (ec *ETCDClient) Get(ctx context.Context, key string) (string, error) {
 
@@ -154,6 +178,59 @@ func (ec *ETCDClient) GetAll(ctx context.Context, prefix string) (map[string]str
 
 	ec.log.Debug("Got %d keys with prefix: %s", len(result), prefix)
 	return result, nil
+}
+
+func (ec *ETCDClient) GetWithRevision(ctx context.Context, key string) (string, int64, error) {
+	resp, err := ec.cli.Get(ctx, key)
+	if err != nil {
+		return "", 0, err
+	}
+	if len(resp.Kvs) == 0 {
+		return "", 0, nil
+	}
+	return string(resp.Kvs[0].Value), resp.Kvs[0].ModRevision, nil
+}
+
+// PutIfModRevision: Atomic fenced write
+// Writes writeKey=writeValue ONLY IF fenceKey's ModRevision still equals expectedModRevision.
+// This is the proper fencing pattern: instead of "read lease, check owner, then write job"
+// (TOCTOU vulnerable), we do "write job only if lease revision hasn't changed" (atomic).
+//
+// Returns true if the write succeeded, false if the fence key changed (another scheduler
+// acquired the lease), and error for network/etcd failures.
+func (ec *ETCDClient) PutIfModRevision(ctx context.Context, fenceKey string, expectedModRevision int64, writeKey string, writeValue string, leaseID int64) (bool, error) {
+	putCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+
+	txn := ec.cli.Txn(putCtx)
+
+	// Condition: the fence key's ModRevision equals what we last saw
+	cond := clientv3.Compare(clientv3.ModRevision(fenceKey), "=", expectedModRevision)
+
+	// If true: write the job data with lease
+	var thenOp clientv3.Op
+	if leaseID > 0 {
+		thenOp = clientv3.OpPut(writeKey, writeValue, clientv3.WithLease(clientv3.LeaseID(leaseID)))
+	} else {
+		thenOp = clientv3.OpPut(writeKey, writeValue)
+	}
+
+	// If false: get current fence key (for debugging what changed)
+	elseOp := clientv3.OpGet(fenceKey)
+
+	resp, err := txn.If(cond).Then(thenOp).Else(elseOp).Commit()
+	if err != nil {
+		ec.log.Error("Fenced write failed on %s (fence=%s): %v", writeKey, fenceKey, err)
+		return false, fmt.Errorf("fenced write failed: %w", err)
+	}
+
+	if !resp.Succeeded {
+		ec.log.Error("Fenced write REJECTED: fence key %s ModRevision changed (expected %d)", fenceKey, expectedModRevision)
+	} else {
+		ec.log.Debug("Fenced write succeeded: %s (fence=%s, rev=%d)", writeKey, fenceKey, expectedModRevision)
+	}
+
+	return resp.Succeeded, nil
 }
 
 // Delete: Delete a key

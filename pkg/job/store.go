@@ -23,12 +23,14 @@ type JobStore interface {
 	// SaveJobFinal saves a completed job without a lease (permanent storage)
 	SaveJobFinal(ctx context.Context, job *common.Job) error
 
+	// SaveJobFenced: Atomic fenced save using etcd ModRevision
+	SaveJobFenced(ctx context.Context, record *common.Job, id int64, revision int64) error
+
 	// GetJob: Retrieve a job by ID
 	GetJob(ctx context.Context, jobID string) (*common.Job, error)
 
 	// UpdateJobStatus: Update only the status of a job
-	UpdateJobStatus(ctx context.Context, jobID string, status common.JobStatus,
-		leaseID int64) error
+	UpdateJobStatus(ctx context.Context, jobID string, status common.JobStatus, leaseID int64) error
 
 	// DeleteJob: Delete a job
 	DeleteJob(ctx context.Context, jobID string) error
@@ -110,6 +112,49 @@ func (store *ETCDJobStore) SaveJob(ctx context.Context, job *common.Job, leaseID
 	}
 
 	store.log.Info("Saved job %s (status: %s)", job.ID, job.Status)
+	return nil
+}
+
+// SaveJobFenced: Atomic fenced save using etcd ModRevision
+//
+// Instead of "check lease, then write job" (two operations, TOCTOU gap),
+// this does "write job ONLY IF lease ModRevision matches" (one atomic txn).
+//
+// If another scheduler acquired the lease between our check and this write,
+// the ModRevision will differ and etcd rejects the write — preventing
+// split-brain data corruption.
+func (store *ETCDJobStore) SaveJobFenced(ctx context.Context, job *common.Job, leaseID int64, leaseModRevision int64) error {
+	if job == nil {
+		return fmt.Errorf("cannot save nil job")
+	}
+	if job.ID == "" {
+		return fmt.Errorf("job ID cannot be empty")
+	}
+
+	jobData, err := json.Marshal(job)
+	if err != nil {
+		store.log.Error("Failed to marshal job %s: %v", job.ID, err)
+		return fmt.Errorf("marshal failed: %w", err)
+	}
+
+	jobKey := fmt.Sprintf("%s/%s", store.keyPrefix, job.ID)
+	fenceKey := fmt.Sprintf("ares:leases:%s", job.ID)
+
+	store.mu.Lock()
+	defer store.mu.Unlock()
+
+	success, err := store.etcd.PutIfModRevision(ctx, fenceKey, leaseModRevision, jobKey, string(jobData), leaseID)
+	if err != nil {
+		store.log.Error("Fenced save failed for job %s: %v", job.ID, err)
+		return fmt.Errorf("fenced save failed: %w", err)
+	}
+
+	if !success {
+		store.log.Error("FENCING REJECTED write for job %s — lease changed since check (split-brain prevented!)", job.ID)
+		return fmt.Errorf("fenced write rejected: lease ModRevision changed (split-brain prevented)")
+	}
+
+	store.log.Info("Saved job %s (status: %s) with fencing (modRevision=%d)", job.ID, job.Status, leaseModRevision)
 	return nil
 }
 

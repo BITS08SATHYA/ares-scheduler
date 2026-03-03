@@ -213,7 +213,9 @@ func (ls *LocalScheduler) ListNodes() []*NodeState {
 
 	nodes := make([]*NodeState, 0, len(ls.nodes))
 	for _, node := range ls.nodes {
-		nodes = append(nodes, node)
+		// Return a COPY, not a pointer into the map
+		nodeCopy := *node
+		nodes = append(nodes, &nodeCopy)
 	}
 
 	return nodes

@@ -403,7 +403,7 @@ func (jc *JobCoordinator) MonitorJob(ctx context.Context, jobID string, leaseID 
 
 			// ★ Only check fencing for IN-PROGRESS jobs
 			// (completed jobs already returned above)
-			fencingErr := jc.checkFencingToken(ctx, jobID, leaseID)
+			_, fencingErr := jc.checkFencingToken(ctx, jobID, leaseID)
 			if fencingErr != nil {
 				jc.log.Error("FENCING: %v - aborting monitoring for job %s", fencingErr, jobID)
 				return fencingErr
@@ -442,17 +442,20 @@ func (jc *JobCoordinator) MonitorJob(ctx context.Context, jobID string, leaseID 
 // With fencing:
 // 5. A: Check lease before write → lease expired → ABORT ✓
 // 5. B: Check lease before write → lease ours → proceed ✓
-func (jc *JobCoordinator) checkFencingToken(ctx context.Context, jobID string, leaseID int64) error {
+func (jc *JobCoordinator) checkFencingToken(ctx context.Context, jobID string, leaseID int64) (int64, error) {
 	// This is the CRITICAL check that prevents split-brain
-	err := jc.leaseManager.CheckLeaseOwnership(ctx, jobID, leaseID)
+	// Returns modRevision: the etcd ModRevision of the lease key at check time.
+	// Callers use this in atomic writes (PutIfVersion) to ensure the lease
+	// hasn't changed between the check and the write — closing the TOCTOU gap.
+	modRevision, err := jc.leaseManager.CheckLeaseOwnership(ctx, jobID, leaseID)
 	if err != nil {
 		jc.log.Error("FENCING TRIGGERED: %v", err)
 		// DO NOT UPDATE JOB - prevent split-brain!
-		return err
+		return 0, err
 	}
 
-	jc.log.Debug("Fencing check passed for job %s", jobID)
-	return nil
+	jc.log.Debug("Fencing check passed for job %s (modRevision=%d)", jobID, modRevision)
+	return modRevision, nil
 }
 
 // ============================================================================
@@ -468,8 +471,9 @@ func (jc *JobCoordinator) SafeUpdateJobStatus(
 	leaseID int64,
 	newStatus common.JobStatus,
 ) error {
-	// FENCING CHECK: Verify we still own the lease
-	if err := jc.checkFencingToken(ctx, jobID, leaseID); err != nil {
+	// FENCING CHECK: Verify we still own the lease and get ModRevision
+	modRevision, err := jc.checkFencingToken(ctx, jobID, leaseID)
+	if err != nil {
 		return err // Abort - don't write
 	}
 
@@ -480,12 +484,14 @@ func (jc *JobCoordinator) SafeUpdateJobStatus(
 	}
 
 	jobRecord.Status = newStatus
-	err = jc.jobStore.SaveJob(ctx, jobRecord, leaseID)
+
+	// Atomic fenced write: etcd rejects if lease ModRevision changed since check
+	err = jc.jobStore.SaveJobFenced(ctx, jobRecord, leaseID, modRevision)
 	if err != nil {
 		return err
 	}
 
-	jc.log.Info("Job %s updated to status %s (with fencing check)", jobID, newStatus)
+	jc.log.Info("Job %s updated to status %s (fenced, modRevision=%d)", jobID, newStatus, modRevision)
 	return nil
 }
 
@@ -505,7 +511,8 @@ func (jc *JobCoordinator) CompleteJob(
 	errorMsg string,
 ) error {
 	// FENCING: Check we still own the lease before writing result
-	if err := jc.checkFencingToken(ctx, jobID, leaseID); err != nil {
+	modRevision, err := jc.checkFencingToken(ctx, jobID, leaseID)
+	if err != nil {
 		jc.log.Error("FENCING PREVENTED SPLIT-BRAIN: Job %s - %v", jobID, err)
 		return err // Abort! Don't write result!
 	}
@@ -521,7 +528,8 @@ func (jc *JobCoordinator) CompleteJob(
 	jobRecord.ErrorMsg = errorMsg
 	jobRecord.EndTime = time.Now()
 
-	err = jc.jobStore.SaveJob(ctx, jobRecord, leaseID)
+	// Atomic fenced write: etcd rejects if lease ModRevision changed since check
+	err = jc.jobStore.SaveJobFenced(ctx, jobRecord, leaseID, modRevision)
 	if err != nil {
 		return err
 	}
@@ -529,7 +537,7 @@ func (jc *JobCoordinator) CompleteJob(
 	// Release lease when job completes
 	jc.leaseManager.ReleaseLeaseForJob(ctx, jobID)
 
-	jc.log.Info("✓ Job %s completed with status %s (fencing passed)", jobID, finalStatus)
+	jc.log.Info("✓ Job %s completed with status %s (fenced, modRevision=%d)", jobID, finalStatus, modRevision)
 	return nil
 }
 
@@ -539,8 +547,12 @@ func (jc *JobCoordinator) CompleteJob(
 
 // RetryJob retries a failed job with exponential backoff + jitter
 func (jc *JobCoordinator) RetryJob(ctx context.Context, jobID string, leaseID int64) error {
-	// Fencing check before retry
-	if err := jc.checkFencingToken(ctx, jobID, leaseID); err != nil {
+	// Fencing check before retry — verify we own this job before initiating retry.
+	// RetryJob uses SaveJobFinal (no lease) for writes because the job is transitioning
+	// to a new lifecycle. The fencing check here prevents a stale scheduler from
+	// initiating a retry for a job that was already claimed by another scheduler.
+	_, err := jc.checkFencingToken(ctx, jobID, leaseID)
+	if err != nil {
 		return err
 	}
 
@@ -603,7 +615,8 @@ func (jc *JobCoordinator) RetryJob(ctx context.Context, jobID string, leaseID in
 // CancelJob cancels a job that's pending or running
 func (jc *JobCoordinator) CancelJob(ctx context.Context, jobID string, leaseID int64) error {
 	// Fencing check before cancellation
-	if err := jc.checkFencingToken(ctx, jobID, leaseID); err != nil {
+	modRevision, err := jc.checkFencingToken(ctx, jobID, leaseID)
+	if err != nil {
 		return fmt.Errorf("cannot cancel: fencing check failed: %w", err)
 	}
 
@@ -636,12 +649,13 @@ func (jc *JobCoordinator) CancelJob(ctx context.Context, jobID string, leaseID i
 	jobRecord.ErrorMsg = "cancelled by user"
 	jobRecord.EndTime = time.Now()
 
-	err = jc.jobStore.SaveJob(ctx, jobRecord, leaseID)
+	// Atomic fenced write
+	err = jc.jobStore.SaveJobFenced(ctx, jobRecord, leaseID, modRevision)
 	if err != nil {
-		return fmt.Errorf("save job failed: %w", err)
+		return fmt.Errorf("fenced save failed: %w", err)
 	}
 
-	jc.log.Info("Job %s cancelled", jobID)
+	jc.log.Info("Job %s cancelled (fenced, modRevision=%d)", jobID, modRevision)
 	return nil
 }
 
