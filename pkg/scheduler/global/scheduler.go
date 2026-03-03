@@ -58,6 +58,9 @@ type GlobalScheduler struct {
 	metricsMu sync.RWMutex
 	metrics   *cluster.GlobalMetrics
 
+	// Metrics callbacks (wired by gateway)
+	onGPURollback func()
+
 	gangManager *gang.GangManager
 }
 
@@ -487,6 +490,9 @@ func (gs *GlobalScheduler) ScheduleJob(
 		gs.clustersMu.Unlock()
 		gs.log.Info("Rolled back optimistic GPU decrement for cluster %s (+%d GPUs)",
 			bestCluster.ClusterID, jobRecord.Spec.GPUCount)
+		if gs.onGPURollback != nil {
+			gs.onGPURollback()
+		}
 	}
 
 	// Step 2
@@ -1196,6 +1202,12 @@ func (gs *GlobalScheduler) SetJobStore(store interface {
 }) {
 	gs.jobStore = store
 	gs.log.Info("JobStore injected into GlobalScheduler (preemption enabled)")
+}
+
+// SetMetricsCallbacks: Inject metrics callbacks from gateway layer
+func (gs *GlobalScheduler) SetMetricsCallbacks(onGPURollback func()) {
+	gs.onGPURollback = onGPURollback
+	gs.log.Info("Metrics callbacks injected into GlobalScheduler")
 }
 
 // cancelJobOnCluster: Cancel a running job to free resources for preemption

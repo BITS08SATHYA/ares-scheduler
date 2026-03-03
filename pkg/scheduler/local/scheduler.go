@@ -17,6 +17,7 @@ import (
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/storage/redis"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -53,6 +54,9 @@ type LocalScheduler struct {
 	metricsMu sync.RWMutex
 	metrics   *LocalMetrics
 
+	// Metrics callbacks (wired by gateway)
+	onGPUDoubleAssignBlocked func()
+
 	// Executor
 	//executor *executor.Executor
 }
@@ -72,10 +76,11 @@ type NodeState struct {
 
 // LocalMetrics: Scheduling metrics for this cluster
 type LocalMetrics struct {
-	TotalJobsScheduled int64
-	TotalJobsFailed    int64
-	AvgSchedulingTime  time.Duration
-	LastUpdated        time.Time
+	TotalJobsScheduled    int64
+	TotalJobsFailed       int64
+	GPUDoubleAssignBlocks int64 // GPU double-assignment attempts blocked
+	AvgSchedulingTime     time.Duration
+	LastUpdated           time.Time
 }
 
 // SchedulingScore: Score for node placement
@@ -116,7 +121,7 @@ func NewLocalScheduler(
 	gpuDiscovery *gpu.GPUDiscovery,
 	topologyManager *gpu.GPUTopologyManager,
 ) *LocalScheduler {
-	return &LocalScheduler{
+	ls := &LocalScheduler{
 		clusterID:       clusterID,
 		redisClient:     redisClient,
 		log:             logger.Get(),
@@ -130,6 +135,17 @@ func NewLocalScheduler(
 			LastUpdated:        time.Now(),
 		},
 	}
+	// Default: self-wire to increment local metrics counter
+	ls.onGPUDoubleAssignBlocked = func() {
+		atomic.AddInt64(&ls.metrics.GPUDoubleAssignBlocks, 1)
+	}
+	return ls
+}
+
+// SetMetricsCallbacks: Inject metrics callbacks from gateway layer
+func (ls *LocalScheduler) SetMetricsCallbacks(onGPUDoubleAssignBlocked func()) {
+	ls.onGPUDoubleAssignBlocked = onGPUDoubleAssignBlocked
+	ls.log.Info("Metrics callbacks injected into LocalScheduler")
 }
 
 // ============================================================================
@@ -909,6 +925,9 @@ func (ls *LocalScheduler) ReserveResources(
 	for _, idx := range gpuIndices {
 		if existingJob, taken := ls.allocatedGPUs[nodeID][idx]; taken {
 			ls.nodesMu.Unlock()
+			if ls.onGPUDoubleAssignBlocked != nil {
+				ls.onGPUDoubleAssignBlocked()
+			}
 			return fmt.Errorf("GPU %d on node %s already allocated to job %s", idx, nodeID, existingJob)
 		}
 		ls.allocatedGPUs[nodeID][idx] = jobID

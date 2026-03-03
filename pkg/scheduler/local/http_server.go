@@ -313,9 +313,10 @@ func (lss *LocalSchedulerServer) handleMetrics(w http.ResponseWriter, r *http.Re
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"total_scheduled": metrics.TotalJobsScheduled,
-		"total_failed":    metrics.TotalJobsFailed,
-		"success_rate":    lss.scheduler.SuccessRate(),
-		"last_updated":    metrics.LastUpdated,
+		"total_scheduled":           metrics.TotalJobsScheduled,
+		"total_failed":              metrics.TotalJobsFailed,
+		"gpu_double_assign_blocked": metrics.GPUDoubleAssignBlocks,
+		"success_rate":              lss.scheduler.SuccessRate(),
+		"last_updated":              metrics.LastUpdated,
 	})
 }
