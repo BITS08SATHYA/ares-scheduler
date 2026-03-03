@@ -83,7 +83,7 @@ func (gtm *GPUTopologyManager) DetectNVLink(ctx context.Context) ([][]int, error
 }
 
 func (gtm *GPUTopologyManager) queryNVLinkConnections(ctx context.Context) ([][]int, error) {
-	nvidiaSMI := findNvidiaSMI()
+	nvidiaSMI := gtm.FindNvidiaSMI()
 	if nvidiaSMI == "" {
 		return [][]int{}, fmt.Errorf("nvidia-smi not found")
 	}
@@ -282,7 +282,7 @@ func (gtm *GPUTopologyManager) DetectNUMAMapping(ctx context.Context) (map[int]i
 }
 
 func (gtm *GPUTopologyManager) queryGPUNUMAMapping(ctx context.Context) (map[int]int, error) {
-	nvidiaSMI := findNvidiaSMI()
+	nvidiaSMI := gtm.FindNvidiaSMI()
 	if nvidiaSMI == "" {
 		return nil, fmt.Errorf("nvidia-smi not found")
 	}
@@ -318,7 +318,7 @@ func (gtm *GPUTopologyManager) queryGPUNUMAMapping(ctx context.Context) (map[int
 }
 
 func (gtm *GPUTopologyManager) queryGPUNUMANode(ctx context.Context, gpuIndex int) (int, error) {
-	nvidiaSMI := findNvidiaSMI()
+	nvidiaSMI := gtm.FindNvidiaSMI()
 	if nvidiaSMI == "" {
 		return 0, fmt.Errorf("nvidia-smi not found")
 	}
@@ -385,7 +385,7 @@ func (gtm *GPUTopologyManager) DetectPCIeGeneration(ctx context.Context) (map[in
 }
 
 func (gtm *GPUTopologyManager) queryPCIeGenerations(ctx context.Context) (map[int]int, error) {
-	nvidiaSMI := findNvidiaSMI()
+	nvidiaSMI := gtm.FindNvidiaSMI()
 	if nvidiaSMI == "" {
 		return nil, fmt.Errorf("nvidia-smi not found")
 	}
@@ -999,7 +999,7 @@ func (gtm *GPUTopologyManager) ClearTopologyCache(ctx context.Context) error {
 // HELPER: Find nvidia-smi
 // ============================================================================
 
-func findNvidiaSMI() string {
+func (gtm *GPUTopologyManager) FindNvidiaSMI() string {
 	log := logger.Get()
 
 	paths := []string{

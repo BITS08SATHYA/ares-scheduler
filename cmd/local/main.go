@@ -253,7 +253,7 @@ func main() {
 	topologyManager := gpu.NewGPUTopologyManager(redisClient, gpuDiscovery)
 	log.Info("Topology manager initialized")
 	log.Info("Detecting Nvidia-smi...")
-	smiPath := topologyManager.FindNvidiaSMI_test_path()
+	smiPath := topologyManager.FindNvidiaSMI()
 
 	if smiPath == "" {
 		log.Warn("⚠️nvidia-smi not found - GPU topology detection disabled")

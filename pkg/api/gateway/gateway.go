@@ -469,6 +469,8 @@ func NewAPIGatewayWithCoordinator(
 			OnJobPriority:       func(p int) { metrics.RecordJobPriority(p) },
 			OnSchedulingLatency: func(d time.Duration) { metrics.RecordSchedulingLatency(d) },
 			OnFencingTokenSet:   func() { metrics.RecordFencingToken(true) },
+			OnFencingRejected:   func() { metrics.RecordFencingToken(false) },
+			OnFencedWriteReject: func() { metrics.RecordFencedWriteRejected() },
 			OnJobCompleted:      func(ok bool) { metrics.RecordJobCompleted(ok) },
 			OnJobQueued:         func() { metrics.RecordJobQueued() },
 			OnJobDequeued:       func() { metrics.RecordJobDequeued() },
@@ -1337,8 +1339,11 @@ func (ag *APIGateway) Stop(timeout time.Duration) error {
 	// Release all leases so jobs can be rescheduled immediately
 	// Without this, leases expire via TTL (30s) during which jobs are orphaned
 	if ag.leaseManager != nil {
-		ag.leaseManager.Close()
-		ag.log.Info("✓ Lease manager shutdown — all heartbeats cancelled")
+		count := ag.leaseManager.Close()
+		if ag.metrics != nil {
+			ag.metrics.RecordLeaseShutdown(count)
+		}
+		ag.log.Info("✓ Lease manager shutdown — %d heartbeats cancelled", count)
 	}
 
 	ag.log.Info("✓ API Gateway stopped")

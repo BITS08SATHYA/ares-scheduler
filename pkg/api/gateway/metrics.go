@@ -105,12 +105,14 @@ type Metrics struct {
 	FencingTokensIssued      uint64 // Fencing tokens generated
 	FencingTokensValidated   uint64 // Fencing token checks passed
 	FencingTokensRejected    uint64 // Fencing token checks failed (stale)
+	FencedWritesRejected     uint64 // Atomic fenced writes rejected by etcd (split-brain prevented)
 
 	// Leases (Feature 19)
 	LeasesAcquired uint64 // Leases granted
 	LeasesRenewed  uint64 // Lease renewals (heartbeats)
 	LeasesExpired  uint64 // Leases that expired (no renewal)
 	LeasesReleased uint64 // Leases explicitly released
+	LeasesShutdown uint64 // Leases cancelled during graceful shutdown
 
 	// Retry (Feature 7)
 	TotalRetries   uint64 // Total retry attempts
@@ -128,6 +130,22 @@ type Metrics struct {
 	CheckpointsRecorded uint64 // Checkpoints saved
 	CheckpointRestores  uint64 // Jobs restored from checkpoint
 	CheckpointsFailed   uint64 // Failed checkpoint operations
+
+	// ====================================================================
+	// 5b. RESILIENCE METRICS (from bug fixes)
+	// ====================================================================
+
+	// GPU resource tracking (Bug 6, 10)
+	GPURollbacks         uint64 // Optimistic GPU decrements rolled back after local scheduling failure
+	GPUDoubleAssignBlock uint64 // GPU double-assignment attempts blocked
+
+	// Circuit breaker (Bug 15)
+	CircuitBreakerOpens   uint64 // Times circuit breaker opened (etcd unreachable)
+	CircuitBreakerRejects uint64 // Requests rejected by open circuit breaker (fail-fast)
+	CircuitBreakerResets  uint64 // Times circuit breaker reset (etcd recovered)
+
+	// Idempotency (Bug 16)
+	IdempotencyUnavailable uint64 // Times idempotency check failed (Redis down)
 
 	// ====================================================================
 	// 6. DRF FAIRNESS METRICS (Feature 9)
@@ -400,6 +418,39 @@ func (m *Metrics) RecordCheckpoint(event string) {
 	}
 }
 
+// --- Resilience (Bug Fix Metrics) ---
+
+func (m *Metrics) RecordFencedWriteRejected() {
+	atomic.AddUint64(&m.FencedWritesRejected, 1)
+}
+
+func (m *Metrics) RecordGPURollback() {
+	atomic.AddUint64(&m.GPURollbacks, 1)
+}
+
+func (m *Metrics) RecordGPUDoubleAssignBlocked() {
+	atomic.AddUint64(&m.GPUDoubleAssignBlock, 1)
+}
+
+func (m *Metrics) RecordCircuitBreaker(event string) {
+	switch event {
+	case "open":
+		atomic.AddUint64(&m.CircuitBreakerOpens, 1)
+	case "reject":
+		atomic.AddUint64(&m.CircuitBreakerRejects, 1)
+	case "reset":
+		atomic.AddUint64(&m.CircuitBreakerResets, 1)
+	}
+}
+
+func (m *Metrics) RecordIdempotencyUnavailable() {
+	atomic.AddUint64(&m.IdempotencyUnavailable, 1)
+}
+
+func (m *Metrics) RecordLeaseShutdown(count int) {
+	atomic.AddUint64(&m.LeasesShutdown, uint64(count))
+}
+
 // --- DRF ---
 
 func (m *Metrics) RecordDRFCheck(allowed bool) {
@@ -614,6 +665,16 @@ func (m *Metrics) ExportPrometheus() string {
 	output += promCounter("ares_checkpoints_recorded_total", "Checkpoints saved", atomic.LoadUint64(&m.CheckpointsRecorded))
 	output += promCounter("ares_checkpoints_restored_total", "Jobs restored from checkpoint", atomic.LoadUint64(&m.CheckpointRestores))
 	output += promCounter("ares_checkpoints_failed_total", "Failed checkpoint operations", atomic.LoadUint64(&m.CheckpointsFailed))
+
+	// Resilience (from bug fixes)
+	output += promCounter("ares_fenced_writes_rejected_total", "Atomic fenced writes rejected by etcd (split-brain prevented)", atomic.LoadUint64(&m.FencedWritesRejected))
+	output += promCounter("ares_gpu_rollbacks_total", "GPU decrements rolled back after local scheduling failure", atomic.LoadUint64(&m.GPURollbacks))
+	output += promCounter("ares_gpu_double_assign_blocked_total", "GPU double-assignment attempts blocked", atomic.LoadUint64(&m.GPUDoubleAssignBlock))
+	output += promCounter("ares_circuit_breaker_opens_total", "Times etcd circuit breaker opened", atomic.LoadUint64(&m.CircuitBreakerOpens))
+	output += promCounter("ares_circuit_breaker_rejects_total", "Requests rejected by open circuit breaker", atomic.LoadUint64(&m.CircuitBreakerRejects))
+	output += promCounter("ares_circuit_breaker_resets_total", "Times circuit breaker reset (etcd recovered)", atomic.LoadUint64(&m.CircuitBreakerResets))
+	output += promCounter("ares_idempotency_unavailable_total", "Idempotency checks failed (Redis down)", atomic.LoadUint64(&m.IdempotencyUnavailable))
+	output += promCounter("ares_leases_shutdown_total", "Leases cancelled during graceful shutdown", atomic.LoadUint64(&m.LeasesShutdown))
 
 	// ── 6. DRF FAIRNESS ──────────────────────────────────────────────────
 	output += promCounter("ares_drf_checks_total", "Total DRF fairness checks", atomic.LoadUint64(&m.DRFChecksTotal))

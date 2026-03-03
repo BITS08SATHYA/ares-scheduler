@@ -7,6 +7,7 @@ import (
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.etcd.io/etcd/client/v3/concurrency"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -26,6 +27,11 @@ type ETCDClient struct {
 	consecutiveFailures int
 	lastFailure         time.Time
 	circuitOpen         bool
+
+	// Circuit breaker metrics (exposed via GetCircuitBreakerStats)
+	cbOpens   uint64
+	cbRejects uint64
+	cbResets  uint64
 }
 
 const (
@@ -80,11 +86,19 @@ func (ec *ETCDClient) checkCircuitBreaker() error {
 			cbCooldownPeriod.Seconds())
 		ec.circuitOpen = false
 		ec.consecutiveFailures = 0
+		atomic.AddUint64(&ec.cbResets, 1)
 		return nil
 	}
 
+	atomic.AddUint64(&ec.cbRejects, 1)
+
 	return fmt.Errorf("circuit breaker OPEN: etcd unreachable (%d consecutive failures, retry in %.0fs)",
 		ec.consecutiveFailures, (cbCooldownPeriod - time.Since(ec.lastFailure)).Seconds())
+}
+
+// GetCircuitBreakerStats: Expose circuit breaker metrics for Prometheus scraping
+func (ec *ETCDClient) GetCircuitBreakerStats() (opens, rejects, resets uint64) {
+	return atomic.LoadUint64(&ec.cbOpens), atomic.LoadUint64(&ec.cbRejects), atomic.LoadUint64(&ec.cbResets)
 }
 
 // recordSuccess: Reset circuit breaker on successful operation
@@ -106,6 +120,7 @@ func (ec *ETCDClient) recordFailure() {
 	ec.lastFailure = time.Now()
 	if ec.consecutiveFailures >= cbFailureThreshold && !ec.circuitOpen {
 		ec.circuitOpen = true
+		atomic.AddUint64(&ec.cbOpens, 1)
 		ec.log.Error("Circuit breaker OPENED: etcd unreachable after %d consecutive failures (cooldown %.0fs)",
 			ec.consecutiveFailures, cbCooldownPeriod.Seconds())
 	}

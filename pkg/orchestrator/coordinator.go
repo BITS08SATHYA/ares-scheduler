@@ -51,6 +51,8 @@ type MetricsRecorder struct {
 	OnJobPriority       func(int)
 	OnSchedulingLatency func(time.Duration)
 	OnFencingTokenSet   func()
+	OnFencingRejected   func() // Fencing check failed (lease lost)
+	OnFencedWriteReject func() // Atomic fenced write rejected by etcd
 	OnJobCompleted      func(bool)
 	OnJobQueued         func()
 	OnJobDequeued       func()
@@ -456,14 +458,12 @@ func (jc *JobCoordinator) MonitorJob(ctx context.Context, jobID string, leaseID 
 // 5. A: Check lease before write → lease expired → ABORT ✓
 // 5. B: Check lease before write → lease ours → proceed ✓
 func (jc *JobCoordinator) checkFencingToken(ctx context.Context, jobID string, leaseID int64) (int64, error) {
-	// This is the CRITICAL check that prevents split-brain
-	// Returns modRevision: the etcd ModRevision of the lease key at check time.
-	// Callers use this in atomic writes (PutIfVersion) to ensure the lease
-	// hasn't changed between the check and the write — closing the TOCTOU gap.
 	modRevision, err := jc.leaseManager.CheckLeaseOwnership(ctx, jobID, leaseID)
 	if err != nil {
 		jc.log.Error("FENCING TRIGGERED: %v", err)
-		// DO NOT UPDATE JOB - prevent split-brain!
+		if jc.metricsRecorder != nil && jc.metricsRecorder.OnFencingRejected != nil {
+			jc.metricsRecorder.OnFencingRejected()
+		}
 		return 0, err
 	}
 
@@ -501,6 +501,9 @@ func (jc *JobCoordinator) SafeUpdateJobStatus(
 	// Atomic fenced write: etcd rejects if lease ModRevision changed since check
 	err = jc.jobStore.SaveJobFenced(ctx, jobRecord, leaseID, modRevision)
 	if err != nil {
+		if jc.metricsRecorder != nil && jc.metricsRecorder.OnFencedWriteReject != nil {
+			jc.metricsRecorder.OnFencedWriteReject()
+		}
 		return err
 	}
 
@@ -544,6 +547,9 @@ func (jc *JobCoordinator) CompleteJob(
 	// Atomic fenced write: etcd rejects if lease ModRevision changed since check
 	err = jc.jobStore.SaveJobFenced(ctx, jobRecord, leaseID, modRevision)
 	if err != nil {
+		if jc.metricsRecorder != nil && jc.metricsRecorder.OnFencedWriteReject != nil {
+			jc.metricsRecorder.OnFencedWriteReject()
+		}
 		return err
 	}
 
@@ -665,6 +671,9 @@ func (jc *JobCoordinator) CancelJob(ctx context.Context, jobID string, leaseID i
 	// Atomic fenced write
 	err = jc.jobStore.SaveJobFenced(ctx, jobRecord, leaseID, modRevision)
 	if err != nil {
+		if jc.metricsRecorder != nil && jc.metricsRecorder.OnFencedWriteReject != nil {
+			jc.metricsRecorder.OnFencedWriteReject()
+		}
 		return fmt.Errorf("fenced save failed: %w", err)
 	}
 

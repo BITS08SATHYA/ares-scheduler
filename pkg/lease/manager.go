@@ -106,11 +106,12 @@ func NewLeaseManager(etcdClient *etcd.ETCDClient, schedulerID string, log Logger
 // Close: Graceful shutdown — cancel all heartbeat goroutines and release leases.
 // Without this, SIGTERM leaves leases orphaned until TTL expires (30s window)
 // during which another scheduler can't acquire those jobs.
-func (lm *LeaseManager) Close() {
+func (lm *LeaseManager) Close() int {
 	lm.mu.Lock()
 	defer lm.mu.Unlock()
 
-	lm.log.Infof("LeaseManager shutting down: cancelling %d active heartbeats", len(lm.heartbeatContexts))
+	count := len(lm.heartbeatContexts)
+	lm.log.Infof("LeaseManager shutting down: cancelling %d active heartbeats", count)
 
 	for jobID, cancel := range lm.heartbeatContexts {
 		cancel()
@@ -123,6 +124,7 @@ func (lm *LeaseManager) Close() {
 	lm.releaseOnces = make(map[string]*sync.Once)
 
 	lm.log.Infof("LeaseManager shutdown complete")
+	return count
 }
 
 // ============================================================================
