@@ -306,3 +306,18 @@ func (ec *ETCDClient) DeleteWithPrefix(ctx context.Context, prefix string) error
 	_, err := ec.cli.Delete(ctx, prefix, clientv3.WithPrefix())
 	return err
 }
+
+// GetWithPrefix returns all values whose keys start with prefix
+func (ec *ETCDClient) GetWithPrefix(ctx context.Context, prefix string) ([]string, error) {
+	resp, err := ec.cli.Get(ctx, prefix, clientv3.WithPrefix())
+	if err != nil {
+		ec.log.Error("Failed to get prefix %s: %v", prefix, err)
+		return nil, fmt.Errorf("prefix get failed: %w", err)
+	}
+
+	values := make([]string, 0, len(resp.Kvs))
+	for _, kv := range resp.Kvs {
+		values = append(values, string(kv.Value))
+	}
+	return values, nil
+}

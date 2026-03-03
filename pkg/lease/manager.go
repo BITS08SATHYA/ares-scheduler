@@ -528,15 +528,62 @@ func isValidTransition(from, to JobState) bool {
 
 // Helper methods (abbreviated for space)
 func (js *JobStore) GetJobsByTenant(ctx context.Context, tenantID string) ([]*JobRecord, error) {
-	return nil, nil // Implementation similar to original
+	allJobs, err := js.listAllJobs(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list jobs: %w", err)
+	}
+
+	result := make([]*JobRecord, 0)
+	for _, job := range allJobs {
+		if job.TenantID == tenantID {
+			result = append(result, job)
+		}
+	}
+	return result, nil
 }
 
 func (js *JobStore) GetJobsByStatus(ctx context.Context, status JobState) ([]*JobRecord, error) {
-	return nil, nil
+	allJobs, err := js.listAllJobs(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list jobs: %w", err)
+	}
+
+	result := make([]*JobRecord, 0)
+	for _, job := range allJobs {
+		if job.Status == status {
+			result = append(result, job)
+		}
+	}
+	return result, nil
 }
 
 func (js *JobStore) DeleteJob(ctx context.Context, jobID string) error {
+	jobKey := fmt.Sprintf("ares:jobs:%s", jobID)
+	err := js.etcdClient.Delete(ctx, jobKey)
+	if err != nil {
+		return fmt.Errorf("delete job %s: %w", jobID, err)
+	}
+	js.log.Infof("deleted job %s", jobID)
 	return nil
+}
+
+// listAllJobs scans all jobs from etcd by prefix
+func (js *JobStore) listAllJobs(ctx context.Context) ([]*JobRecord, error) {
+	kvs, err := js.etcdClient.GetWithPrefix(ctx, "ares:jobs:")
+	if err != nil {
+		return nil, fmt.Errorf("prefix scan: %w", err)
+	}
+
+	jobs := make([]*JobRecord, 0, len(kvs))
+	for _, kv := range kvs {
+		var job JobRecord
+		if err := json.Unmarshal([]byte(kv), &job); err != nil {
+			js.log.Warnf("skipping corrupted job entry: %v", err)
+			continue // Don't fail the whole scan for one bad record
+		}
+		jobs = append(jobs, &job)
+	}
+	return jobs, nil
 }
 
 // ============================================================================
