@@ -86,6 +86,7 @@ type LeaseManager struct {
 	activeLeases      map[string]*LeaseInfo
 	heartbeatTicker   time.Duration
 	heartbeatContexts map[string]context.CancelFunc // Store cancel functions
+	releaseOnces      map[string]*sync.Once
 }
 
 // NewLeaseManager creates a new lease manager with heartbeat
@@ -98,6 +99,7 @@ func NewLeaseManager(etcdClient *etcd.ETCDClient, schedulerID string, log Logger
 		activeLeases:      make(map[string]*LeaseInfo),
 		heartbeatTicker:   10 * time.Second, // Renew every 10 seconds
 		heartbeatContexts: make(map[string]context.CancelFunc),
+		releaseOnces:      make(map[string]*sync.Once),
 	}
 }
 
@@ -167,6 +169,7 @@ func (lm *LeaseManager) AcquireLeaseForJob(ctx context.Context, jobID string) (b
 	// Create cancellable context for hearbeat
 	heartbeatCtx, cancel := context.WithCancel(context.Background())
 	lm.heartbeatContexts[jobID] = cancel
+	lm.releaseOnces[jobID] = &sync.Once{}
 
 	// Start background heartbeat goroutine
 	go lm.runHeartbeat(heartbeatCtx, jobID, leaseID, leaseKey)
@@ -204,7 +207,14 @@ func (lm *LeaseManager) runHeartbeat(
 		case <-ctx.Done():
 			// Context cancelled, (from ReleaseLeaseForJob) -- fixed
 			lm.log.Infof("heartbeat stopping for job %s (context cancelled)", jobID)
-			lm.releaseLease(context.Background(), jobID, leaseID, leaseKey)
+			lm.mu.RLock()
+			once, ok := lm.releaseOnces[jobID]
+			lm.mu.RUnlock()
+			if ok {
+				once.Do(func() {
+					lm.releaseLease(ctx, jobID, leaseID, leaseKey)
+				})
+			}
 			return
 
 		case <-ticker.C:
@@ -228,10 +238,16 @@ func (lm *LeaseManager) runHeartbeat(
 						maxConsecutiveFailures, jobID)
 					// In production: trigger alerting system, graceful shutdown
 					// For now: continue trying
-					lm.releaseLease(ctx, jobID, leaseID, leaseKey)
+					lm.mu.RLock()
+					once, ok := lm.releaseOnces[jobID]
+					lm.mu.RUnlock()
+					if ok {
+						once.Do(func() {
+							lm.releaseLease(ctx, jobID, leaseID, leaseKey)
+						})
+					}
 					return
 				}
-
 				continue
 			} else {
 				// only runs when renewal ACTUALLY succeeded
@@ -328,7 +344,22 @@ func (lm *LeaseManager) ReleaseLeaseForJob(ctx context.Context, jobID string) er
 		lm.log.Debugf("heartbeat stopped for job %s", jobID)
 	}
 
-	return lm.releaseLease(ctx, jobID, info.LeaseID, fmt.Sprintf("ares:leases:%s", jobID))
+	leaseKey := fmt.Sprintf("ares:leases:%s", jobID)
+	lm.mu.RLock()
+	once, ok := lm.releaseOnces[jobID]
+	lm.mu.RUnlock()
+	if ok {
+		once.Do(func() {
+			lm.releaseLease(ctx, jobID, info.LeaseID, leaseKey)
+		})
+	}
+
+	// Clean up to prevent memory leak over thousands of jobs
+	lm.mu.Lock()
+	delete(lm.releaseOnces, jobID)
+	lm.mu.Unlock()
+
+	return nil
 }
 
 func (lm *LeaseManager) releaseLease(
