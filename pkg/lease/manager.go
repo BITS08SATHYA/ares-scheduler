@@ -233,22 +233,21 @@ func (lm *LeaseManager) runHeartbeat(
 					return
 				}
 
-				//continue
+				continue
+			} else {
+				// only runs when renewal ACTUALLY succeeded
+				consecutiveFailures = 0
+
+				lm.mu.Lock()
+				if info, ok := lm.activeLeases[jobID]; ok {
+					info.LastRenewedAt = time.Now()
+					info.ExpiresAt = time.Now().Add(time.Duration(lm.leaseTTL) * time.Second)
+					info.RenewalAttempts++
+				}
+				lm.mu.Unlock()
+
+				lm.log.Infof("heartbeat renewed lease for job %s (leaseID=%d)", jobID, leaseID)
 			}
-
-			// Success: renewal worked
-			consecutiveFailures = 0
-
-			// Update lease info
-			lm.mu.Lock()
-			if info, ok := lm.activeLeases[jobID]; ok {
-				info.LastRenewedAt = time.Now()
-				info.ExpiresAt = time.Now().Add(time.Duration(lm.leaseTTL) * time.Second)
-				info.RenewalAttempts++
-			}
-			lm.mu.Unlock()
-
-			lm.log.Infof("heartbeat renewed lease for job %s (leaseID=%d)", jobID, leaseID)
 		}
 	}
 }
