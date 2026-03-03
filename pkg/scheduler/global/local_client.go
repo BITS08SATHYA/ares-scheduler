@@ -61,7 +61,7 @@ func NewLocalSchedulerClient() *LocalSchedulerClient {
 	return &LocalSchedulerClient{
 		httpClient: &http.Client{
 			Transport: tr,
-			Timeout:   60 * time.Second,
+			Timeout:   10 * time.Second, // 10s timeout for scheduling calls (was 60s)
 		},
 		log: logger.Get(),
 	}

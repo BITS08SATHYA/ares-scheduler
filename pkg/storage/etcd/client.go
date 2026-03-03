@@ -6,6 +6,7 @@ import (
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/logger"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.etcd.io/etcd/client/v3/concurrency"
+	"sync"
 	"time"
 )
 
@@ -16,7 +17,21 @@ type ETCDClient struct {
 	timeout    time.Duration
 	log        *logger.Logger
 	leaseRenew time.Duration
+
+	// Circuit breaker: prevents cascading failures during etcd outages.
+	// After consecutiveFailures hits threshold, the breaker opens and
+	// all operations fail fast for the cooldown period instead of
+	// waiting for timeout on every call.
+	cbMu                sync.Mutex
+	consecutiveFailures int
+	lastFailure         time.Time
+	circuitOpen         bool
 }
+
+const (
+	cbFailureThreshold = 5                // Open circuit after 5 consecutive failures
+	cbCooldownPeriod   = 10 * time.Second // Stay open for 10 seconds before retrying
+)
 
 // NewETCDClient: Create a new etcd client
 func NewETCDClient(endpoints []string, timeout time.Duration) (*ETCDClient, error) {
@@ -48,17 +63,70 @@ func (ec *ETCDClient) Close() error {
 	return ec.cli.Close()
 }
 
+// checkCircuitBreaker: Fail fast if etcd is known to be down.
+// Returns error if circuit is open (etcd recently failed repeatedly).
+// After cooldown period, allows one request through (half-open state).
+func (ec *ETCDClient) checkCircuitBreaker() error {
+	ec.cbMu.Lock()
+	defer ec.cbMu.Unlock()
+
+	if !ec.circuitOpen {
+		return nil
+	}
+
+	// Check if cooldown period has elapsed (half-open: allow one retry)
+	if time.Since(ec.lastFailure) > cbCooldownPeriod {
+		ec.log.Info("Circuit breaker half-open: allowing retry after %.0fs cooldown",
+			cbCooldownPeriod.Seconds())
+		ec.circuitOpen = false
+		ec.consecutiveFailures = 0
+		return nil
+	}
+
+	return fmt.Errorf("circuit breaker OPEN: etcd unreachable (%d consecutive failures, retry in %.0fs)",
+		ec.consecutiveFailures, (cbCooldownPeriod - time.Since(ec.lastFailure)).Seconds())
+}
+
+// recordSuccess: Reset circuit breaker on successful operation
+func (ec *ETCDClient) recordSuccess() {
+	ec.cbMu.Lock()
+	defer ec.cbMu.Unlock()
+	if ec.consecutiveFailures > 0 {
+		ec.log.Info("Circuit breaker: etcd recovered (resetting after %d failures)", ec.consecutiveFailures)
+	}
+	ec.consecutiveFailures = 0
+	ec.circuitOpen = false
+}
+
+// recordFailure: Track failure and potentially open circuit breaker
+func (ec *ETCDClient) recordFailure() {
+	ec.cbMu.Lock()
+	defer ec.cbMu.Unlock()
+	ec.consecutiveFailures++
+	ec.lastFailure = time.Now()
+	if ec.consecutiveFailures >= cbFailureThreshold && !ec.circuitOpen {
+		ec.circuitOpen = true
+		ec.log.Error("Circuit breaker OPENED: etcd unreachable after %d consecutive failures (cooldown %.0fs)",
+			ec.consecutiveFailures, cbCooldownPeriod.Seconds())
+	}
+}
+
 // ============================================================================
 // BASIC OPERATIONS
 // ============================================================================
 
 // Put: Store a key-value pair
 func (ec *ETCDClient) Put(ctx context.Context, key, value string) error {
+	if err := ec.checkCircuitBreaker(); err != nil {
+		return err
+	}
 	_, err := ec.cli.Put(ctx, key, value)
 	if err != nil {
+		ec.recordFailure()
 		ec.log.Error("Failed to put key %s: %v", key, err)
 		return err
 	}
+	ec.recordSuccess()
 	ec.log.Debug("Put key: %s", key)
 	return nil
 }
@@ -142,6 +210,10 @@ func (ec *ETCDClient) Get(ctx context.Context, key string) (string, error) {
 
 	ec.log.Debug("Entered Get Etcd Method()")
 
+	if err := ec.checkCircuitBreaker(); err != nil {
+		return "", err
+	}
+
 	getCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 
@@ -150,9 +222,12 @@ func (ec *ETCDClient) Get(ctx context.Context, key string) (string, error) {
 	ec.log.Debug("Get Response: %s", resp)
 
 	if err != nil {
+		ec.recordFailure()
 		ec.log.Error("Failed to get key %s: %v", key, err)
 		return "", err
 	}
+
+	ec.recordSuccess()
 
 	if len(resp.Kvs) == 0 {
 		ec.log.Debug("Key not found: %s", key)

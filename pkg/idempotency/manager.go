@@ -59,9 +59,12 @@ func (im *IdempotencyManager) CheckDuplicate(ctx context.Context, requestID stri
 	// Try to get from cache (O(1) operation, <1ms)
 	cached, err := im.redisClient.Get(ctx, dedupeKey)
 	if err != nil {
-		// Cache error - log but don't fail (proceed with normal processing)
-		im.log.Warn("Failed to check dedup cache: %v", err)
-		return nil, false, nil
+		// CRITICAL: Redis failure breaks idempotency guarantees.
+		// If we return "not a duplicate", every retry creates a new job.
+		// Better to fail the request and let the client retry with
+		// the same request ID once Redis recovers.
+		im.log.Error("Idempotency check failed (Redis unreachable): %v", err)
+		return nil, false, fmt.Errorf("idempotency check unavailable (Redis error): %w", err)
 	}
 
 	// Cache hit: request was already processed

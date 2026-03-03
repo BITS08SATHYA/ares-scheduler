@@ -422,7 +422,7 @@ func (gs *GlobalScheduler) ScheduleJob(
 			ctx,
 			jobRecord.Spec.TenantID,
 			jobRecord.Spec.GPUCount,
-			jobRecord.Spec.CPUMillis/1000,           // Convert millicores to cores
+			jobRecord.Spec.CPUMillis/1000, // Convert millicores to cores
 			float64(jobRecord.Spec.MemoryMB)/1024.0, // Convert MB to GB
 		)
 		if !drfDecision.Allowed {
@@ -1233,6 +1233,12 @@ func (gs *GlobalScheduler) scheduleGangJob(
 	}
 
 	// Return a decision indicating gang is pending coordination
+	// TODO: After SubmitGang, check if all members have arrived and call
+	// gs.gangManager.TryScheduleGang() to actually place the gang.
+	// Currently the gang stays in "pending" forever because nothing triggers
+	// scheduling after the last member registers. Needs a background goroutine
+	// or a check here: if gangState.PendingCount == 0, call TryScheduleGang.
+	// Requires node resource aggregation across clusters (Phase 2).
 	return &cluster.GlobalSchedulingDecision{
 		JobID:            jobRecord.ID,
 		ClusterID:        "gang-pending",

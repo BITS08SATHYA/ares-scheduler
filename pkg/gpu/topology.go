@@ -815,9 +815,17 @@ func (gtm *GPUTopologyManager) generateGPUCombinations(
 		return result
 	}
 
+	// Cap combinations to prevent OOM on large GPU counts.
+	// C(64,8) = 4.4 billion — will OOM. C(16,4) = 1820 — fine.
+	// For large sets, we sample instead of enumerating all combinations.
+	const maxCombinations = 10000
+
 	var result [][]*common.GPUDevice
 	var combine func(int, []*common.GPUDevice)
 	combine = func(start int, current []*common.GPUDevice) {
+		if len(result) >= maxCombinations {
+			return // Stop early — we have enough candidates
+		}
 		if len(current) == size {
 			combo := make([]*common.GPUDevice, len(current))
 			copy(combo, current)
@@ -831,6 +839,13 @@ func (gtm *GPUTopologyManager) generateGPUCombinations(
 	}
 
 	combine(0, make([]*common.GPUDevice, 0, size))
+
+	if len(result) >= maxCombinations {
+		gtm.log.Warn("GPU combinations capped at %d (total GPUs=%d, requested=%d). "+
+			"Scoring subset — optimal placement not guaranteed for large GPU pools.",
+			maxCombinations, len(gpus), size)
+	}
+
 	return result
 }
 

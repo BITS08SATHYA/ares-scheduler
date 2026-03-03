@@ -17,6 +17,19 @@ import (
 )
 
 // ============================================================================
+// HELPERS
+// ============================================================================
+
+// contextWithCleanupTimeout: Creates a bounded context for cleanup operations.
+// Cleanup (lease release, job save on error) must not use the parent context
+// because the parent may already be cancelled. But context.Background() with no
+// timeout can hang forever if etcd is unreachable. This gives cleanup 5 seconds.
+func contextWithCleanupTimeout() context.Context {
+	ctx, _ := context.WithTimeout(context.Background(), 5*time.Second)
+	return ctx
+}
+
+// ============================================================================
 // JOB COORDINATOR (Layer 10) - CORRECTED WITH FENCING TOKENS
 // ============================================================================
 // Orchestrates: Dedup → Lease → Persist → Schedule → Execute
@@ -197,7 +210,7 @@ func (jc *JobCoordinator) ScheduleJob(
 		if jc.metricsRecorder != nil && jc.metricsRecorder.OnJobQueued != nil {
 			jc.metricsRecorder.OnJobQueued()
 		}
-		jc.jobStore.SaveJob(context.Background(), jobRecord, leaseID)
+		jc.jobStore.SaveJob(contextWithCleanupTimeout(), jobRecord, leaseID)
 
 		// Return success to the user — job is accepted but queued
 		return &SchedulingResult{
@@ -237,7 +250,7 @@ func (jc *JobCoordinator) ScheduleJob(
 	// Ensure we release lease on error
 	defer func() {
 		if err != nil {
-			err := jc.leaseManager.ReleaseLeaseForJob(context.Background(), jobID)
+			err := jc.leaseManager.ReleaseLeaseForJob(contextWithCleanupTimeout(), jobID)
 			if err != nil {
 				return
 			}
@@ -376,7 +389,7 @@ func (jc *JobCoordinator) MonitorJob(ctx context.Context, jobID string, leaseID 
 				if jc.metricsRecorder != nil && jc.metricsRecorder.OnJobE2ELatency != nil {
 					jc.metricsRecorder.OnJobE2ELatency(time.Since(jobRecord.SubmitTime))
 				}
-				jc.leaseManager.ReleaseLeaseForJob(context.Background(), jobID)
+				jc.leaseManager.ReleaseLeaseForJob(contextWithCleanupTimeout(), jobID)
 				return nil
 			}
 
@@ -389,7 +402,7 @@ func (jc *JobCoordinator) MonitorJob(ctx context.Context, jobID string, leaseID 
 					jc.log.Info("Job %s failed, auto-retrying (attempt %d/%d)",
 						jobID, jobRecord.Attempts+1, jobRecord.Spec.MaxRetries)
 					go func() {
-						retryErr := jc.RetryJob(context.Background(), jobID, leaseID)
+						retryErr := jc.RetryJob(contextWithCleanupTimeout(), jobID, leaseID)
 						if retryErr != nil {
 							jc.log.Error("Auto-retry failed for job %s: %v", jobID, retryErr)
 						}
@@ -397,7 +410,7 @@ func (jc *JobCoordinator) MonitorJob(ctx context.Context, jobID string, leaseID 
 					return nil // Stop monitoring this instance, retry creates new monitor
 				}
 				jc.log.Info("Job %s failed (no retries left)", jobID)
-				jc.leaseManager.ReleaseLeaseForJob(context.Background(), jobID)
+				jc.leaseManager.ReleaseLeaseForJob(contextWithCleanupTimeout(), jobID)
 				return nil
 			}
 
@@ -416,7 +429,7 @@ func (jc *JobCoordinator) MonitorJob(ctx context.Context, jobID string, leaseID 
 				if jc.metricsRecorder != nil && jc.metricsRecorder.OnJobCompleted != nil {
 					jc.metricsRecorder.OnJobCompleted(false)
 				}
-				jc.leaseManager.ReleaseLeaseForJob(context.Background(), jobID)
+				jc.leaseManager.ReleaseLeaseForJob(contextWithCleanupTimeout(), jobID)
 				return fmt.Errorf("job timeout")
 			}
 		}

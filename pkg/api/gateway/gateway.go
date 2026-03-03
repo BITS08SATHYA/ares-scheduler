@@ -1324,12 +1324,21 @@ func (ag *APIGateway) Stop(timeout time.Duration) error {
 	}
 
 	ag.log.Info("Shutting down API Gateway...")
+
+	// Stop accepting new requests
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	if err := ag.server.Shutdown(ctx); err != nil {
 		ag.log.Error("Server shutdown error: %v", err)
 		return err
+	}
+
+	// Release all leases so jobs can be rescheduled immediately
+	// Without this, leases expire via TTL (30s) during which jobs are orphaned
+	if ag.leaseManager != nil {
+		ag.leaseManager.Close()
+		ag.log.Info("✓ Lease manager shutdown — all heartbeats cancelled")
 	}
 
 	ag.log.Info("✓ API Gateway stopped")

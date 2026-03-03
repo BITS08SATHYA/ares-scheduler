@@ -103,6 +103,28 @@ func NewLeaseManager(etcdClient *etcd.ETCDClient, schedulerID string, log Logger
 	}
 }
 
+// Close: Graceful shutdown — cancel all heartbeat goroutines and release leases.
+// Without this, SIGTERM leaves leases orphaned until TTL expires (30s window)
+// during which another scheduler can't acquire those jobs.
+func (lm *LeaseManager) Close() {
+	lm.mu.Lock()
+	defer lm.mu.Unlock()
+
+	lm.log.Infof("LeaseManager shutting down: cancelling %d active heartbeats", len(lm.heartbeatContexts))
+
+	for jobID, cancel := range lm.heartbeatContexts {
+		cancel()
+		lm.log.Infof("Cancelled heartbeat for job %s", jobID)
+	}
+
+	// Clear maps so no goroutine can reference stale state
+	lm.heartbeatContexts = make(map[string]context.CancelFunc)
+	lm.activeLeases = make(map[string]*LeaseInfo)
+	lm.releaseOnces = make(map[string]*sync.Once)
+
+	lm.log.Infof("LeaseManager shutdown complete")
+}
+
 // ============================================================================
 // LEASE ACQUISITION WITH HEARTBEAT (CRITICAL FIX)
 // ============================================================================
@@ -272,7 +294,6 @@ func (lm *LeaseManager) runHeartbeat(
 // ============================================================================
 
 // CheckLeaseOwnership: Verify we still own the lease (FENCING)
-//
 // CRITICAL: Call this BEFORE writing job results
 // If we lost the lease, another executor claimed the job
 // Return error to ABORT the write (prevent split-brain)
