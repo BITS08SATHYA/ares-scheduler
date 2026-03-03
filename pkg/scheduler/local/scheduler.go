@@ -172,7 +172,6 @@ func (ls *LocalScheduler) UpdateNodeState(ctx context.Context, node *NodeState) 
 
 	_, exists := ls.nodes[node.NodeID]
 	if !exists {
-		ls.nodesMu.Unlock()
 		return fmt.Errorf("node not registered: %s", node.NodeID)
 	}
 
