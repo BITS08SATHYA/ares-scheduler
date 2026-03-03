@@ -469,6 +469,21 @@ func (gs *GlobalScheduler) ScheduleJob(
 		}
 	}
 
+	// Rollback function: restore optimistic GPU decrement if local scheduling fails
+	// SelectBestCluster already decremented bestCluster.AvailableGPUs to prevent
+	// double-booking during rapid scheduling bursts. If local scheduling fails
+	// (HTTP timeout, node unhealthy, GPU taken), we must restore the count.
+	// Without rollback, counter drifts to zero and scheduling breaks until
+	// the next heartbeat reconciliation (every 10s).
+	rollbackGPUs := func() {
+		gs.clustersMu.Lock()
+		bestCluster.AvailableGPUs += jobRecord.Spec.GPUCount
+		bestCluster.RunningJobsCount -= 1
+		gs.clustersMu.Unlock()
+		gs.log.Info("Rolled back optimistic GPU decrement for cluster %s (+%d GPUs)",
+			bestCluster.ClusterID, jobRecord.Spec.GPUCount)
+	}
+
 	// Step 2
 	// NEW: Call LocalScheduler via HTTP
 	localClient := NewLocalSchedulerClient()
@@ -481,6 +496,7 @@ func (gs *GlobalScheduler) ScheduleJob(
 	gs.log.Debug("Local Scheduler ScheduleJob returned: %v", localDecision)
 
 	if err != nil {
+		rollbackGPUs()
 		gs.log.Error("Local scheduling failed: %v", err)
 		gs.recordSchedulingFailure()
 		return nil, fmt.Errorf("local scheduling failed: %w", err)
