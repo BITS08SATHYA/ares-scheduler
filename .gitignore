@@ -7,6 +7,12 @@
 bin/
 build/
 
+# Built scheduler binaries (go build output)
+/global
+/local
+/ares-global
+/ares-local
+
 # Go
 *.test
 *.out
@@ -24,12 +30,10 @@ go.work
 .DS_Store
 Thumbs.db
 
-# Env
+# Env / secrets
 .env
 *.pem
 *.key
 
-# AWS scripts
+# AWS/GCP scripts (user-specific)
 aws_gpu_node
-
-#k8s
