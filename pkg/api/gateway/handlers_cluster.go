@@ -188,7 +188,6 @@ func (ag *APIGateway) handleRegisterCluster(w http.ResponseWriter, r *http.Reque
 // ============================================================================
 // HANDLER: POST /clusters/deregister
 // ============================================================================
-
 func (ag *APIGateway) handleDeregisterCluster(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		ag.respondError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED",
@@ -229,7 +228,7 @@ func (ag *APIGateway) handleDeregisterCluster(w http.ResponseWriter, r *http.Req
 
 	ag.metrics.RecordClusterLeave()
 
-	ag.log.Info("CLUSTER REGISTRATION COMPLETE: %s", response.ClusterID)
+	ag.log.Info("CLUSTER DE-REGISTRATION COMPLETE: %s", response.ClusterID)
 }
 
 // ============================================================================
