@@ -1,453 +1,443 @@
-# Ares: Production-Grade Distributed GPU Scheduler
-
 <div align="center">
 
-**Multi-cluster, SLA-aware Kubernetes scheduler with exactly-once semantics**
+# Ares: Distributed GPU Scheduler for Kubernetes
 
-[![Build Status](https://img.shields.io/badge/build-passing-brightgreen)]()
-[![Go Version](https://img.shields.io/badge/go-1.21+-blue)]()
+**Multi-cluster scheduling with exactly-once execution, GPU topology optimization, CRDT-based consistency 
+and Gang Scheduling.**
+
+**27,000+ lines of Go · 48 files · 157 commits**
+
+[![Go](https://img.shields.io/badge/Go-1.21+-00ADD8?logo=go&logoColor=white)]()
 [![License](https://img.shields.io/badge/license-MIT-blue)]()
-[![Progress](https://img.shields.io/badge/progress-85%25-yellow)]()
+[![Tests](https://img.shields.io/badge/tests-3%2C973_lines-brightgreen)]()
 
-[Features](#-features) • [Quick Start](#-quick-start) • [Architecture](#-architecture) • [Roadmap](#-roadmap)
+[Architecture](#architecture) · [Features](#features) · [Quick Start](#-quick-start) · [Deep Dives](#-technical-deep-dives) · [Blog](https://sathyanyu.substack.com)
 
 </div>
 
 ---
 
-## 🎯 What is Ares?
+## The Problem
 
-Ares is a **distributed GPU scheduler** built from scratch to demonstrate production-grade distributed systems engineering. 
-Unlike typical academic projects, Ares implements real-world distributed systems patterns used at meta, Google, Netflix, 
-and Uber.
+GPU clusters are expensive. A single p4d.24xlarge (8× A100 GPUs) costs $22.77/hour.
 
-**The Challenge**: Schedule GPU workloads across multiple Kubernetes clusters while guaranteeing:
-- ✅ **Exactly-once execution** [Exactly-Once Feature](docs/exactly-once.md) - Jobs never run twice, even under failures 
-- ✅ **Multi-Cluster Coordination** [Multi-Cluster Coordination](docs/exactly-once.md) - Intelligently Placing the job (pod) in the cluster with highest score
-- ✅ **GPU topology awareness** [GPU Topology (with Limitations)](docs/exactly-once.md) - 3-5x speedup through intelligent placement
-- ✅ **Fault tolerance** [Fault Tolerance](docs/exactly-once.md) - Survives network partitions and crashes
-- ✅ **SLA guarantees**  - Meet deadlines with priority scheduling
+When your scheduler places two GPUs on opposite sides of a PCIe bus instead of an NVLink bridge, your distributed training job communicates at 16 GB/s instead of 600 GB/s. You just turned a 3-hour job into a 10-hour job and burned $230 for nothing.
 
-**The Result**: A scheduler that demonstrates L4/L5 engineering capabilities through deep distributed systems thinking.
+It gets worse at scale. When jobs span multiple clusters, you need coordination. When workers crash mid-execution, you need guarantees. When the network partitions, you need the system to keep working.
 
----
+**Ares solves this.** It is a distributed GPU scheduler built from scratch that handles:
 
-## 🚀 Why Ares Matters
+- ✅ **[Exactly-once execution](#exactly-once-execution)** — Jobs never run twice, even when workers crash, networks partition, or clients retry. Three-layer defense: Redis idempotency → etcd distributed leases → fencing tokens.
 
-### The Problem with Naive Scheduling
+- ✅ **[GPU topology-aware placement](#gpu-topology-aware-placement)** — Parses `nvidia-smi` topology matrices, builds NVLink connection graphs, and scores every placement candidate. NVLink-connected GPUs get placed together; PCIe fallback is penalized.
 
-```
-❌ NAIVE APPROACH:
-   Random GPU placement → PCIe communication (16 GB/s)
-   Training time: 10 hours
-   Cost: $400
+- ✅ **[Multi-cluster coordination](#multi-cluster-coordination)** — Global scheduler scores clusters by available capacity, GPU match, and health. Local schedulers handle per-cluster placement. Tested across GKE and AWS EKS.
 
-✅ ARES APPROACH:
-   Topology-aware placement → NVLink communication (600 GB/s)
-   Training time: 3 hours  
-   Cost: $120
-   
-   SAVINGS: 70% faster, $280 saved per job
-```
+- ✅ **[Gang scheduling](#gang-scheduling)** — All-or-nothing resource allocation for distributed training. Either all N workers get GPUs simultaneously, or none run. Prevents deadlocks where two jobs each hold half the resources.
 
-### The Exactly-Once Problem
+- ✅ **[CRDT-based consistency](#crdt-based-consistency)** — Vector clocks, LWW-registers, and OR-Sets enable independent updates across control planes that merge without conflicts. Based on Shapiro et al. (INRIA, 2011).
 
-```
-❌ WITHOUT EXACTLY-ONCE:
-   Network timeout → Client retries → Job runs twice
-   Result: Wasted compute, duplicate results, $$$
+- ✅ **[DRF fair scheduling](#drf-fair-scheduling)** — Dominant Resource Fairness prevents any single tenant from monopolizing GPUs. Based on Ghodsi et al. (NSDI, 2011).
 
-✅ WITH ARES:
-   Fencing tokens + distributed leases + idempotency
-   Result: Job runs exactly once, guaranteed
-```
+- ✅ **[Priority preemption](#priority-preemption)** — High-priority jobs evict lower-priority ones with configurable grace periods, rate limits, and cascade prevention.
+
+- ✅ **[Checkpoint & recovery](#checkpoint--recovery)** — Jobs save progress to shared storage and resume after crashes or preemptions. Completes the reliability chain: exactly-once → retry → preempt → resume.
+
+- ✅ **[Cluster autonomy](#cluster-autonomy)** — Local schedulers continue operating when the global control plane is unreachable. No single point of failure.
+
+- ✅ **[Observability](#observability)** — Prometheus metrics across 7 subsystems (HTTP API, scheduling, clusters, GPU topology, reliability, DRF fairness, CRDT sync). Grafana dashboards via K8s-native deployment.
 
 ---
 
-## 🏛️ Architecture
+## Architecture
 
-### High-Level Design
+```
+                         ┌──────────────────────────────────┐
+                         │        API Gateway (8080)        │
+                         │   Rate limiting · Auth · Metrics │
+                         └──────────────┬───────────────────┘
+                                        │
+                         ┌──────────────▼───────────────────┐
+                         │       Global Scheduler           │
+                         │  Cluster scoring · DRF · Gang    │
+                         │  Preemption · CRDT sync          │
+                         └──────┬───────────────┬───────────┘
+                                │               │
+                    ┌───────────▼──┐      ┌─────▼──────────┐
+                    │  Cluster A   │      │   Cluster B    │
+                    │  (GKE)       │      │   (AWS EKS)    │
+                    │              │      │                │
+                    │ Local Sched  │      │  Local Sched   │
+                    │ GPU Topology │      │  GPU Topology  │
+                    │ Executor     │      │  Executor      │
+                    │ Lease Mgr    │      │  Lease Mgr     │
+                    └──────────────┘      └────────────────┘
+                    
+Storage: etcd (leases, consensus) · Redis (idempotency, caching)
+```
 
 ![Sequence Diagram](docs/diagrams/Ares_Architecture-Page-2.png)
 
-**Key Innovations:**
+### How a Job Flows Through Ares
 
-1. **Three-Layer Exactly-Once Defense**
-   - Layer 1: Client-side request deduplication (Redis)
-   - Layer 2: Distributed leasing (etcd)
-   - Layer 3: Fencing tokens (monotonic counters)
-
-   **[→ Deep dive: Exactly-once semantics](docs/exactly-once.md)**
-
-2. **GPU Topology-Aware Placement**
-   - NVLink connection graph parsing
-   - Placement scoring algorithm (NVLink +50, PCIe -30)
-   - Optimal GPU selection for multi-GPU jobs
-
-   **[→ Deep dive: GPU topology](docs/gpu-topology.md)**
-
-3. **Distributed Consensus**
-   - etcd for strong consistency
-   - Lease-based coordination
-   - Split-brain prevention
-
-   **[→ Deep dive: Architecture](docs/distributed-consensus.md)**
+1. **Client submits** job with a `RequestID` via the API Gateway
+2. **Idempotency check** — Redis lookup: has this `RequestID` been seen before? If yes, return the existing `JobID`. No duplicate work.
+3. **Global scheduler** scores every registered cluster: available GPUs, GPU model match, current load, health status
+4. **DRF check** — Is this tenant's dominant resource share below fairness threshold? If not, queue the job.
+5. **Gang check** — If this job is part of a gang (e.g., 4-worker distributed training), hold until all members can be co-scheduled
+6. **Cluster selected** → request forwarded to the winning cluster's local scheduler
+7. **Local scheduler** runs GPU topology scoring: parse NVLink graph, evaluate all candidate placements, pick the highest-scoring set
+8. **Lease acquired** — etcd distributed lease with TTL. Only one worker can hold the lease. Fencing token issued.
+9. **Executor** creates the Kubernetes pod with GPU resource requests, checkpoint env vars, and the fencing token
+10. **Heartbeat loop** — Worker renews lease every N seconds. If renewal fails 3 consecutive times, lease is released via `sync.Once` (no double-release)
+11. **Job completes** — Result committed with fencing token validation (atomic compare-and-swap on etcd `ModRevision`). State transitions to `SUCCEEDED` or `FAILED`.
 
 ---
 
-## ✨ Features
+## Features
 
-### 🎯 Implemented (14/26 features - 53% complete)
+### Codebase Breakdown
 
-| Category                              | Feature | Impact |
-|---------------------------------------|---------|--------|
-| **Exactly-once Execution Guarantees** | Exactly-once semantics | Zero duplicate executions under any failure scenario |
-| **GPU Intelligence**                  | Topology-aware placement | 3-5x training speedup, 70% cost reduction |
-| **Reliability**                       | Exponential backoff retries | Resilient to transient failures |
-| **Distributed Coordination**          | etcd-based distributed locking | Prevents split-brain scenarios |
-| **Job Management**                    | Full lifecycle state machine | PENDING → RUNNING → SUCCEEDED/FAILED |
+| Package | Lines | What It Does |
+|---------|-------|-------------|
+| `pkg/scheduler/` | 5,119 | Global scheduler, local scheduler, DRF, preemption, gang scheduling |
+| `pkg/api/` | 2,922 | API gateway, HTTP handlers, Prometheus metrics (714 lines covering 7 subsystems) |
+| `pkg/cluster/` | 2,782 | Cluster manager, registry, health monitor, heartbeat agent, autonomy engine, auto-registration |
+| `pkg/gpu/` | 1,897 | GPU discovery (`nvidia-smi` parsing), topology scoring (NVLink graph, placement algorithm) |
+| `pkg/executor/` | 1,801 | Job execution engine, K8s pod management, fencing token validation |
+| `pkg/crdt/` | 1,553 | Vector clocks, LWW-registers, OR-Sets, cluster/job state CRDTs, cross-cluster sync |
+| `pkg/job/` | 961 | Job model (state machine), persistent store (etcd-backed) |
+| `pkg/orchestrator/` | 828 | Multi-cluster coordination |
+| `pkg/lease/` | 652 | Distributed lease manager, heartbeat renewal, `sync.Once` release safety |
+| `pkg/storage/` | 784 | etcd client (leases, CAS writes), Redis client (caching, idempotency) |
+| `pkg/checkpoint/` | 307 | Checkpoint metadata management, S3 path injection |
+| `pkg/queue/` | 321 | Priority job queue |
+| `pkg/idempotency/` | 297 | Request deduplication (Redis-backed) |
+| `cmd/` | 2,701 | Global entry point, local entry point, benchmark suite (1,576 lines), test harness |
+| `tests/unit/` | 3,973 | Unit tests: idempotency, leases, storage (etcd + Redis), GPU discovery, GPU topology, API gateway |
+| **Total** | **27,334** | |
 
-**[→ See all 26 features in detail](docs/features.md)**
+### Exactly-Once Execution
 
-### 🚧 In Progress (Next 4 weeks)
--  Fair resource allocation (DRF)
--  Prometheus + Grafana observability 
--  Unified Dashboard
-- Health Dashboard
-- checkpoint & Recovery
-- ️Priority scheduling with preemption 
+**The problem**: A client submits a training job. The network times out. The client retries. Without protection, the job runs twice — wasting $400 of GPU compute and producing duplicate results.
 
+**Ares uses three independent layers**, any one of which prevents duplicates:
 
-### 🔮 Planned (Phase 2-3)
+```
+Layer 1: REQUEST DEDUPLICATION (Redis)
+   Client sends RequestID: "req-abc-123"
+   Redis: Have I seen "req-abc-123" before?
+   → Yes: Return existing JobID. Done.
+   → No:  Store mapping, proceed to Layer 2.
 
+Layer 2: DISTRIBUTED LEASING (etcd)
+   Before executing, worker acquires a lease:
+   etcd key: /ares/leases/job-xyz
+   TTL: 30 seconds, renewed via heartbeat
+   → Only ONE worker can hold this lease at a time.
+   → If worker crashes, lease expires. New worker picks up.
 
-- Cluster Autonomy
-- NUMA & memory bandwidth awareness
-- Eventual Consistency
-- Network Bandwidth Awareness
-- Heterogeneous Hardware (FPGA and TPU)
-- RBAC + tenant isolation
-- Audit Logging
+Layer 3: FENCING TOKENS (monotonic counters)
+   Each lease gets a fencing token (e.g., token=7).
+   When committing results, worker sends token=7.
+   etcd: Is token=7 still the current token?
+   → Yes: Commit result. Done.
+   → No:  Reject. A newer worker (token=8) took over.
+   Implemented via atomic compare-and-swap on etcd ModRevision.
+```
 
-**[→ Full roadmap](docs/features.md#roadmap)**
+**Why three layers?** Because no single layer handles all failure modes. Redis handles client retries. etcd leases handle worker crashes. Fencing tokens handle the zombie worker problem — a slow worker that lost its lease but doesn't know it yet, trying to commit stale results.
+
+[→ Deep dive: docs/exactly-once.md](docs/exactly-once.md)
+
+### GPU Topology-Aware Placement
+
+**The problem**: An 8-GPU server (like p4d.24xlarge) has two CPU sockets, each with 4 GPUs. GPUs within the same socket communicate via NVLink at 600 GB/s. GPUs across sockets communicate via PCIe at 16 GB/s. That's a **37.5× bandwidth difference** for the same server.
+
+**Ares parses the actual GPU topology** from `nvidia-smi topo --matrix` and builds a connection graph:
+
+```
+GPU Topology (p4d.24xlarge, 8× A100):
+
+      GPU0  GPU1  GPU2  GPU3  GPU4  GPU5  GPU6  GPU7
+GPU0   X    NV12  NV12  NV12  SYS   SYS   SYS   SYS
+GPU1  NV12   X    NV12  NV12  SYS   SYS   SYS   SYS
+GPU2  NV12  NV12   X    NV12  SYS   SYS   SYS   SYS
+GPU3  NV12  NV12  NV12   X    SYS   SYS   SYS   SYS
+GPU4  SYS   SYS   SYS   SYS   X    NV12  NV12  NV12
+GPU5  SYS   SYS   SYS   SYS  NV12   X    NV12  NV12
+GPU6  SYS   SYS   SYS   SYS  NV12  NV12   X    NV12
+GPU7  SYS   SYS   SYS   SYS  NV12  NV12  NV12   X
+
+NV12 = NVLink (600 GB/s)    SYS = Cross-socket/PCIe (16 GB/s)
+```
+
+**Scoring algorithm**:
+```
+For a 2-GPU job requesting A100s:
+
+  Candidate [GPU0, GPU1]: NVLink connection → +50 points     = 50
+  Candidate [GPU0, GPU4]: Cross-socket      → -30 points     = -30
+  Candidate [GPU2, GPU3]: NVLink connection → +50 points      = 50
+  
+  Winner: GPU0 + GPU1 (or GPU2 + GPU3) — both use NVLink.
+  Avoided: GPU0 + GPU4 — would force PCIe communication.
+```
+
+**Current status**: Topology parsing and scoring work with mock GPUs and real `nvidia-smi` output. NCCL `all_reduce_perf` benchmarks on p4d.24xlarge are the next milestone to quantify the actual speedup.
+
+[→ Deep dive: docs/gpu-topology.md](docs/gpu-topology.md)
+
+### Multi-Cluster Coordination
+
+The global scheduler maintains a live view of every registered cluster's capacity, GPU inventory, and health. When a job arrives, it scores clusters:
+
+```
+Cluster scoring for a 4× A100 job:
+
+  cluster-gke-us-west:
+    Available A100s: 6/8    → capacity score: 75
+    Health: HEALTHY         → health score: 100
+    Current load: 40%       → load score: 60
+    Weighted total:           78.3
+
+  cluster-eks-us-east:
+    Available A100s: 2/4    → capacity score: 50
+    Health: DEGRADED        → health score: 50
+    Current load: 80%       → load score: 20
+    Weighted total:           40.0
+
+  → Job placed in cluster-gke-us-west
+```
+
+Clusters self-register via heartbeat. If a cluster misses 3 consecutive heartbeats, it transitions from `HEALTHY` → `DEGRADED` → `UNHEALTHY`. If the global control plane goes down entirely, clusters switch to autonomous mode and schedule locally.
+
+### Gang Scheduling
+
+Distributed training (PyTorch DDP, Horovod, DeepSpeed) requires all workers to start simultaneously. If worker 3 of 4 can't get a GPU, the other 3 sit idle — burning money.
+
+Ares treats gang members as atomic units. Either all N members get scheduled, or none do. This prevents the deadlock scenario where Gang A holds 4 GPUs waiting for 4 more, while Gang B holds the other 4 waiting for its remaining allocation.
+
+The gang scheduler holds resources in a reservation buffer, evaluates whether the full gang can be satisfied, and either commits all placements atomically or releases everything.
+
+### CRDT-Based Consistency
+
+When multiple control planes operate independently (e.g., during a network partition), their views of cluster state diverge. CRDTs guarantee that when they reconnect, their states merge deterministically — no conflicts, no data loss.
+
+Ares implements four CRDT primitives:
+
+- **Vector clocks** — Causal ordering across nodes. Detects concurrent updates vs. happened-before relationships.
+- **LWW-Register** (Last-Writer-Wins) — For mutable fields like cluster health status. Timestamp-based resolution.
+- **G-Set** (Grow-only set) — For append-only data like completed job IDs. Elements are never removed.
+- **OR-Set** (Observed-Remove set) — For data that needs both add and remove, like active cluster membership. Uses unique tags to distinguish concurrent add/remove of the same element.
+
+These compose into higher-level types: `ClusterState` and `JobState` CRDTs that wrap the real domain objects with convergent merge semantics.
+
+### DRF Fair Scheduling
+
+Without fairness controls, a single tenant can submit 1,000 GPU jobs and starve everyone else. Dominant Resource Fairness (DRF) tracks each tenant's share across all resource dimensions (GPU, CPU, memory) and identifies the "dominant" one — the resource where that tenant consumes the highest fraction.
+
+```
+Cluster: 100 GPUs, 1000 CPUs, 1000 GB memory
+
+Tenant A uses: 50 GPUs (50%), 100 CPUs (10%), 200 GB (20%)
+  → Dominant share: 50% (GPU)
+
+Tenant B uses: 10 GPUs (10%), 500 CPUs (50%), 100 GB (10%)
+  → Dominant share: 50% (CPU)
+
+Both at 50% dominant share → fair.
+If Tenant A requests more GPUs → denied until Tenant B's share catches up.
+```
+
+### Priority Preemption
+
+When a high-priority job arrives and the cluster is full, Ares can evict a lower-priority running job. Safeguards: minimum priority gap required, rate limits on preemptions per hour, grace period for the victim to checkpoint, and no cascading preemptions (a job that was already preempted can't be preempted again).
+
+### Checkpoint & Recovery
+
+Jobs opt in with `CheckpointEnabled: true` and a storage path. The executor injects `ARES_CHECKPOINT_PATH` and `ARES_CHECKPOINT_RESTORE` as environment variables into the pod. The job application writes checkpoints periodically; on restart (after crash, preemption, or retry), Ares sets the restore path to the last known checkpoint. This closes the reliability loop: exactly-once prevents duplicates, retry handles transient failures, preemption handles priority, and checkpointing prevents lost progress.
+
+### Cluster Autonomy
+
+If the global control plane becomes unreachable, local schedulers transition to autonomous mode. They continue accepting and scheduling jobs using local resource state, queuing cross-cluster requests for when connectivity returns. When the global plane comes back, clusters re-register, sync state via CRDT merge, and resume federated scheduling.
+
+### Observability
+
+The metrics layer tracks 7 subsystems through a single `/metrics` endpoint:
+
+1. **HTTP API** — Request rate, error rate, latency histograms
+2. **Scheduling** — Jobs scheduled/failed, queue depth, scheduling latency, end-to-end latency
+3. **Clusters** — Cluster health transitions, heartbeat age, capacity utilization
+4. **GPU Topology** — NVLink placement rate, NUMA hits, topology scores
+5. **Reliability** — Retry counts, preemption counts, checkpoint saves/restores, lease activity
+6. **DRF Fairness** — Per-tenant dominant shares, fairness index, quota denials
+7. **CRDT Sync** — Merge count, conflict rate, replication lag
+
+Prometheus scrape configs and Grafana datasource are deployed via K8s ConfigMaps in `k8s/global/observability/`.
 
 ---
 
-## 🚀 Quick Start
+# 🚀 Quick Start
 
 ### Prerequisites
 
-```bash
-# Required
 - Docker & Docker Compose
 - Go 1.21+
+- (Optional) NVIDIA GPU + `nvidia-smi` for real topology detection
 
-# Optional (for real GPU testing)
-- NVIDIA GPU
-- nvidia-smi
-```
-
-### 1. Clone & Setup
+### 1. Clone & Start Infrastructure
 
 ```bash
 git clone https://github.com/BITS08SATHYA/ares-scheduler.git
 cd ares-scheduler
 
-# Start etcd
+# Start etcd + Redis
 docker-compose up -d
 
-# Verify etcd health
+# Verify
 docker exec ares-etcd etcdctl endpoint health
-# → 127.0.0.1:2379 is healthy ✅
+# → 127.0.0.1:2379 is healthy
 ```
 
-### 2. Build Ares
+### 2. Start the Global Scheduler
 
 ```bash
-# Build all components
-go build ./cmd/scheduler
-go build ./cmd/worker
-
-# Or use Go run
-go run cmd/worker/main.go
+go run cmd/global/main.go
+# → API Gateway listening on :8080
+# → Prometheus metrics at /metrics
 ```
 
-### 3. Run Your First Job
+### 3. Start a Local Scheduler (Cluster A)
 
-**Terminal 1: Start Worker**
 ```bash
-# With mock GPUs (no hardware needed)
-ARES_MOCK_GPU=true go run cmd/worker/main.go
-
-# Output:
-# Worker worker-1 starting...
-# Detected 4 GPUs
-# Worker worker-1 registered with 4 GPUs
-# Worker worker-1 waiting for jobs...
+ARES_CLUSTER_ID=cluster-a ARES_MOCK_GPU=true go run cmd/local/main.go
+# → Registered 4 mock GPUs (NVLink topology)
+# → Heartbeat → global scheduler
 ```
 
-**Terminal 2: Submit Job**
+### 4. Submit a Job
+
 ```bash
-go run cmd/scheduler/main.go
-
-# Output:
-# Submitting job: test-job (RequestID: req-001)
-# Creating new job: abc-123
-# GPU placement for job abc-123: [0 1] (score: 180.0)
-# Job abc-123 queued successfully ✅
+curl -X POST http://localhost:8080/schedule \
+  -H "Content-Type: application/json" \
+  -d '{
+    "request_id": "req-001",
+    "name": "training-resnet",
+    "image": "pytorch/pytorch:2.1.0-cuda12.1-cudnn8-runtime",
+    "gpu_count": 2,
+    "gpu_type": "A100",
+    "prefer_nvlink": true,
+    "priority": 80,
+    "max_retries": 3
+  }'
 ```
 
-**Terminal 1: Watch Execution**
-```
-# Worker automatically picks up job:
-Worker worker-1: Found job abc-123 (attempt 1/3)
-Worker worker-1: ✅ ACQUIRED LEASE (token=1)
-Worker worker-1: Job abc-123 → RUNNING
-Worker worker-1: Progress 1/5 (token valid)
-Worker worker-1: Progress 2/5 (token valid)
-...
-Worker worker-1: Job abc-123 → SUCCEEDED
-Worker worker-1: ✅ RESULT COMMITTED
-```
+### 5. Verify Exactly-Once
 
-**[→ Detailed setup guide](docs/QUICKSTART.md)**
+```bash
+# Submit the same request_id again
+curl -X POST http://localhost:8080/schedule \
+  -d '{"request_id": "req-001", "name": "training-resnet", ...}'
+# → Returns the SAME job_id. No duplicate created.
+```
 
 ---
 
 ## 🧪 Testing
 
-### Test Exactly-Once Semantics
-
 ```bash
-go run cmd/test-idempotency/main.go
+# Run the benchmark suite (stress, exactly-once, failure injection, gang scheduling)
+go run cmd/benchmark/main.go -control-plane http://localhost:8080 -suite all
 
-# Output:
-# 📤 Submission #1 (First time)
-# ✅ Job created: d4f8c9a2-3b1e-4c5d-8a7f-1e2d3c4b5a6f
-#
-# 📤 Submission #2 (Duplicate RequestID)
-# ✅ Job ID returned: d4f8c9a2-3b1e-4c5d-8a7f-1e2d3c4b5a6f
-#
-# ✅ IDEMPOTENT! Same JobID returned ✅
+# Unit tests (3,973 lines across 7 test files)
+go test ./tests/unit/...
 ```
 
-### Test GPU Topology Detection
-
-```bash
-ARES_MOCK_GPU=true go run cmd/gpu-test/main.go
-
-# Output:
-# ✅ Found 4 GPU(s)
-# ✅ Detected 4 NVLink connections
-# Best placement for 2 GPUs:
-#   GPUs: [0 1]
-#   Score: 180.0
-#   Reasoning: 1 NVLink connection
-```
-
-### Test Retry Policy
-
-```bash
-go run cmd/test-retry/main.go
-
-# Output:
-# Backoff Schedule:
-#   Attempt 1: backoff=1.2s, status=✅ RETRY
-#   Attempt 2: backoff=1.8s, status=✅ RETRY
-#   Attempt 3: backoff=4.5s, status=✅ RETRY
-#   Attempt 4: backoff=0s, status=❌ NO MORE RETRIES
-```
-
-**[→ Full testing guide](docs/QUICKSTART.md#testing)**
+**Test coverage areas**: Idempotency deduplication, lease acquisition/renewal/expiry, etcd storage operations, Redis caching, GPU discovery parsing, GPU topology scoring, API gateway routing and error handling.
 
 ---
 
 ## 📊 Performance
 
-### Latency Breakdown
-
 | Operation | Latency | Notes |
 |-----------|---------|-------|
-| Job submission | ~5ms | Client → Scheduler |
+| Job submission (end-to-end) | ~15-20ms | Includes all layers below |
 | Redis deduplication | ~1-2ms | Idempotency check |
 | etcd lease acquisition | ~5-10ms | Distributed lock |
-| GPU placement scoring | ~2ms | Algorithm execution |
+| GPU placement scoring | ~2ms | Topology algorithm |
 | State transition | ~3ms | etcd write |
-| **Total overhead** | **~15-20ms** | Per job |
 
-For a typical ML training job (100ms - 10s), this adds **0.2%-20% overhead** - very acceptable.
-
-### Throughput
-
-- **Single scheduler**: ~100 jobs/sec (etcd limited)
-- **3 schedulers**: ~300 jobs/sec (linear scale)
-- **10 schedulers**: ~1000 jobs/sec (scales well)
-
-**Bottleneck**: etcd write capacity, not Ares logic
+**Throughput**: ~100 jobs/sec per scheduler instance (etcd-limited). Scales linearly with additional scheduler instances.
 
 ---
 
-## 🎓 Technical Deep-Dives
+## 🔬 Technical Deep-Dives
 
-### Exactly-Once Semantics
+### Blog Posts
 
-**Problem**: How do you guarantee a job runs exactly once when:
-- Workers crash mid-execution
-- Networks partition
-- Clients retry on timeout
-- Multiple schedulers compete
+- [Exactly-Once Execution in Distributed Schedulers](https://sathyanyu.substack.com) — Why at-least-once isn't good enough, and how fencing tokens close the gap
 
-**Solution**: Three-layer defense
+### Design Documents
+
+- [Exactly-Once Semantics](docs/exactly-once.md) — Three-layer defense in detail
+- [Feature Matrix](docs/features.md) — All features with implementation status
+
+### Academic References
+
+- Verma et al. — [Large-scale cluster management at Google with Borg](https://research.google/pubs/pub43438/) (EuroSys 2015)
+- Schwarzkopf et al. — [Omega: Flexible, Scalable Schedulers](https://research.google/pubs/pub41684/) (EuroSys 2013)
+- Xiao et al. — [Gandiva: Introspective Cluster Scheduling for Deep Learning](https://www.usenix.org/conference/osdi18/presentation/xiao) (OSDI 2018)
+- Ghodsi et al. — [Dominant Resource Fairness](https://www.usenix.org/conference/nsdi11/dominant-resource-fairness-fair-allocation-multiple-resource-types) (NSDI 2011)
+- Shapiro et al. — [A comprehensive study of CRDTs](https://inria.hal.science/inria-00555588) (INRIA 2011)
+
+---
+
+## K8s Deployment
+
+Ares ships with production K8s manifests for both global and local components:
 
 ```
-Layer 1: REQUEST DEDUPLICATION
-  Same RequestID → Same JobID (Redis cache)
-  
-Layer 2: DISTRIBUTED LEASING  
-  Only one worker holds lease at a time (etcd)
-  TTL-based expiration (30 seconds)
-  
-Layer 3: FENCING TOKENS
-  Monotonic counters prevent zombie workers
-  Atomic compare-and-swap validates token
+k8s/
+├── global/
+│   ├── global-scheduler.yaml          # Global scheduler deployment
+│   ├── global-scheduler-service.yaml   # ClusterIP service
+│   ├── etcd.yaml                       # etcd StatefulSet
+│   ├── redis.yaml                      # Redis deployment
+│   ├── namespace.yaml                  # ares-system namespace
+│   ├── serviceaccount.yaml             # RBAC service account
+│   └── observability/
+│       ├── prometheus/                 # Prometheus deployment + scrape config
+│       └── grafana/                    # Grafana deployment + datasource config
+├── local/
+│   ├── local-scheduler.yaml            # Local scheduler (GKE)
+│   ├── local-scheduler-aws-1.yaml      # Local scheduler (EKS cluster 1)
+│   ├── local-scheduler-aws-2.yaml      # Local scheduler (EKS cluster 2)
+│   ├── redis.yaml                      # Per-cluster Redis
+│   └── NCCL/nccl.yaml                 # NCCL benchmark pod (p4d.24xlarge)
+└── rbac.yaml                           # Cluster-wide RBAC
 ```
 
-**Proven properties:**
-- ✅ **No duplicates**: Job never executes more than once
-- ✅ **No lost executions**: Result persists even if worker crashes
-- ✅ **Convergence**: System recovers from any failure scenario
+---
 
-**[→ Read the full exactly-once design doc](docs/EXACTLY_ONCE.md)**
+## Roadmap
 
-### GPU Topology-Aware Placement
+**Implemented**: Exactly-once execution, GPU topology scoring, multi-cluster coordination, gang scheduling, DRF fairness, priority preemption, checkpoint & recovery, cluster autonomy, CRDT consistency, health monitoring, heartbeat propagation, dynamic cluster registration, observability pipeline, API gateway with rate limiting.
 
-**Challenge**: GPU communication speed varies drastically:
-- **NVLink**: 600 GB/s (fast)
-- **PCIe**: 16 GB/s (slow)
-- **Across sockets**: 10 GB/s (very slow)
-
-**Algorithm**:
-```python
-1. Parse nvidia-smi topology matrix
-2. Build connection graph (NVLink vs PCIe)
-3. Score each placement candidate:
-   - NVLink connection: +50 points
-   - PCIe connection: -30 points  
-   - Consecutive GPUs: +10 points
-4. Choose highest score
-```
-
-**Impact**: 3-5x speedup for multi-GPU training
-
-**[→ Read the full GPU topology design](docs/GPU_TOPOLOGY.md)**
+**Next**: NCCL benchmarks on p4d.24xlarge to validate topology scorer with real `all_reduce_perf` measurements. NUMA-aware memory placement. Network bandwidth-aware scheduling. RBAC and tenant isolation. Audit logging.
 
 ---
 
-## 🛣️ Development Roadmap
+## Author
 
-### Timeline
+**Sathya Balasubramani**
+MS, NYU Courant Institute of Mathematical Sciences (Dec 2025)
+7 years of software engineering experience
 
-```
-Week 1-2 (Nov 2-15):  Foundation + Exactly-Once    ✅ COMPLETE
-Week 3 (Nov 16-22):   GPU Topology                 ✅ COMPLETE  
-Week 4 (Nov 23-29):   Multi-Cluster + Observability 🚧 IN PROGRESS
-Week 5 (Nov 30-Dec 6): Polish + Content            ⏳ UPCOMING
-Dec 8:                LAUNCH                        🎯 TARGET
-```
+- [GitHub](https://github.com/BITS08SATHYA)
+- [LinkedIn](https://linkedin.com/in/sathya-ram-infra)
+- [Blog](https://sathyanyu.substack.com)
 
-### Feature Progress
+## License
 
-```
-████████████████░░░░░░░░░░░░░ 54% (14/26 features)
-
-Core-4 MVP (Dec 8):        27% → 54% (4 weeks)
-Phase 2 (Jan-Feb 2026):    54% → 85% (8 weeks)  (I'm here)
-Full Vision (June 2026):   85% → 100% (6 months)
-```
-
-**[→ Detailed roadmap](docs/features.md)**
-
----
-
-## 📚 Documentation
-
-### Core Docs
-
-- **[Features](docs/features.md)** - All 26 features detailed
-- **[Architecture](docs/architecture.md)** - System design + diagrams
-- **[Exactly-Once Semantics](docs/exactly-once.md)** - Deep dive
-- **[GPU Topology](docs/gpu-topology.md)** - Placement algorithm
-- **[Quick Start](docs/quickstart.md)** - Detailed setup guide
-
-### References
-
-**Academic Papers**:
-- [Borg: Google's Container Orchestration](https://research.google/pubs/pub43438/)
-- [Omega: Flexible, Scalable Schedulers](https://research.google/pubs/pub41684/)
-- [Gandiva: GPU Cluster Scheduler](https://www.usenix.org/conference/osdi18/presentation/xiao)
-
-**Technologies**:
-- [etcd](https://etcd.io/) - Distributed key-value store
-- [Go](https://golang.org/) - Systems programming
-- [Kubernetes](https://kubernetes.io/) - Container orchestration
-
----
-
-## 🎯 Project Goals
-
-This project was built to demonstrate:
-
-1. **Deep distributed systems understanding**
-    - Consensus algorithms (Raft via etcd)
-    - Distributed locking patterns
-    - Exactly-once semantics
-
-2. **Production engineering skills**
-    - Proper error handling
-    - Comprehensive testing
-    - Clear documentation
-    - Maintainable code
-
-3. **Systems thinking**
-    - Performance optimization (GPU topology)
-    - Failure mode analysis
-    - Scalability considerations
-
-**Target audience**: Hiring managers at infrastructure teams evaluating senior engineering candidates.
-
----
-
-## 🤝 Contributing
-
-This is an academic project (NYU Courant MS thesis). Not currently accepting external contributions, but feedback is welcome!
-
-**Found a bug?** Open an issue  
-**Have suggestions?** Start a discussion
-
----
-
-## 👨‍💻 Author
-
-**Sathya Balasubramani**  
-MS Information Science, NYU Courant Institute of Mathematical Sciences  
-Graduation: December 2025
-
-- 🔗 GitHub: [@BITS08SATHYA](https://github.com/BITS08SATHYA)
-- 💼 LinkedIn: [sathya-ram-infra](https://linkedin.com/in/sathya-ram-infra)
-- 📝 Blog: [sathyanyu.substack.com](https://sathyanyu.substack.com)
-
----
-
-## 📄 License
-
-MIT License - See [LICENSE](LICENSE) for details
-
----
-
-<div align="center">
-
-**Built with at NYU Courant**
-
-[⭐ Star this repo](https://github.com/BITS08SATHYA/ares-scheduler) • [📖 Read the docs](docs/) • [🐛 Report bug](https://github.com/BITS08SATHYA/ares-scheduler/issues)
-
-</div>
+MIT — see [LICENSE](LICENSE)
