@@ -43,11 +43,11 @@ type GPUDiscovery struct {
 
 // Cache keys
 const (
-	CacheKeyGPUDevices  = "ares:node:gpu:devices"
-	CacheKeyGPUTopology = "ares:node:gpu:topology"
-	CacheKeyGPUHealth   = "ares:node:gpu:health"
-	DefaultCacheTTL     = 30 * time.Second
-	HealthCheckInterval = 60 * time.Second
+	CacheKeyGPUDevicesPrefix = "ares:node:gpu:devices"
+	CacheKeyGPUTopology      = "ares:node:gpu:topology"
+	CacheKeyGPUHealth        = "ares:node:gpu:health"
+	DefaultCacheTTL          = 30 * time.Second
+	HealthCheckInterval      = 60 * time.Second
 )
 
 // ✅ NEW: Constructor with K8s client support
@@ -57,7 +57,7 @@ func NewGPUDiscoveryWithK8s(redisClient *redis.RedisClient, k8sClient kubernetes
 		k8sClient:   k8sClient,
 		nodeName:    nodeName,
 		log:         logger.Get(),
-		cacheKey:    CacheKeyGPUDevices,
+		cacheKey:    fmt.Sprintf("%s:%s", CacheKeyGPUDevicesPrefix, nodeName),
 		cacheTTL:    DefaultCacheTTL,
 	}
 }
@@ -70,7 +70,7 @@ func NewGPUDiscovery(redisClient *redis.RedisClient) *GPUDiscovery {
 		k8sClient:   nil, // No K8s client
 		nodeName:    "",
 		log:         logger.Get(),
-		cacheKey:    CacheKeyGPUDevices,
+		cacheKey:    fmt.Sprintf("%s:%s", CacheKeyGPUDevicesPrefix, os.Getenv("NODE_NAME")),
 		cacheTTL:    DefaultCacheTTL,
 	}
 }

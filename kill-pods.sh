@@ -17,8 +17,8 @@ echo "Deleted Local Scheduler Pod Successfully!"
 echo "Pods Deleted Successfully!"
 
 echo "Switching to AWS k8s context"
-kubectl config use-context sathya-nyu@ares-aws-gpu-1.us-east-1.eksctl.io
+kubectl config use-context sathya-nyu@ares-p4d-bench-1.us-east-1.eksctl.io
 echo "Deleting Local Scheduler pod"
-kubectl delete -f $PWD/k8s/local/local-scheduler-aws-2.yaml
+kubectl delete -f $PWD/k8s/local/local-scheduler-aws-3.yaml
 sleep 3
 echo "Deleted Local Scheduler Pod Successfully!"
