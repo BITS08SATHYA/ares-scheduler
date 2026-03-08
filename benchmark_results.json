@@ -1,0 +1,235 @@
+[
+  {
+    "suite": "stress",
+    "timestamp": "2026-03-07T23:27:05-05:00",
+    "total_requests": 1600,
+    "success_count": 1600,
+    "error_count": 0,
+    "duplicate_blocked": 0,
+    "latencies": {
+      "p50_ms": 49.556062,
+      "p95_ms": 500.39608300000003,
+      "p99_ms": 864.871888,
+      "p999_ms": 961.192841,
+      "min_ms": 31.440061999999998,
+      "max_ms": 965.294488,
+      "avg_ms": 194.36968440187505
+    },
+    "throughput_rps": 30.712217903733624,
+    "total_duration": "52.096530606s",
+    "details": {
+      "burst_100": {
+        "errors": 0,
+        "latency": {
+          "p50_ms": 580.514317,
+          "p95_ms": 948.244902,
+          "p99_ms": 961.192841,
+          "p999_ms": 965.294488,
+          "min_ms": 111.29037,
+          "max_ms": 965.294488,
+          "avg_ms": 566.5316934900002
+        },
+        "rps": 103.42738420808662,
+        "success": 100
+      },
+      "sequential_1000": {
+        "errors": 0,
+        "latency": {
+          "p50_ms": 46.060337,
+          "p95_ms": 54.854836999999996,
+          "p99_ms": 63.528797,
+          "p999_ms": 116.949415,
+          "min_ms": 31.440061999999998,
+          "max_ms": 134.614948,
+          "avg_ms": 46.798278164999985
+        },
+        "rps": 21.36339444358662,
+        "success": 1000
+      },
+      "sustained_500x50": {
+        "errors": 0,
+        "latency": {
+          "p50_ms": 420.785024,
+          "p95_ms": 498.942857,
+          "p99_ms": 529.187574,
+          "p999_ms": 762.267719,
+          "min_ms": 49.183809000000004,
+          "max_ms": 762.267719,
+          "avg_ms": 415.08009505799976
+        },
+        "rps": 115.72391847439823,
+        "success": 500
+      }
+    }
+  },
+  {
+    "suite": "exactly-once",
+    "timestamp": "2026-03-07T23:27:15-05:00",
+    "total_requests": 1000,
+    "success_count": 0,
+    "error_count": 0,
+    "duplicate_blocked": 0,
+    "latencies": {
+      "p50_ms": 5031.052694999999,
+      "p95_ms": 9469.233104,
+      "p99_ms": 9813.220360000001,
+      "p999_ms": 9861.605942,
+      "min_ms": 59.550262,
+      "max_ms": 9867.207382,
+      "avg_ms": 5140.2833461489945
+    },
+    "throughput_rps": 100.71773399079754,
+    "total_duration": "9.928738072s",
+    "details": {
+      "duplicate_executions": 0,
+      "exactly_once_proven": false,
+      "missed_jobs": 100,
+      "replays_per_id": 10,
+      "unique_job_ids": 0,
+      "unique_request_ids": 100
+    }
+  },
+  {
+    "suite": "failure-injection",
+    "timestamp": "2026-03-07T23:29:01-05:00",
+    "total_requests": 50,
+    "success_count": 0,
+    "error_count": 0,
+    "duplicate_blocked": 0,
+    "latencies": {
+      "p50_ms": 48.263337,
+      "p95_ms": 56.581292,
+      "p99_ms": 101.678976,
+      "p999_ms": 101.678976,
+      "min_ms": 40.001202,
+      "max_ms": 101.678976,
+      "avg_ms": 50.158799319999986
+    },
+    "throughput_rps": 0,
+    "total_duration": "~90s",
+    "details": {
+      "final_failed": 0,
+      "final_succeeded": 0,
+      "jobs_submitted": 50,
+      "recovery_rate_pct": 0,
+      "still_running": 50
+    }
+  },
+  {
+    "suite": "gang-scheduling",
+    "timestamp": "2026-03-07T23:29:01-05:00",
+    "total_requests": 22,
+    "success_count": 0,
+    "error_count": 22,
+    "duplicate_blocked": 0,
+    "latencies": {
+      "p50_ms": 27.131702,
+      "p95_ms": 53.192238,
+      "p99_ms": 53.192238,
+      "p999_ms": 53.192238,
+      "min_ms": 13.636496,
+      "max_ms": 53.192238,
+      "avg_ms": 26.679721875000002
+    },
+    "throughput_rps": 0,
+    "total_duration": "n/a",
+    "details": {
+      "medium_gangs_4gpu": 3,
+      "oversubscription": true,
+      "small_gangs_2gpu": 5
+    }
+  },
+  {
+    "suite": "drf-fairness",
+    "timestamp": "2026-03-07T23:29:02-05:00",
+    "total_requests": 120,
+    "success_count": 120,
+    "error_count": 0,
+    "duplicate_blocked": 0,
+    "latencies": {
+      "p50_ms": 343.993997,
+      "p95_ms": 660.707765,
+      "p99_ms": 690.285724,
+      "p999_ms": 690.285724,
+      "min_ms": 72.142885,
+      "max_ms": 690.285724,
+      "avg_ms": 370.62002076666664
+    },
+    "throughput_rps": 86.7699374502998,
+    "total_duration": "1.397353683s",
+    "details": {
+      "jains_fairness": 1,
+      "no_starvation": true,
+      "phase1_tenant_a": 30,
+      "phase1_tenant_b": 30,
+      "phase2_tenant_a": 50,
+      "phase2_tenant_b": 10
+    }
+  },
+  {
+    "suite": "priority-preemption",
+    "timestamp": "2026-03-07T23:30:14-05:00",
+    "total_requests": 21,
+    "success_count": 21,
+    "error_count": 0,
+    "duplicate_blocked": 0,
+    "latencies": {
+      "p50_ms": 118.576374,
+      "p95_ms": 118.576374,
+      "p99_ms": 118.576374,
+      "p999_ms": 118.576374,
+      "min_ms": 118.576374,
+      "max_ms": 118.576374,
+      "avg_ms": 118.576374
+    },
+    "throughput_rps": 0,
+    "total_duration": "1m0.803820915s",
+    "details": {
+      "high_priority_submit_ms": 118.576374,
+      "high_priority_submitted": true,
+      "high_priority_time_to_running_s": -1,
+      "low_priority_preempted": 0,
+      "low_priority_running": 0,
+      "low_priority_submitted": 20,
+      "preemption_observed": false
+    }
+  },
+  {
+    "suite": "multi-cluster-routing",
+    "timestamp": "2026-03-07T23:30:15-05:00",
+    "total_requests": 30,
+    "success_count": 30,
+    "error_count": 0,
+    "duplicate_blocked": 0,
+    "latencies": {
+      "p50_ms": 156.64793,
+      "p95_ms": 263.509229,
+      "p99_ms": 265.385205,
+      "p999_ms": 265.385205,
+      "min_ms": 60.977589,
+      "max_ms": 265.385205,
+      "avg_ms": 160.64661076000002
+    },
+    "throughput_rps": 94.12299342202259,
+    "total_duration": "265.609912ms",
+    "details": {
+      "nvlink_routing": {
+        "": 5
+      },
+      "routing_map": {
+        "A10G": {
+          "": 5
+        },
+        "H100": {
+          "": 5
+        },
+        "T4": {
+          "": 5
+        },
+        "any": {
+          "": 10
+        }
+      }
+    }
+  }
+]

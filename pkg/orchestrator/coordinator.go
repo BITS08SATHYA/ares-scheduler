@@ -60,19 +60,18 @@ type MetricsRecorder struct {
 	OnJobE2ELatency     func(time.Duration) // Record End-to-End Latency
 	OnJobRunning        func()
 }
-
 type SchedulingResult struct {
-	JobID              string
-	ClusterID          string
-	NodeID             string
-	GPUIndices         []int
-	ClusterScore       float64
-	PlacementReasons   []string
-	PodName            string
-	LocalSchedulerAddr string
-	LeaseID            int64 // CRITICAL: Track lease ID for fencing
-	CreatedAt          time.Time
-	ActualGPUType      string // Actual GPU type assigned (e.g., "T4", "A100") — resolved from node discovery
+	JobID              string    `json:"job_id"`
+	ClusterID          string    `json:"cluster_id"`
+	NodeID             string    `json:"node_id"`
+	GPUIndices         []int     `json:"gpu_indices"`
+	ClusterScore       float64   `json:"cluster_score"`
+	PlacementReasons   []string  `json:"placement_reasons"`
+	PodName            string    `json:"pod_name"`
+	LocalSchedulerAddr string    `json:"local_scheduler_addr"`
+	LeaseID            int64     `json:"lease_id"`
+	CreatedAt          time.Time `json:"created_at"`
+	ActualGPUType      string    `json:"actual_gpu_type"`
 }
 
 func NewJobCoordinator(
@@ -135,6 +134,12 @@ func (jc *JobCoordinator) ScheduleJob(
 
 	if err != nil {
 		jc.log.Warn("Idempotency check failed (non-fatal): %v", err)
+	}
+
+	// STEP 1b: Immediately reserve this request ID to block concurrent replays
+	err = jc.idempotencyMgr.RecordSuccess(ctx, jobSpec.RequestID, "pending")
+	if err != nil {
+		jc.log.Warn("Failed to reserve request ID (non-fatal): %v", err)
 	}
 
 	// ========================================================================
