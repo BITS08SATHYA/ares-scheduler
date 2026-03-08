@@ -37,13 +37,13 @@ type GPUTopologyManager struct {
 
 // Cache and constants
 const (
-	CacheKeyTopology  = "ares:node:gpu:topology"
-	NVLinkBandwidth   = 900.0
-	PCIeGen4Bandwidth = 32.0
-	PCIeGen5Bandwidth = 64.0
-	NVLinkMultiplier  = 28.1
-	SameNUMABonus     = 1.5
-	TopologyCacheTTL  = 60 * time.Second
+	CacheKeyTopologyPrefix = "ares:node:gpu:topology"
+	NVLinkBandwidth        = 900.0
+	PCIeGen4Bandwidth      = 32.0
+	PCIeGen5Bandwidth      = 64.0
+	NVLinkMultiplier       = 28.1
+	SameNUMABonus          = 1.5
+	TopologyCacheTTL       = 60 * time.Second
 )
 
 // NewGPUTopologyManager: Create new topology manager
@@ -52,7 +52,7 @@ func NewGPUTopologyManager(redisClient *redis.RedisClient, discovery *GPUDiscove
 		redisClient: redisClient,
 		log:         logger.Get(),
 		discovery:   discovery,
-		cacheKey:    CacheKeyTopology,
+		cacheKey:    fmt.Sprintf("%s:%s", CacheKeyTopologyPrefix, discovery.nodeName),
 		cacheTTL:    TopologyCacheTTL,
 	}
 }
