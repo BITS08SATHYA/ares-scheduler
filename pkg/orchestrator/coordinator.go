@@ -125,11 +125,12 @@ func (jc *JobCoordinator) ScheduleJob(
 			jc.metricsRecorder.OnDuplicateBlocked()
 		}
 		jc.log.Debug("Duplicate request detected: %s, returning cached result", jobSpec.RequestID)
-		result := &SchedulingResult{
-			JobID:     cachedResult.JobID,
-			CreatedAt: cachedResult.SubmitTime,
-		}
-		return result, nil
+		//result := &SchedulingResult{
+		//	JobID:     cachedResult.JobID,
+		//	CreatedAt: cachedResult.SubmitTime,
+		//}
+		//return result, nil
+		return nil, fmt.Errorf("DUPLICATE: request %s already processed (job=%s)", jobSpec.RequestID, cachedResult.JobID)
 	}
 
 	if err != nil {
