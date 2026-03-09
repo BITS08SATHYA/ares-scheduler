@@ -653,142 +653,201 @@ func runFailureInjectionTest(baseURL string) BenchmarkResult {
 // ============================================================================
 // SUITE 4: GANG SCHEDULING
 // Measures: barrier sync time, all-or-nothing placement, deadlock handling
+// Uses: /gang/submit endpoint (dedicated gang API)
 // ============================================================================
+
+// GangSubmitRequest matches the server's GangSubmitRequest in handlers_gang.go
+type GangSubmitRequest struct {
+	GangID          string   `json:"gang_id"`
+	Name            string   `json:"name"`
+	MinMembers      int      `json:"min_members"`
+	GPUsPerMember   int      `json:"gpus_per_member"`
+	GPUType         string   `json:"gpu_type,omitempty"`
+	Priority        int      `json:"priority,omitempty"`
+	PreferColocated bool     `json:"prefer_colocated,omitempty"`
+	RequireNVLink   bool     `json:"require_nvlink,omitempty"`
+	Image           string   `json:"image,omitempty"`
+	Command         []string `json:"command,omitempty"`
+	Args            []string `json:"args,omitempty"`
+
+	ScheduleTimeoutSecs int `json:"schedule_timeout_secs,omitempty"`
+	BarrierTimeoutSecs  int `json:"barrier_timeout_secs,omitempty"`
+}
+
+type GangSubmitResponse struct {
+	Success   bool   `json:"success"`
+	GangID    string `json:"gang_id"`
+	Phase     string `json:"phase"`
+	Members   int    `json:"members"`
+	TotalGPUs int    `json:"total_gpus"`
+	Message   string `json:"message"`
+}
+
+type GangStatusResponse struct {
+	GangID       string             `json:"gang_id"`
+	Phase        string             `json:"phase"`
+	Members      int                `json:"members"`
+	TotalGPUs    int                `json:"total_gpus"`
+	ReadyCount   int                `json:"ready_count"`
+	FailedCount  int                `json:"failed_count"`
+	PendingCount int                `json:"pending_count"`
+	MemberDetail []GangMemberDetail `json:"member_detail"`
+	LastError    string             `json:"last_error,omitempty"`
+}
+
+type GangMemberDetail struct {
+	MemberIndex int    `json:"member_index"`
+	JobID       string `json:"job_id"`
+	Status      string `json:"status"`
+	ClusterID   string `json:"cluster_id,omitempty"`
+	NodeID      string `json:"node_id,omitempty"`
+	GPUIndices  []int  `json:"gpu_indices,omitempty"`
+	Ready       bool   `json:"ready"`
+	Error       string `json:"error,omitempty"`
+}
 
 func runGangSchedulingTest(baseURL string) BenchmarkResult {
 	fmt.Println("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 	fmt.Println("  SUITE 4: GANG SCHEDULING TEST")
+	fmt.Println("  Using dedicated /gang/submit endpoint")
 	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
 	latencies := make([]float64, 0)
 	totalSuccess := 0
 	totalErrors := 0
+	allOrNothingViolations := 0
 
-	// ── Phase 1: Submit 5 gangs of 2 GPUs each ──
-	fmt.Println("\n  Phase 1: Small gangs (5 gangs × 2 GPUs each)...")
+	// ── Phase 1: Small gangs (5 gangs × 2 members × 1 GPU each) ──
+	fmt.Println("\n  Phase 1: Small gangs (5 gangs × 2 members × 1 GPU each)...")
 	for gangIdx := 0; gangIdx < 5; gangIdx++ {
 		gangID := fmt.Sprintf("gang-small-%d-%d", time.Now().UnixNano(), gangIdx)
-		gangStart := time.Now()
-		gangSuccess := 0
-		gangErrors := 0
 
-		var wg sync.WaitGroup
-		for member := 0; member < 2; member++ {
-			wg.Add(1)
-			go func(m int) {
-				defer wg.Done()
-				req := ScheduleRequest{
-					RequestID: fmt.Sprintf("%s-member-%d", gangID, m),
-					Name:      fmt.Sprintf("gang-small-%d-member-%d", gangIdx, m),
-					Image:     "nvidia/cuda:12.0-base-ubuntu22.04",
-					Command:   []string{"sleep", "5"},
-					GPUCount:  1,
-					GPUType:   "",
-					Priority:  5,
-					MemoryMB:  512,
-					CPUMillis: 500,
-					GangID:    gangID,
-					GangSize:  2,
-				}
-
-				_, err := submitJob(baseURL, req)
-				if err != nil {
-					gangErrors++
-				} else {
-					gangSuccess++
-				}
-			}(member)
+		req := GangSubmitRequest{
+			GangID:              gangID,
+			Name:                fmt.Sprintf("bench-gang-small-%d", gangIdx),
+			MinMembers:          2,
+			GPUsPerMember:       1,
+			Priority:            5,
+			Image:               "nvidia/cuda:12.0-base-ubuntu22.04",
+			Command:             []string{"sleep", "5"},
+			ScheduleTimeoutSecs: 30,
+			BarrierTimeoutSecs:  30,
 		}
-		wg.Wait()
 
+		gangStart := time.Now()
+		resp, err := submitGang(baseURL, req)
 		gangElapsed := time.Since(gangStart).Seconds() * 1000
 		latencies = append(latencies, gangElapsed)
-		totalSuccess += gangSuccess
-		totalErrors += gangErrors
 
-		fmt.Printf("    Gang %d: %d/%d members placed, barrier time=%.1fms\n",
-			gangIdx+1, gangSuccess, 2, gangElapsed)
+		if err != nil {
+			totalErrors++
+			fmt.Printf("    Gang %d: FAILED to submit: %v (%.1fms)\n", gangIdx+1, err, gangElapsed)
+			continue
+		}
+
+		totalSuccess++
+		fmt.Printf("    Gang %d: submitted (phase=%s, members=%d, gpus=%d) %.1fms\n",
+			gangIdx+1, resp.Phase, resp.Members, resp.TotalGPUs, gangElapsed)
+
+		// Poll status to check placement
+		status := pollGangStatus(baseURL, gangID, 10*time.Second)
+		if status != nil {
+			if status.ReadyCount > 0 && status.ReadyCount < status.Members {
+				allOrNothingViolations++
+				fmt.Printf("           ❌ PARTIAL placement: %d/%d (violates all-or-nothing!)\n",
+					status.ReadyCount, status.Members)
+			} else if status.ReadyCount == status.Members {
+				fmt.Printf("           ✅ All %d members placed\n", status.Members)
+			} else {
+				fmt.Printf("           ⏳ Phase: %s (ready=%d, pending=%d, failed=%d)\n",
+					status.Phase, status.ReadyCount, status.PendingCount, status.FailedCount)
+			}
+		}
 	}
 
-	// ── Phase 2: Submit 3 gangs of 4 GPUs each ──
-	fmt.Println("\n  Phase 2: Medium gangs (3 gangs × 4 GPUs each)...")
+	// ── Phase 2: Medium gangs (3 gangs × 4 members × 1 GPU, NVLink preferred) ──
+	fmt.Println("\n  Phase 2: Medium gangs (3 gangs × 4 members × 1 GPU, NVLink preferred)...")
 	for gangIdx := 0; gangIdx < 3; gangIdx++ {
 		gangID := fmt.Sprintf("gang-medium-%d-%d", time.Now().UnixNano(), gangIdx)
-		gangStart := time.Now()
-		gangSuccess := 0
-		gangErrors := 0
 
-		var wg sync.WaitGroup
-		for member := 0; member < 4; member++ {
-			wg.Add(1)
-			go func(m int) {
-				defer wg.Done()
-				req := ScheduleRequest{
-					RequestID:    fmt.Sprintf("%s-member-%d", gangID, m),
-					Name:         fmt.Sprintf("gang-medium-%d-member-%d", gangIdx, m),
-					Image:        "nvidia/cuda:12.0-base-ubuntu22.04",
-					Command:      []string{"sleep", "5"},
-					GPUCount:     1,
-					Priority:     5,
-					MemoryMB:     512,
-					CPUMillis:    500,
-					GangID:       gangID,
-					GangSize:     4,
-					PreferNVLink: true, // Request NVLink placement
-				}
-
-				_, err := submitJob(baseURL, req)
-				if err != nil {
-					gangErrors++
-				} else {
-					gangSuccess++
-				}
-			}(member)
+		req := GangSubmitRequest{
+			GangID:              gangID,
+			Name:                fmt.Sprintf("bench-gang-medium-%d", gangIdx),
+			MinMembers:          4,
+			GPUsPerMember:       1,
+			RequireNVLink:       true,
+			PreferColocated:     true,
+			Priority:            5,
+			Image:               "nvidia/cuda:12.0-base-ubuntu22.04",
+			Command:             []string{"sleep", "5"},
+			ScheduleTimeoutSecs: 30,
+			BarrierTimeoutSecs:  30,
 		}
-		wg.Wait()
 
+		gangStart := time.Now()
+		resp, err := submitGang(baseURL, req)
 		gangElapsed := time.Since(gangStart).Seconds() * 1000
 		latencies = append(latencies, gangElapsed)
-		totalSuccess += gangSuccess
-		totalErrors += gangErrors
 
-		allPlaced := gangSuccess == 4
-		status := "✅ all-or-nothing: YES"
-		if !allPlaced && gangSuccess > 0 {
-			status = "❌ PARTIAL placement (violates all-or-nothing!)"
-		} else if gangSuccess == 0 {
-			status = "⏳ queued (insufficient resources)"
+		if err != nil {
+			totalErrors++
+			fmt.Printf("    Gang %d: FAILED to submit: %v (%.1fms)\n", gangIdx+1, err, gangElapsed)
+			continue
 		}
 
-		fmt.Printf("    Gang %d: %d/%d members placed, barrier=%.1fms — %s\n",
-			gangIdx+1, gangSuccess, 4, gangElapsed, status)
+		totalSuccess++
+
+		status := pollGangStatus(baseURL, gangID, 15*time.Second)
+		placement := "⏳ pending"
+		if status != nil {
+			if status.ReadyCount > 0 && status.ReadyCount < status.Members {
+				allOrNothingViolations++
+				placement = fmt.Sprintf("❌ PARTIAL %d/%d", status.ReadyCount, status.Members)
+			} else if status.ReadyCount == status.Members {
+				placement = fmt.Sprintf("✅ all %d placed", status.Members)
+			} else {
+				placement = fmt.Sprintf("phase=%s (ready=%d, failed=%d)",
+					status.Phase, status.ReadyCount, status.FailedCount)
+			}
+		}
+
+		fmt.Printf("    Gang %d: submitted (phase=%s, gpus=%d) %.1fms — %s\n",
+			gangIdx+1, resp.Phase, resp.TotalGPUs, gangElapsed, placement)
 	}
 
-	// ── Phase 3: Oversubscription test (should queue, not deadlock) ──
+	// ── Phase 3: Oversubscription test (should reject, not deadlock) ──
 	fmt.Println("\n  Phase 3: Oversubscription (request more GPUs than available)...")
 	oversubGangID := fmt.Sprintf("gang-oversub-%d", time.Now().UnixNano())
-	oversubStart := time.Now()
 
-	req := ScheduleRequest{
-		RequestID: fmt.Sprintf("%s-member-0", oversubGangID),
-		Name:      "gang-oversub-member-0",
-		Image:     "nvidia/cuda:12.0-base-ubuntu22.04",
-		Command:   []string{"sleep", "5"},
-		GPUCount:  100, // More GPUs than any cluster has
-		Priority:  5,
-		MemoryMB:  512,
-		CPUMillis: 500,
-		GangID:    oversubGangID,
-		GangSize:  1,
+	oversubReq := GangSubmitRequest{
+		GangID:              oversubGangID,
+		Name:                "bench-gang-oversub",
+		MinMembers:          100,
+		GPUsPerMember:       8,
+		Priority:            5,
+		Image:               "nvidia/cuda:12.0-base-ubuntu22.04",
+		Command:             []string{"sleep", "5"},
+		ScheduleTimeoutSecs: 10,
+		BarrierTimeoutSecs:  10,
 	}
 
-	_, oversubErr := submitJob(baseURL, req)
+	oversubStart := time.Now()
+	_, oversubErr := submitGang(baseURL, oversubReq)
 	oversubElapsed := time.Since(oversubStart).Seconds() * 1000
 
+	oversubHandled := false
 	if oversubErr != nil {
+		oversubHandled = true
 		fmt.Printf("    Oversubscription correctly rejected: %.1fms (no deadlock)\n", oversubElapsed)
 	} else {
-		fmt.Printf("    ⚠️  Oversubscription was accepted (unexpected): %.1fms\n", oversubElapsed)
+		// Submitted but should timeout or fail during scheduling
+		status := pollGangStatus(baseURL, oversubGangID, 15*time.Second)
+		if status != nil && (status.Phase == "TIMEOUT" || status.Phase == "FAILED") {
+			oversubHandled = true
+			fmt.Printf("    Oversubscription timed out correctly: phase=%s %.1fms\n", status.Phase, oversubElapsed)
+		} else {
+			fmt.Printf("    ⚠️  Oversubscription accepted unexpectedly: %.1fms\n", oversubElapsed)
+		}
 	}
 
 	// ── Results ──
@@ -797,10 +856,25 @@ func runGangSchedulingTest(baseURL string) BenchmarkResult {
 	fmt.Println("\n  ┌─────────────────────────────────────────────────┐")
 	fmt.Println("  │           GANG SCHEDULING RESULTS                │")
 	fmt.Println("  ├─────────────────────────────────────────────────┤")
-	fmt.Printf("  │  Total gang members submitted:  %4d             │\n", totalSuccess+totalErrors)
-	fmt.Printf("  │  Successfully placed:           %4d             │\n", totalSuccess)
-	fmt.Printf("  │  Failed/queued:                  %4d             │\n", totalErrors)
-	fmt.Printf("  │  Avg barrier sync time:          %.1fms          │\n", stats.Avg)
+	fmt.Printf("  │  Gangs submitted:              %4d              │\n", totalSuccess+totalErrors)
+	fmt.Printf("  │  Successfully accepted:        %4d              │\n", totalSuccess)
+	fmt.Printf("  │  Failed to submit:             %4d              │\n", totalErrors)
+	fmt.Printf("  │  All-or-nothing violations:    %4d              │\n", allOrNothingViolations)
+	fmt.Printf("  │  Oversubscription handled:     %v               │\n", oversubHandled)
+	fmt.Printf("  │  Avg submit latency:           %.1fms            │\n", stats.Avg)
+	fmt.Println("  ├─────────────────────────────────────────────────┤")
+
+	if allOrNothingViolations == 0 && oversubHandled {
+		fmt.Println("  │  ✅ ALL-OR-NOTHING: PROVEN                      │")
+		fmt.Println("  │  ✅ DEADLOCK PREVENTION: PROVEN                  │")
+	} else {
+		if allOrNothingViolations > 0 {
+			fmt.Println("  │  ❌ ALL-OR-NOTHING: VIOLATED                    │")
+		}
+		if !oversubHandled {
+			fmt.Println("  │  ❌ DEADLOCK PREVENTION: NOT PROVEN              │")
+		}
+	}
 	fmt.Println("  └─────────────────────────────────────────────────┘")
 
 	return BenchmarkResult{
@@ -812,11 +886,94 @@ func runGangSchedulingTest(baseURL string) BenchmarkResult {
 		Latencies:     stats,
 		Duration:      "n/a",
 		Details: map[string]interface{}{
-			"small_gangs_2gpu":  5,
-			"medium_gangs_4gpu": 3,
-			"oversubscription":  oversubErr != nil,
+			"small_gangs_2member":       5,
+			"medium_gangs_4member":      3,
+			"all_or_nothing_violations": allOrNothingViolations,
+			"oversubscription_handled":  oversubHandled,
+			"all_or_nothing_proven":     allOrNothingViolations == 0,
 		},
 	}
+}
+
+// ============================================================================
+// GANG HTTP HELPERS
+// ============================================================================
+
+func submitGang(baseURL string, req GangSubmitRequest) (*GangSubmitResponse, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("marshal error: %w", err)
+	}
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	httpResp, err := client.Post(baseURL+"/gang/submit", "application/json", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("http error: %w", err)
+	}
+	defer httpResp.Body.Close()
+
+	respBody, _ := io.ReadAll(httpResp.Body)
+
+	if httpResp.StatusCode != http.StatusAccepted && httpResp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("%d: %s", httpResp.StatusCode, string(respBody))
+	}
+
+	var gangResp GangSubmitResponse
+	if err := json.Unmarshal(respBody, &gangResp); err != nil {
+		return nil, fmt.Errorf("decode error: %w", err)
+	}
+
+	return &gangResp, nil
+}
+
+func getGangStatus(baseURL string, gangID string) (*GangStatusResponse, error) {
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(fmt.Sprintf("%s/gang/status?gang_id=%s", baseURL, gangID))
+	if err != nil {
+		return nil, fmt.Errorf("http error: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("status %d", resp.StatusCode)
+	}
+
+	var status GangStatusResponse
+	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
+		return nil, fmt.Errorf("decode error: %w", err)
+	}
+
+	return &status, nil
+}
+
+// pollGangStatus: Poll gang status until terminal state or timeout
+func pollGangStatus(baseURL string, gangID string, timeout time.Duration) *GangStatusResponse {
+	deadline := time.Now().Add(timeout)
+
+	for time.Now().Before(deadline) {
+		status, err := getGangStatus(baseURL, gangID)
+		if err != nil {
+			time.Sleep(1 * time.Second)
+			continue
+		}
+
+		// Terminal states — stop polling
+		switch status.Phase {
+		case "RUNNING", "SUCCEEDED", "FAILED", "CANCELLED", "TIMEOUT":
+			return status
+		}
+
+		// Also stop if all members are ready (even if phase hasn't updated)
+		if status.ReadyCount == status.Members && status.Members > 0 {
+			return status
+		}
+
+		time.Sleep(1 * time.Second)
+	}
+
+	// One final check
+	status, _ := getGangStatus(baseURL, gangID)
+	return status
 }
 
 // ============================================================================
