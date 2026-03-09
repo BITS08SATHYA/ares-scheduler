@@ -157,7 +157,7 @@ func main() {
 	log.Info("  Log Level: %s", *logLevel)
 	log.Info("")
 
-	ctx := context.Background()
+	ctx, cancelCtx := context.WithCancel(context.Background())
 
 	// ========================================================================
 	// STEP 1: Connect to Redis
@@ -507,8 +507,23 @@ func main() {
 	log.Info("Shutting down gracefully...")
 
 	// ★ Deregister from control plane before stopping
+	// ★ FIX: Cancel context FIRST to stop the heartbeat goroutine.
+	// Without this, the heartbeat keeps firing while deregistration is
+	// in progress, causing log interleaving (register-looking logs
+	// appearing during deregister) and potential races where the
+	// heartbeat re-creates stale state after the cluster is removed.
+	log.Info("Stopping heartbeat goroutine...")
+	cancelCtx()
+	// Give heartbeat goroutine a moment to exit cleanly
+	time.Sleep(200 * time.Millisecond)
+	log.Info("✓ Heartbeat stopped")
+
+	// Now deregister with a fresh context (the old one is cancelled)
+	deregCtx, deregCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer deregCancel()
+
 	log.Info("Deregistering cluster from control plane...")
-	deregErr := cluster.DeregisterCluster(ctx, *controlPlane, *clusterID)
+	deregErr := cluster.DeregisterCluster(deregCtx, *controlPlane, *clusterID)
 	if deregErr != nil {
 		log.Warn("Deregistration failed (non-fatal): %v", deregErr)
 	} else {

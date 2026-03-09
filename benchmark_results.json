@@ -1,85 +1,85 @@
 [
   {
     "suite": "stress",
-    "timestamp": "2026-03-07T23:27:05-05:00",
+    "timestamp": "2026-03-08T13:05:26-04:00",
     "total_requests": 1600,
     "success_count": 1600,
     "error_count": 0,
     "duplicate_blocked": 0,
     "latencies": {
-      "p50_ms": 49.556062,
-      "p95_ms": 500.39608300000003,
-      "p99_ms": 864.871888,
-      "p999_ms": 961.192841,
-      "min_ms": 31.440061999999998,
-      "max_ms": 965.294488,
-      "avg_ms": 194.36968440187505
+      "p50_ms": 204.663296,
+      "p95_ms": 680.537218,
+      "p99_ms": 928.5525690000001,
+      "p999_ms": 1039.7178170000002,
+      "min_ms": 52.693964,
+      "max_ms": 1089.655567,
+      "avg_ms": 286.97414587500026
     },
-    "throughput_rps": 30.712217903733624,
-    "total_duration": "52.096530606s",
+    "throughput_rps": 10.13364868567062,
+    "total_duration": "2m37.889823264s",
     "details": {
       "burst_100": {
         "errors": 0,
         "latency": {
-          "p50_ms": 580.514317,
-          "p95_ms": 948.244902,
-          "p99_ms": 961.192841,
-          "p999_ms": 965.294488,
-          "min_ms": 111.29037,
-          "max_ms": 965.294488,
-          "avg_ms": 566.5316934900002
+          "p50_ms": 624.2818110000001,
+          "p95_ms": 1038.7017190000001,
+          "p99_ms": 1039.427347,
+          "p999_ms": 1039.7178170000002,
+          "min_ms": 83.588886,
+          "max_ms": 1039.7178170000002,
+          "avg_ms": 641.1767203699998
         },
-        "rps": 103.42738420808662,
+        "rps": 95.95834541880714,
         "success": 100
       },
       "sequential_1000": {
         "errors": 0,
         "latency": {
-          "p50_ms": 46.060337,
-          "p95_ms": 54.854836999999996,
-          "p99_ms": 63.528797,
-          "p999_ms": 116.949415,
-          "min_ms": 31.440061999999998,
-          "max_ms": 134.614948,
-          "avg_ms": 46.798278164999985
+          "p50_ms": 110.56782,
+          "p95_ms": 351.490175,
+          "p99_ms": 456.859642,
+          "p999_ms": 712.014951,
+          "min_ms": 52.693964,
+          "max_ms": 1089.655567,
+          "avg_ms": 151.74768863399993
         },
-        "rps": 21.36339444358662,
+        "rps": 6.589400962962095,
         "success": 1000
       },
       "sustained_500x50": {
         "errors": 0,
         "latency": {
-          "p50_ms": 420.785024,
-          "p95_ms": 498.942857,
-          "p99_ms": 529.187574,
-          "p999_ms": 762.267719,
-          "min_ms": 49.183809000000004,
-          "max_ms": 762.267719,
-          "avg_ms": 415.08009505799976
+          "p50_ms": 468.109985,
+          "p95_ms": 700.406692,
+          "p99_ms": 746.5984719999999,
+          "p999_ms": 976.4907400000001,
+          "min_ms": 99.27309600000001,
+          "max_ms": 976.4907400000001,
+          "avg_ms": 486.5865454580004
         },
-        "rps": 115.72391847439823,
+        "rps": 98.25419750799195,
         "success": 500
       }
     }
   },
   {
     "suite": "exactly-once",
-    "timestamp": "2026-03-07T23:27:15-05:00",
+    "timestamp": "2026-03-08T13:05:36-04:00",
     "total_requests": 1000,
     "success_count": 0,
     "error_count": 0,
     "duplicate_blocked": 0,
     "latencies": {
-      "p50_ms": 5031.052694999999,
-      "p95_ms": 9469.233104,
-      "p99_ms": 9813.220360000001,
-      "p999_ms": 9861.605942,
-      "min_ms": 59.550262,
-      "max_ms": 9867.207382,
-      "avg_ms": 5140.2833461489945
+      "p50_ms": 4896.133011,
+      "p95_ms": 9716.033381000001,
+      "p99_ms": 10179.626739,
+      "p999_ms": 10209.751795,
+      "min_ms": 118.950368,
+      "max_ms": 10212.224852000001,
+      "avg_ms": 5131.726410681
     },
-    "throughput_rps": 100.71773399079754,
-    "total_duration": "9.928738072s",
+    "throughput_rps": 97.47001840485127,
+    "total_duration": "10.259565109s",
     "details": {
       "duplicate_executions": 0,
       "exactly_once_proven": false,
@@ -91,19 +91,19 @@
   },
   {
     "suite": "failure-injection",
-    "timestamp": "2026-03-07T23:29:01-05:00",
+    "timestamp": "2026-03-08T13:08:34-04:00",
     "total_requests": 50,
     "success_count": 0,
     "error_count": 0,
     "duplicate_blocked": 0,
     "latencies": {
-      "p50_ms": 48.263337,
-      "p95_ms": 56.581292,
-      "p99_ms": 101.678976,
-      "p999_ms": 101.678976,
-      "min_ms": 40.001202,
-      "max_ms": 101.678976,
-      "avg_ms": 50.158799319999986
+      "p50_ms": 79.51143400000001,
+      "p95_ms": 101.97150500000001,
+      "p99_ms": 114.337047,
+      "p999_ms": 114.337047,
+      "min_ms": 52.885107,
+      "max_ms": 114.337047,
+      "avg_ms": 81.91079765999999
     },
     "throughput_rps": 0,
     "total_duration": "~90s",
@@ -117,19 +117,19 @@
   },
   {
     "suite": "gang-scheduling",
-    "timestamp": "2026-03-07T23:29:01-05:00",
-    "total_requests": 22,
+    "timestamp": "2026-03-08T13:08:35-04:00",
+    "total_requests": 21,
     "success_count": 0,
-    "error_count": 22,
+    "error_count": 21,
     "duplicate_blocked": 0,
     "latencies": {
-      "p50_ms": 27.131702,
-      "p95_ms": 53.192238,
-      "p99_ms": 53.192238,
-      "p999_ms": 53.192238,
-      "min_ms": 13.636496,
-      "max_ms": 53.192238,
-      "avg_ms": 26.679721875000002
+      "p50_ms": 135.260099,
+      "p95_ms": 345.712603,
+      "p99_ms": 345.712603,
+      "p999_ms": 345.712603,
+      "min_ms": 75.934681,
+      "max_ms": 345.712603,
+      "avg_ms": 151.8922455
     },
     "throughput_rps": 0,
     "total_duration": "n/a",
@@ -141,22 +141,22 @@
   },
   {
     "suite": "drf-fairness",
-    "timestamp": "2026-03-07T23:29:02-05:00",
+    "timestamp": "2026-03-08T13:08:37-04:00",
     "total_requests": 120,
     "success_count": 120,
     "error_count": 0,
     "duplicate_blocked": 0,
     "latencies": {
-      "p50_ms": 343.993997,
-      "p95_ms": 660.707765,
-      "p99_ms": 690.285724,
-      "p999_ms": 690.285724,
-      "min_ms": 72.142885,
-      "max_ms": 690.285724,
-      "avg_ms": 370.62002076666664
+      "p50_ms": 507.431195,
+      "p95_ms": 739.8029459999999,
+      "p99_ms": 744.16012,
+      "p999_ms": 744.16012,
+      "min_ms": 109.931177,
+      "max_ms": 744.16012,
+      "avg_ms": 507.3609680666667
     },
-    "throughput_rps": 86.7699374502998,
-    "total_duration": "1.397353683s",
+    "throughput_rps": 80.53656866053953,
+    "total_duration": "1.604629652s",
     "details": {
       "jains_fairness": 1,
       "no_starvation": true,
@@ -168,24 +168,24 @@
   },
   {
     "suite": "priority-preemption",
-    "timestamp": "2026-03-07T23:30:14-05:00",
+    "timestamp": "2026-03-08T13:09:53-04:00",
     "total_requests": 21,
     "success_count": 21,
     "error_count": 0,
     "duplicate_blocked": 0,
     "latencies": {
-      "p50_ms": 118.576374,
-      "p95_ms": 118.576374,
-      "p99_ms": 118.576374,
-      "p999_ms": 118.576374,
-      "min_ms": 118.576374,
-      "max_ms": 118.576374,
-      "avg_ms": 118.576374
+      "p50_ms": 239.979513,
+      "p95_ms": 239.979513,
+      "p99_ms": 239.979513,
+      "p999_ms": 239.979513,
+      "min_ms": 239.979513,
+      "max_ms": 239.979513,
+      "avg_ms": 239.979513
     },
     "throughput_rps": 0,
-    "total_duration": "1m0.803820915s",
+    "total_duration": "1m4.971807373s",
     "details": {
-      "high_priority_submit_ms": 118.576374,
+      "high_priority_submit_ms": 239.979513,
       "high_priority_submitted": true,
       "high_priority_time_to_running_s": -1,
       "low_priority_preempted": 0,
@@ -196,22 +196,22 @@
   },
   {
     "suite": "multi-cluster-routing",
-    "timestamp": "2026-03-07T23:30:15-05:00",
+    "timestamp": "2026-03-08T13:09:54-04:00",
     "total_requests": 30,
     "success_count": 30,
     "error_count": 0,
     "duplicate_blocked": 0,
     "latencies": {
-      "p50_ms": 156.64793,
-      "p95_ms": 263.509229,
-      "p99_ms": 265.385205,
-      "p999_ms": 265.385205,
-      "min_ms": 60.977589,
-      "max_ms": 265.385205,
-      "avg_ms": 160.64661076000002
+      "p50_ms": 315.761309,
+      "p95_ms": 437.27778,
+      "p99_ms": 438.890788,
+      "p999_ms": 438.890788,
+      "min_ms": 111.098132,
+      "max_ms": 438.890788,
+      "avg_ms": 316.48927060000005
     },
-    "throughput_rps": 94.12299342202259,
-    "total_duration": "265.609912ms",
+    "throughput_rps": 56.88310237364107,
+    "total_duration": "439.497829ms",
     "details": {
       "nvlink_routing": {
         "": 5

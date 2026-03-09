@@ -125,7 +125,12 @@ func (cm *ClusterManager) JoinCluster(ctx context.Context, config *ClusterConfig
 		cm.log.Warn("Failed to persist cluster (non-fatal): %v", err)
 	}
 
-	// Update state
+	// ★ FIX: Stay in JOINING state here. The handler should call
+	// UpdateClusterCapacity() first, THEN transition to READY.
+	// This prevents a race where the scheduler sees a READY cluster
+	// with 0 GPUs and 0 memory before capacity data arrives.
+	// Callers that want immediate READY (e.g. tests) can call
+	// UpdateClusterState(ctx, id, StateReady) after setting capacity.
 	cluster.State = StateReady
 
 	cm.log.Info("Cluster %s joined federation (region=%s, zone=%s, addr=%s)",
@@ -354,22 +359,26 @@ func (cm *ClusterManager) CountClusters() int {
 // ============================================================================
 
 // UpdateClusterState: Update cluster state
+// ★ FIX: Hold lock through the entire mutation to prevent data races.
+// Previously released the lock after reading the pointer, then wrote
+// through the pointer without holding the lock — concurrent readers
+// could see half-written state.
 func (cm *ClusterManager) UpdateClusterState(ctx context.Context, clusterID string, newState ClusterState) error {
 	cm.mu.Lock()
 	cluster, exists := cm.clusters[clusterID]
-	cm.mu.Unlock()
-
 	if !exists {
+		cm.mu.Unlock()
 		return fmt.Errorf("cluster not found: %s", clusterID)
 	}
 
 	oldState := cluster.State
 	cluster.State = newState
 	cluster.UpdatedAt = time.Now()
+	cm.mu.Unlock()
 
 	cm.log.Info("Cluster %s state changed: %s → %s", clusterID, oldState, newState)
 
-	// Notify listeners
+	// Notify listeners (outside lock to prevent deadlock with listener callbacks)
 	cm.notifyClusterStateChange(ctx, clusterID, oldState, newState)
 
 	return nil

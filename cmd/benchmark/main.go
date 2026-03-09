@@ -440,15 +440,15 @@ func runExactlyOnceTest(baseURL string) BenchmarkResult {
 	stats := calcLatencyStats(latencies)
 
 	fmt.Println("\n  ┌─────────────────────────────────────────────────┐")
-	fmt.Println("  │           EXACTLY-ONCE RESULTS                  │")
-	fmt.Println("  ├─────────────────────────────────────────────────┤")
-	fmt.Printf("  │  Total submissions:      %4d                   │\n", totalSubmissions)
+	fmt.Println("    │           EXACTLY-ONCE RESULTS                  │")
+	fmt.Println("    ├─────────────────────────────────────────────────┤")
+	fmt.Printf("  │  Total submissions:      %4d                    │\n", totalSubmissions)
 	fmt.Printf("  │  Unique request IDs:      %4d                   │\n", uniqueJobs)
 	fmt.Printf("  │  Accepted (first submit): %4d                   │\n", accepted)
 	fmt.Printf("  │  Duplicates blocked:      %4d                   │\n", deduplicated)
 	fmt.Printf("  │  Errors:                  %4d                   │\n", errors)
 	fmt.Printf("  │  Unique job IDs created:  %4d                   │\n", len(uniqueJobIDs))
-	fmt.Println("  ├─────────────────────────────────────────────────┤")
+	fmt.Println("    ├─────────────────────────────────────────────────┤")
 
 	// THE CRITICAL CHECK
 	duplicateExecutions := int(accepted) - len(uniqueJobIDs)
@@ -606,13 +606,13 @@ func runFailureInjectionTest(baseURL string) BenchmarkResult {
 		}
 	}
 
-	fmt.Println("\n  ┌─────────────────────────────────────────────────┐")
-	fmt.Println("  │           FAILURE INJECTION RESULTS              │")
+	fmt.Println("\n┌─────────────────────────────────────────────────┐")
+	fmt.Println("  │           FAILURE INJECTION RESULTS             │")
 	fmt.Println("  ├─────────────────────────────────────────────────┤")
-	fmt.Printf("  │  Jobs submitted:     %4d                       │\n", len(jobIDs))
-	fmt.Printf("  │  Final succeeded:    %4d                       │\n", finalSucceeded)
-	fmt.Printf("  │  Final failed:       %4d                       │\n", finalFailed)
-	fmt.Printf("  │  Still running:      %4d                       │\n", finalOther)
+	fmt.Printf("│   Jobs submitted:     %4d                       │\n", len(jobIDs))
+	fmt.Printf("│  Final succeeded:    %4d                        │\n", finalSucceeded)
+	fmt.Printf("│  Final failed:       %4d                        │\n", finalFailed)
+	fmt.Printf("│  Still running:      %4d                        │\n", finalOther)
 	fmt.Println("  ├─────────────────────────────────────────────────┤")
 
 	recoveryRate := 0.0
