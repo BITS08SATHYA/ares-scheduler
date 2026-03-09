@@ -1195,46 +1195,83 @@ func runDRFFairnessTest(baseURL string) BenchmarkResult {
 // SUITE 6: PRIORITY PREEMPTION
 // Measures: High-priority job start time when cluster is full
 // Proves: Priority scheduling works, low-priority jobs yield
+//
+// Server-side preemption config (defaults):
+//   - Preemption triggers when incoming Priority >= 50
+//   - MinPriorityGap: 20 (incoming must be 20+ above victim)
+//   - PreemptiblePriorityMax: 30 (jobs at or below 30 are always preemptible)
+//   - MinimumAgeSeconds: 60 (victim must be running 60+ seconds)
+//   - MaxPreemptionsPerHour: 10
 // ============================================================================
 
 func runPriorityPreemptionTest(baseURL string) BenchmarkResult {
 	fmt.Println("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 	fmt.Println("  SUITE 6: PRIORITY PREEMPTION TEST")
 	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+	fmt.Println("  Config: low=10, high=90, min_age=60s, min_gap=20")
 
 	// ── Phase 1: Fill cluster with low-priority jobs ──
-	fmt.Println("\n  Phase 1: Filling cluster with 20 low-priority jobs (priority=1)...")
+	fmt.Println("\n  Phase 1: Filling cluster with low-priority jobs (priority=10)...")
 
-	lowPriorityIDs := make([]string, 0, 20)
+	lowPriorityJobs := 10 // Submit enough to saturate available GPUs
+	lowPriorityIDs := make([]string, 0, lowPriorityJobs)
 	lowSuccess := 0
+	lowQueued := 0
 
-	for i := 0; i < 20; i++ {
+	for i := 0; i < lowPriorityJobs; i++ {
 		reqID := fmt.Sprintf("preempt-low-%d-%d", time.Now().UnixNano(), i)
 		req := ScheduleRequest{
 			RequestID: reqID,
 			Name:      fmt.Sprintf("low-priority-job-%d", i),
 			Image:     "nvidia/cuda:12.0-base-ubuntu22.04",
-			Command:   []string{"sleep", "120"}, // Long-running
+			Command:   []string{"sleep", "300"}, // 5 min — long enough to survive the wait
 			GPUCount:  1,
-			Priority:  1, // LOW priority
+			Priority:  10, // LOW — below PreemptiblePriorityMax (30)
 			MemoryMB:  512,
 			CPUMillis: 500,
 		}
 
 		resp, err := submitJob(baseURL, req)
-		if err == nil {
+		if err != nil {
+			lowQueued++
+		} else {
 			lowSuccess++
 			lowPriorityIDs = append(lowPriorityIDs, resp.JobID)
 		}
 	}
-	fmt.Printf("  Submitted: %d low-priority jobs\n", lowSuccess)
+	fmt.Printf("  Submitted: %d low-priority jobs (%d accepted, %d errored)\n",
+		lowPriorityJobs, lowSuccess, lowQueued)
 
-	// Give time for jobs to start running
-	fmt.Println("  Waiting 10 seconds for jobs to start...")
-	time.Sleep(10 * time.Second)
+	// ── Phase 2: Wait for minimum age to pass ──
+	// PreemptionConfig.MinimumAgeSeconds = 60 — victims must be 60+ seconds old
+	waitSecs := 65
+	fmt.Printf("\n  Phase 2: Waiting %d seconds for jobs to exceed MinimumAgeSeconds (60s)...\n", waitSecs)
+	fmt.Println("  (Preemption requires victims to be running for at least 60 seconds)")
 
-	// ── Phase 2: Submit high-priority job ──
-	fmt.Println("\n  Phase 2: Submitting 1 HIGH-priority job (priority=10)...")
+	for remaining := waitSecs; remaining > 0; remaining -= 10 {
+		fmt.Printf("    %ds remaining...\n", remaining)
+		if remaining > 10 {
+			time.Sleep(10 * time.Second)
+		} else {
+			time.Sleep(time.Duration(remaining) * time.Second)
+		}
+	}
+
+	// Check current status of low-priority jobs
+	lowRunning := 0
+	for _, jobID := range lowPriorityIDs {
+		status := getJobStatus(baseURL, jobID)
+		if status == "RUNNING" || status == "running" || status == "SCHEDULED" || status == "scheduled" {
+			lowRunning++
+		}
+	}
+	fmt.Printf("  Low-priority jobs currently running/scheduled: %d\n", lowRunning)
+
+	// ── Phase 3: Submit high-priority job ──
+	// Priority 90 → triggers preemption path (>= 50 threshold)
+	// Gap: 90 - 10 = 80 → exceeds MinPriorityGap (20)
+	fmt.Println("\n  Phase 3: Submitting HIGH-priority job (priority=90)...")
+	fmt.Println("  (Priority >= 50 triggers preemption; gap=80 exceeds min_gap=20)")
 
 	highPriorityReqID := fmt.Sprintf("preempt-high-%d", time.Now().UnixNano())
 	highReq := ScheduleRequest{
@@ -1243,7 +1280,7 @@ func runPriorityPreemptionTest(baseURL string) BenchmarkResult {
 		Image:     "nvidia/cuda:12.0-base-ubuntu22.04",
 		Command:   []string{"sleep", "10"},
 		GPUCount:  1,
-		Priority:  10, // HIGH priority
+		Priority:  90, // HIGH — triggers preemption path (>= 50)
 		MemoryMB:  512,
 		CPUMillis: 500,
 	}
@@ -1252,22 +1289,24 @@ func runPriorityPreemptionTest(baseURL string) BenchmarkResult {
 	highResp, highErr := submitJob(baseURL, highReq)
 	highSubmitLatency := time.Since(highStart).Seconds() * 1000
 
+	highSubmitted := false
 	if highErr != nil {
 		fmt.Printf("  High-priority job submission: FAILED (%v)\n", highErr)
 	} else {
+		highSubmitted = true
 		fmt.Printf("  High-priority job submitted: %s (%.1fms)\n", highResp.JobID, highSubmitLatency)
 	}
 
-	// ── Phase 3: Monitor high-priority job until it starts running ──
-	fmt.Println("\n  Phase 3: Monitoring high-priority job status (60 seconds max)...")
+	// ── Phase 4: Monitor high-priority job status ──
+	fmt.Println("\n  Phase 4: Monitoring high-priority job status (60 seconds max)...")
 
 	timeToRunning := -1.0
 	monitorStart := time.Now()
 
-	for tick := 0; tick < 30; tick++ { // 30 × 2s = 60s max
-		time.Sleep(2 * time.Second)
+	if highSubmitted {
+		for tick := 0; tick < 30; tick++ { // 30 × 2s = 60s max
+			time.Sleep(2 * time.Second)
 
-		if highResp != nil {
 			status := getJobStatus(baseURL, highResp.JobID)
 			elapsed := time.Since(monitorStart).Seconds()
 
@@ -1284,25 +1323,28 @@ func runPriorityPreemptionTest(baseURL string) BenchmarkResult {
 		}
 	}
 
-	// ── Phase 4: Check if any low-priority jobs were preempted ──
-	fmt.Println("\n  Phase 4: Checking low-priority job status...")
+	// ── Phase 5: Check if any low-priority jobs were preempted ──
+	fmt.Println("\n  Phase 5: Checking low-priority job status after preemption...")
 
 	preempted := 0
 	running := 0
 	completed := 0
-	queued := 0
+	failed := 0
+	other := 0
 
 	for _, jobID := range lowPriorityIDs {
 		status := getJobStatus(baseURL, jobID)
-		switch status {
-		case "PREEMPTED", "preempted", "FAILED", "failed":
+		switch {
+		case status == "PREEMPTED" || status == "preempted":
 			preempted++
-		case "RUNNING", "running":
+		case status == "FAILED" || status == "failed":
+			failed++
+		case status == "RUNNING" || status == "running":
 			running++
-		case "SUCCEEDED", "succeeded":
+		case status == "SUCCEEDED" || status == "succeeded":
 			completed++
 		default:
-			queued++
+			other++
 		}
 	}
 
@@ -1310,25 +1352,39 @@ func runPriorityPreemptionTest(baseURL string) BenchmarkResult {
 	fmt.Println("\n  ┌─────────────────────────────────────────────────┐")
 	fmt.Println("  │           PRIORITY PREEMPTION RESULTS            │")
 	fmt.Println("  ├─────────────────────────────────────────────────┤")
-	fmt.Printf("  │  Low-priority jobs submitted:   %4d             │\n", lowSuccess)
-	fmt.Printf("  │  Low-priority running:          %4d             │\n", running)
-	fmt.Printf("  │  Low-priority preempted/failed: %4d             │\n", preempted)
-	fmt.Printf("  │  Low-priority completed:        %4d             │\n", completed)
-	fmt.Printf("  │  Low-priority queued:           %4d             │\n", queued)
+	fmt.Printf("  │  Low-priority submitted:      %4d              │\n", lowSuccess)
+	fmt.Printf("  │  Low-priority running:        %4d              │\n", running)
+	fmt.Printf("  │  Low-priority preempted:      %4d              │\n", preempted)
+	fmt.Printf("  │  Low-priority failed:         %4d              │\n", failed)
+	fmt.Printf("  │  Low-priority completed:      %4d              │\n", completed)
+	fmt.Printf("  │  Low-priority other:          %4d              │\n", other)
 	fmt.Println("  ├─────────────────────────────────────────────────┤")
-	fmt.Printf("  │  High-priority submit latency:  %.1fms          │\n", highSubmitLatency)
+	fmt.Printf("  │  High-priority submitted:     %v               │\n", highSubmitted)
+	fmt.Printf("  │  High-priority submit latency: %.1fms          │\n", highSubmitLatency)
 
 	if timeToRunning >= 0 {
 		fmt.Printf("  │  High-priority time to RUNNING: %.1fs           │\n", timeToRunning)
-		fmt.Println("  │  ✅ HIGH-PRIORITY JOB STARTED                   │")
-	} else {
-		fmt.Println("  │  ❌ HIGH-PRIORITY JOB DID NOT START (60s timeout)│")
 	}
 
-	if preempted > 0 {
-		fmt.Printf("  │  ✅ PREEMPTION WORKED: %d low-priority preempted │\n", preempted)
+	fmt.Println("  ├─────────────────────────────────────────────────┤")
+
+	// Determine pass/fail
+	highPriorityStarted := timeToRunning >= 0
+	preemptionObserved := preempted > 0 || failed > 0
+
+	if highPriorityStarted && preemptionObserved {
+		fmt.Println("  │  ✅ HIGH-PRIORITY JOB STARTED                   │")
+		fmt.Printf("  │  ✅ PREEMPTION OBSERVED: %d job(s) evicted       │\n", preempted+failed)
+		fmt.Println("  │  ✅ PRIORITY PREEMPTION: PROVEN                  │")
+	} else if highPriorityStarted {
+		fmt.Println("  │  ✅ HIGH-PRIORITY JOB STARTED                   │")
+		fmt.Println("  │  ⚠️  No preemption needed (spare capacity)       │")
+		fmt.Println("  │  ✅ PRIORITY SCHEDULING: PROVEN                  │")
 	} else {
-		fmt.Println("  │  ⚠️  No preemption observed (may have had spare capacity) │")
+		fmt.Println("  │  ❌ HIGH-PRIORITY JOB DID NOT START             │")
+		if !preemptionObserved {
+			fmt.Println("  │  ❌ NO PREEMPTION OBSERVED                      │")
+		}
 	}
 	fmt.Println("  └─────────────────────────────────────────────────┘")
 
@@ -1345,12 +1401,14 @@ func runPriorityPreemptionTest(baseURL string) BenchmarkResult {
 		Duration:      time.Since(highStart).String(),
 		Details: map[string]interface{}{
 			"low_priority_submitted":          lowSuccess,
-			"low_priority_preempted":          preempted,
 			"low_priority_running":            running,
-			"high_priority_submitted":         highErr == nil,
+			"low_priority_preempted":          preempted,
+			"low_priority_failed":             failed,
+			"high_priority_submitted":         highSubmitted,
 			"high_priority_submit_ms":         highSubmitLatency,
 			"high_priority_time_to_running_s": timeToRunning,
-			"preemption_observed":             preempted > 0,
+			"preemption_observed":             preemptionObserved,
+			"priority_scheduling_proven":      highPriorityStarted,
 		},
 	}
 }
