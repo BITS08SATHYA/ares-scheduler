@@ -1,29 +1,28 @@
 [
   {
-    "suite": "exactly-once",
-    "timestamp": "2026-03-09T11:56:15-04:00",
-    "total_requests": 1000,
-    "success_count": 100,
+    "suite": "gang-scheduling",
+    "timestamp": "2026-03-09T13:02:11-04:00",
+    "total_requests": 8,
+    "success_count": 8,
     "error_count": 0,
-    "duplicate_blocked": 900,
+    "duplicate_blocked": 0,
     "latencies": {
-      "p50_ms": 450.52509699999996,
-      "p95_ms": 1592.9031980000002,
-      "p99_ms": 1933.365507,
-      "p999_ms": 2227.998356,
-      "min_ms": 86.47712,
-      "max_ms": 2285.416367,
-      "avg_ms": 570.7006455290001
+      "p50_ms": 13.832721,
+      "p95_ms": 5661.297479,
+      "p99_ms": 5661.297479,
+      "p999_ms": 5661.297479,
+      "min_ms": 12.515799,
+      "max_ms": 5661.297479,
+      "avg_ms": 733.8639615
     },
-    "throughput_rps": 435.25577846953433,
-    "total_duration": "2.297499653s",
+    "throughput_rps": 0,
+    "total_duration": "n/a",
     "details": {
-      "duplicate_executions": 0,
-      "exactly_once_proven": true,
-      "missed_jobs": 0,
-      "replays_per_id": 10,
-      "unique_job_ids": 100,
-      "unique_request_ids": 100
+      "all_or_nothing_proven": true,
+      "all_or_nothing_violations": 0,
+      "medium_gangs_4member": 3,
+      "oversubscription_handled": false,
+      "small_gangs_2member": 5
     }
   }
 ]

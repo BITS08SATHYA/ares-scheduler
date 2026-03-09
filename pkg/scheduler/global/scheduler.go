@@ -101,6 +101,35 @@ func NewGlobalScheduler(
 	log.Info("Subscribed to ClusterManager events")
 	log.Info("Will populate clusters from cluster join events")
 
+	// Start gang scheduling loop
+	go gs.gangManager.RunSchedulingLoop(context.Background(), func() []gang.NodeResources {
+		gs.clustersMu.RLock()
+		defer gs.clustersMu.RUnlock()
+		nodes := make([]gang.NodeResources, 0, len(gs.clusters))
+		for _, c := range gs.clusters {
+			if !c.IsHealthy {
+				continue
+			}
+			gpuType := "any"
+			if len(c.GPUTypes) > 0 {
+				gpuType = c.GPUTypes[0]
+			}
+			nodes = append(nodes, gang.NodeResources{
+				ClusterID:     c.ClusterID,
+				NodeID:        c.ClusterID,
+				Zone:          c.Zone,
+				AvailableGPUs: c.AvailableGPUs,
+				TotalGPUs:     c.TotalGPUs,
+				GPUType:       gpuType,
+				HasNVLink:     false,
+				NUMANodes:     1,
+				GPUsPerNUMA:   c.TotalGPUs,
+			})
+		}
+		return nodes
+	})
+	log.Info("Gang scheduling loop started")
+
 	return gs
 }
 
@@ -425,7 +454,7 @@ func (gs *GlobalScheduler) ScheduleJob(
 			ctx,
 			jobRecord.Spec.TenantID,
 			jobRecord.Spec.GPUCount,
-			jobRecord.Spec.CPUMillis/1000, // Convert millicores to cores
+			jobRecord.Spec.CPUMillis/1000,           // Convert millicores to cores
 			float64(jobRecord.Spec.MemoryMB)/1024.0, // Convert MB to GB
 		)
 		if !drfDecision.Allowed {
