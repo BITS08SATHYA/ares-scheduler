@@ -278,6 +278,13 @@ func (gs *GlobalScheduler) SelectBestCluster(
 		return nil, nil, fmt.Errorf("no suitable clusters in federation")
 	}
 
+	// ★ PREEMPTION TRIGGER: If best cluster has insufficient GPUs, return error
+	// This triggers the preemption path in ScheduleJob (line 443)
+	if bestCluster.AvailableGPUs < jobSpec.GPUCount {
+		return nil, nil, fmt.Errorf("no cluster has sufficient GPUs: need %d, best has %d",
+			jobSpec.GPUCount, bestCluster.AvailableGPUs)
+	}
+
 	// ★ Optimistic state update: immediately reflect this decision locally
 	// Without this, rapid scheduling bursts pile jobs onto one cluster because
 	// heartbeat hasn't arrived yet to report the cluster is busy.

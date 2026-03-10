@@ -1,29 +1,29 @@
 [
   {
     "suite": "priority-preemption",
-    "timestamp": "2026-03-09T20:55:04-04:00",
+    "timestamp": "2026-03-09T23:25:22-04:00",
     "total_requests": 11,
     "success_count": 11,
     "error_count": 0,
     "duplicate_blocked": 0,
     "latencies": {
-      "p50_ms": 30.061382000000002,
-      "p95_ms": 30.061382000000002,
-      "p99_ms": 30.061382000000002,
-      "p999_ms": 30.061382000000002,
-      "min_ms": 30.061382000000002,
-      "max_ms": 30.061382000000002,
-      "avg_ms": 30.061382000000002
+      "p50_ms": 34.251419999999996,
+      "p95_ms": 34.251419999999996,
+      "p99_ms": 34.251419999999996,
+      "p999_ms": 34.251419999999996,
+      "min_ms": 34.251419999999996,
+      "max_ms": 34.251419999999996,
+      "avg_ms": 34.251419999999996
     },
     "throughput_rps": 0,
-    "total_duration": "1m1.070707578s",
+    "total_duration": "1m0.870206887s",
     "details": {
-      "high_priority_submit_ms": 30.061382000000002,
+      "high_priority_submit_ms": 34.251419999999996,
       "high_priority_submitted": true,
       "high_priority_time_to_running_s": -1,
       "low_priority_failed": 0,
       "low_priority_preempted": 0,
-      "low_priority_running": 1,
+      "low_priority_running": 0,
       "low_priority_submitted": 10,
       "preemption_observed": false,
       "priority_scheduling_proven": false
