@@ -491,6 +491,9 @@ func NewAPIGatewayWithCoordinator(
 	globalScheduler.SetMetricsCallbacks(func() { metrics.RecordGPURollback() })
 	log.Info("✓ GlobalScheduler metrics callbacks wired")
 
+	globalScheduler.SetJobStore(jobStore)
+	log.Info("✓ JobStore injected into GlobalScheduler (preemption queries enabled)")
+
 	// ★ Start health watchdog to detect crashed clusters
 	go clusterManager.StartHealthWatchdog(context.Background(), 30*time.Second)
 	log.Info("✓ Health watchdog started (30s heartbeat timeout)")

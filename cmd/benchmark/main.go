@@ -175,7 +175,7 @@ func runStressTest(baseURL string) BenchmarkResult {
 		req := ScheduleRequest{
 			RequestID: fmt.Sprintf("stress-seq-%d-%d", time.Now().UnixNano(), i),
 			Name:      fmt.Sprintf("stress-seq-%d", i),
-			Image:     "nvidia/cuda:12.0-base-ubuntu22.04",
+			Image:     "nvidia/cuda:13.0.2-runtime-ubuntu22.04",
 			Command:   []string{"sleep", "1"},
 			GPUCount:  1,
 			Priority:  5,
@@ -221,7 +221,7 @@ func runStressTest(baseURL string) BenchmarkResult {
 			req := ScheduleRequest{
 				RequestID: fmt.Sprintf("stress-burst-%d-%d", time.Now().UnixNano(), idx),
 				Name:      fmt.Sprintf("stress-burst-%d", idx),
-				Image:     "nvidia/cuda:12.0-base-ubuntu22.04",
+				Image:     "nvidia/cuda:13.0.2-runtime-ubuntu22.04",
 				Command:   []string{"sleep", "1"},
 				GPUCount:  1,
 				Priority:  5,
@@ -270,7 +270,7 @@ func runStressTest(baseURL string) BenchmarkResult {
 				req := ScheduleRequest{
 					RequestID: fmt.Sprintf("stress-sustained-%d-%d", time.Now().UnixNano(), idx),
 					Name:      fmt.Sprintf("stress-sustained-%d", idx),
-					Image:     "nvidia/cuda:12.0-base-ubuntu22.04",
+					Image:     "nvidia/cuda:13.0.2-runtime-ubuntu22.04",
 					Command:   []string{"sleep", "1"},
 					GPUCount:  1,
 					Priority:  5,
@@ -378,7 +378,7 @@ func runExactlyOnceTest(baseURL string) BenchmarkResult {
 				req := ScheduleRequest{
 					RequestID: reqID, // SAME request ID across replays
 					Name:      fmt.Sprintf("exactlyonce-job-%d", jobIdx),
-					Image:     "nvidia/cuda:12.0-base-ubuntu22.04",
+					Image:     "nvidia/cuda:13.0.2-runtime-ubuntu22.04",
 					Command:   []string{"sleep", "1"},
 					GPUCount:  1,
 					Priority:  5,
@@ -524,7 +524,7 @@ func runFailureInjectionTest(baseURL string) BenchmarkResult {
 		req := ScheduleRequest{
 			RequestID:  reqID,
 			Name:       fmt.Sprintf("failure-job-%d", i),
-			Image:      "nvidia/cuda:12.0-base-ubuntu22.04",
+			Image:      "nvidia/cuda:13.0.2-runtime-ubuntu22.04",
 			Command:    []string{"sleep", "60"},
 			GPUCount:   1,
 			Priority:   5,
@@ -728,7 +728,7 @@ func runGangSchedulingTest(baseURL string) BenchmarkResult {
 			MinMembers:          2,
 			GPUsPerMember:       1,
 			Priority:            5,
-			Image:               "nvidia/cuda:12.0-base-ubuntu22.04",
+			Image:               "nvidia/cuda:13.0.2-runtime-ubuntu22.04",
 			Command:             []string{"sleep", "5"},
 			ScheduleTimeoutSecs: 30,
 			BarrierTimeoutSecs:  30,
@@ -778,7 +778,7 @@ func runGangSchedulingTest(baseURL string) BenchmarkResult {
 			RequireNVLink:       true,
 			PreferColocated:     true,
 			Priority:            5,
-			Image:               "nvidia/cuda:12.0-base-ubuntu22.04",
+			Image:               "nvidia/cuda:13.0.2-runtime-ubuntu22.04",
 			Command:             []string{"sleep", "5"},
 			ScheduleTimeoutSecs: 30,
 			BarrierTimeoutSecs:  30,
@@ -825,7 +825,7 @@ func runGangSchedulingTest(baseURL string) BenchmarkResult {
 		MinMembers:          100,
 		GPUsPerMember:       8,
 		Priority:            5,
-		Image:               "nvidia/cuda:12.0-base-ubuntu22.04",
+		Image:               "nvidia/cuda:13.0.2-runtime-ubuntu22.04",
 		Command:             []string{"sleep", "5"},
 		ScheduleTimeoutSecs: 10,
 		BarrierTimeoutSecs:  10,
@@ -1007,7 +1007,7 @@ func runDRFFairnessTest(baseURL string) BenchmarkResult {
 			req := ScheduleRequest{
 				RequestID: fmt.Sprintf("drf-tenantA-%d-%d", time.Now().UnixNano(), idx),
 				Name:      fmt.Sprintf("drf-tenantA-job-%d", idx),
-				Image:     "nvidia/cuda:12.0-base-ubuntu22.04",
+				Image:     "nvidia/cuda:13.0.2-runtime-ubuntu22.04",
 				Command:   []string{"sleep", "30"},
 				GPUCount:  1,
 				Priority:  5,
@@ -1036,7 +1036,7 @@ func runDRFFairnessTest(baseURL string) BenchmarkResult {
 			req := ScheduleRequest{
 				RequestID: fmt.Sprintf("drf-tenantB-%d-%d", time.Now().UnixNano(), idx),
 				Name:      fmt.Sprintf("drf-tenantB-job-%d", idx),
-				Image:     "nvidia/cuda:12.0-base-ubuntu22.04",
+				Image:     "nvidia/cuda:13.0.2-runtime-ubuntu22.04",
 				Command:   []string{"sleep", "30"},
 				GPUCount:  1,
 				Priority:  5,
@@ -1082,7 +1082,7 @@ func runDRFFairnessTest(baseURL string) BenchmarkResult {
 			req := ScheduleRequest{
 				RequestID: fmt.Sprintf("drf-heavy-A-%d-%d", time.Now().UnixNano(), idx),
 				Name:      fmt.Sprintf("drf-heavy-A-%d", idx),
-				Image:     "nvidia/cuda:12.0-base-ubuntu22.04",
+				Image:     "nvidia/cuda:13.0.2-runtime-ubuntu22.04",
 				Command:   []string{"sleep", "20"},
 				GPUCount:  1,
 				Priority:  5,
@@ -1104,7 +1104,7 @@ func runDRFFairnessTest(baseURL string) BenchmarkResult {
 			req := ScheduleRequest{
 				RequestID: fmt.Sprintf("drf-light-B-%d-%d", time.Now().UnixNano(), idx),
 				Name:      fmt.Sprintf("drf-light-B-%d", idx),
-				Image:     "nvidia/cuda:12.0-base-ubuntu22.04",
+				Image:     "nvidia/cuda:13.0.2-runtime-ubuntu22.04",
 				Command:   []string{"sleep", "20"},
 				GPUCount:  1,
 				Priority:  5,
@@ -1223,7 +1223,7 @@ func runPriorityPreemptionTest(baseURL string) BenchmarkResult {
 		req := ScheduleRequest{
 			RequestID: reqID,
 			Name:      fmt.Sprintf("low-priority-job-%d", i),
-			Image:     "nvidia/cuda:12.0-base-ubuntu22.04",
+			Image:     "nvidia/cuda:13.0.2-runtime-ubuntu22.04",
 			Command:   []string{"sleep", "300"}, // 5 min — long enough to survive the wait
 			GPUCount:  1,
 			Priority:  10, // LOW — below PreemptiblePriorityMax (30)
@@ -1277,7 +1277,7 @@ func runPriorityPreemptionTest(baseURL string) BenchmarkResult {
 	highReq := ScheduleRequest{
 		RequestID: highPriorityReqID,
 		Name:      "high-priority-critical-job",
-		Image:     "nvidia/cuda:12.0-base-ubuntu22.04",
+		Image:     "nvidia/cuda:13.0.2-runtime-ubuntu22.04",
 		Command:   []string{"sleep", "10"},
 		GPUCount:  1,
 		Priority:  90, // HIGH — triggers preemption path (>= 50)
@@ -1462,7 +1462,7 @@ func runMultiClusterRoutingTest(baseURL string) BenchmarkResult {
 				req := ScheduleRequest{
 					RequestID: fmt.Sprintf("route-%s-%d-%d", gpuType, time.Now().UnixNano(), idx),
 					Name:      fmt.Sprintf("route-%s-%d", gpuType, idx),
-					Image:     "nvidia/cuda:12.0-base-ubuntu22.04",
+					Image:     "nvidia/cuda:13.0.2-runtime-ubuntu22.04",
 					Command:   []string{"sleep", "5"},
 					GPUCount:  1,
 					GPUType:   gpuType,
@@ -1504,7 +1504,7 @@ func runMultiClusterRoutingTest(baseURL string) BenchmarkResult {
 		req := ScheduleRequest{
 			RequestID:    fmt.Sprintf("route-nvlink-%d-%d", time.Now().UnixNano(), i),
 			Name:         fmt.Sprintf("route-nvlink-%d", i),
-			Image:        "nvidia/cuda:12.0-base-ubuntu22.04",
+			Image:        "nvidia/cuda:13.0.2-runtime-ubuntu22.04",
 			Command:      []string{"sleep", "5"},
 			GPUCount:     2, // Multi-GPU
 			Priority:     5,

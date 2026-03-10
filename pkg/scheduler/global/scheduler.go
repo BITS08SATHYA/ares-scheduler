@@ -52,6 +52,8 @@ type GlobalScheduler struct {
 	// Job store: for querying running jobs (used by preemption)
 	jobStore interface {
 		GetJobsByStatus(ctx context.Context, status common.JobStatus) ([]*common.Job, error)
+		GetJob(ctx context.Context, jobID string) (*common.Job, error)
+		SaveJobFinal(ctx context.Context, job *common.Job) error
 	}
 
 	// Metrics
@@ -1228,6 +1230,8 @@ func (gs *GlobalScheduler) getRunningJobsFromClusters(ctx context.Context) []*co
 // Called during wiring (after both GlobalScheduler and JobStore are created)
 func (gs *GlobalScheduler) SetJobStore(store interface {
 	GetJobsByStatus(ctx context.Context, status common.JobStatus) ([]*common.Job, error)
+	GetJob(ctx context.Context, jobID string) (*common.Job, error)
+	SaveJobFinal(ctx context.Context, job *common.Job) error
 }) {
 	gs.jobStore = store
 	gs.log.Info("JobStore injected into GlobalScheduler (preemption enabled)")
@@ -1239,11 +1243,30 @@ func (gs *GlobalScheduler) SetMetricsCallbacks(onGPURollback func()) {
 	gs.log.Info("Metrics callbacks injected into GlobalScheduler")
 }
 
-// cancelJobOnCluster: Cancel a running job to free resources for preemption
 func (gs *GlobalScheduler) cancelJobOnCluster(ctx context.Context, jobID string) {
-	gs.log.Info("Cancelling preempted job %s", jobID)
-	// This will be wired to call the local scheduler's cancel endpoint
-	// For now, log the intent
+	gs.log.Info("PREEMPTION: Cancelling job %s", jobID)
+
+	if gs.jobStore == nil {
+		gs.log.Warn("Cannot cancel job %s: jobStore not set", jobID)
+		return
+	}
+
+	job, err := gs.jobStore.GetJob(ctx, jobID)
+	if err != nil {
+		gs.log.Error("PREEMPTION: Failed to get job %s: %v", jobID, err)
+		return
+	}
+
+	job.Status = common.StatusFailed
+	job.ErrorMsg = "preempted by higher priority job"
+
+	err = gs.jobStore.SaveJobFinal(ctx, job)
+	if err != nil {
+		gs.log.Error("PREEMPTION: Failed to save cancelled job %s: %v", jobID, err)
+		return
+	}
+
+	gs.log.Info("PREEMPTION: Job %s marked as FAILED (preempted)", jobID)
 }
 
 // scheduleGangJob: Route gang jobs to the gang manager

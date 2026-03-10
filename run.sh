@@ -33,6 +33,8 @@ kubectl config use-context gke_ares-gpu-test_us-east4-c_ares-gpu-worker
 #kubectl delete -f $PWD/k8s/local/local-scheduler.yaml
 #sleep 10
 #echo "Deleted Local Scheduler Pod Successfully!"
+#kubectl label node ip-192-168-49-62.ec2.internal ares.gpu/type=A100
+#kubectl label node ip-192-168-49-62.ec2.internal ares.gpu=true
 
 echo "Creating Local Scheduler Pod!"
 kubectl apply -f $PWD/k8s/local/local-scheduler.yaml
@@ -41,13 +43,13 @@ echo "Created Local Scheduler Pod!"
 
 echo "Pods Deployed Successfully!"
 
-echo "Switching k-worker k8s context in AWS"
-kubectl config use-context sathya-nyu@ares-p4d-bench-1.us-east-1.eksctl.io
-kubectl label node ip-192-168-49-62.ec2.internal ares.gpu/type=A100
-kubectl label node ip-192-168-49-62.ec2.internal ares.gpu=true
-kubectl apply -f https://raw.githubusercontent.com/NVIDIA/k8s-device-plugin/v0.14.5/nvidia-device-plugin.yml
-
-echo "Creating Local Scheduler Pod in AWS"
-kubectl apply -f $PWD/k8s/local/local-scheduler-aws-3.yaml
-sleep 5
-echo "Created Local Scheduler Pod!"
+#echo "Switching k-worker k8s context in AWS"
+#kubectl config use-context sathya-nyu@ares-p4d-bench-1.us-east-1.eksctl.io
+#kubectl label node ip-192-168-49-62.ec2.internal ares.gpu/type=A100
+#kubectl label node ip-192-168-49-62.ec2.internal ares.gpu=true
+#kubectl apply -f https://raw.githubusercontent.com/NVIDIA/k8s-device-plugin/v0.14.5/nvidia-device-plugin.yml
+#
+#echo "Creating Local Scheduler Pod in AWS"
+#kubectl apply -f $PWD/k8s/local/local-scheduler-aws-3.yaml
+#sleep 5
+#echo "Created Local Scheduler Pod!"

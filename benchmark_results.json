@@ -1,28 +1,32 @@
 [
   {
-    "suite": "gang-scheduling",
-    "timestamp": "2026-03-09T13:40:43-04:00",
-    "total_requests": 8,
-    "success_count": 8,
+    "suite": "priority-preemption",
+    "timestamp": "2026-03-09T20:55:04-04:00",
+    "total_requests": 11,
+    "success_count": 11,
     "error_count": 0,
     "duplicate_blocked": 0,
     "latencies": {
-      "p50_ms": 14.315091,
-      "p95_ms": 51.924668,
-      "p99_ms": 51.924668,
-      "p999_ms": 51.924668,
-      "min_ms": 12.463843,
-      "max_ms": 51.924668,
-      "avg_ms": 21.9338085
+      "p50_ms": 30.061382000000002,
+      "p95_ms": 30.061382000000002,
+      "p99_ms": 30.061382000000002,
+      "p999_ms": 30.061382000000002,
+      "min_ms": 30.061382000000002,
+      "max_ms": 30.061382000000002,
+      "avg_ms": 30.061382000000002
     },
     "throughput_rps": 0,
-    "total_duration": "n/a",
+    "total_duration": "1m1.070707578s",
     "details": {
-      "all_or_nothing_proven": true,
-      "all_or_nothing_violations": 0,
-      "medium_gangs_4member": 3,
-      "oversubscription_handled": true,
-      "small_gangs_2member": 5
+      "high_priority_submit_ms": 30.061382000000002,
+      "high_priority_submitted": true,
+      "high_priority_time_to_running_s": -1,
+      "low_priority_failed": 0,
+      "low_priority_preempted": 0,
+      "low_priority_running": 1,
+      "low_priority_submitted": 10,
+      "preemption_observed": false,
+      "priority_scheduling_proven": false
     }
   }
 ]
