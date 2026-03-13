@@ -225,10 +225,10 @@ func CalculateNextRetryTime(attempt int) time.Duration {
 		maxDelay  = 5 * time.Minute
 	)
 
-	// Exponential backoff: 2^attempt seconds
-	exponentialDelay := time.Duration(math.Pow(2, float64(attempt))) * time.Second
+	// Exponential backoff: 2^attempt seconds, capped to prevent overflow
+	exp := math.Min(math.Pow(2, float64(attempt)), float64(maxDelay/time.Second))
+	exponentialDelay := time.Duration(exp) * time.Second
 
-	// Cap at max delay
 	if exponentialDelay > maxDelay {
 		exponentialDelay = maxDelay
 	}
