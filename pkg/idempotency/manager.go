@@ -130,10 +130,19 @@ func (im *IdempotencyManager) RecordCompletion(ctx context.Context, requestID st
 
 	dedupeKey := fmt.Sprintf("ares:idempotency:%s", requestID)
 
+	// Preserve original submit time from existing cache entry if available
+	submitTime := time.Now()
+	if cached, err := im.redisClient.Get(ctx, dedupeKey); err == nil && cached != "" {
+		var existing IdempotencyResult
+		if err := json.Unmarshal([]byte(cached), &existing); err == nil && !existing.SubmitTime.IsZero() {
+			submitTime = existing.SubmitTime
+		}
+	}
+
 	completion := &IdempotencyResult{
 		JobID:          jobID,
-		Status:         status,     // "succeeded" or "failed"
-		SubmitTime:     time.Now(), // Would be submission time in real code
+		Status:         status, // "succeeded" or "failed"
+		SubmitTime:     submitTime,
 		CompletionTime: time.Now(),
 		Result:         result,
 	}
