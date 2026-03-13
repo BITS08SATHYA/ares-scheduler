@@ -203,6 +203,12 @@ func (store *ETCDJobStore) GetJob(ctx context.Context, jobID string) (*common.Jo
 		return nil, fmt.Errorf("unmarshal failed: %w", err)
 	}
 
+	// Validate critical fields survived unmarshal (corrupt/partial JSON guard)
+	if job.Spec == nil {
+		store.log.Error("Job %s has nil Spec after unmarshal (corrupt data)", jobID)
+		return nil, fmt.Errorf("corrupt job data: Spec is nil for job %s", jobID)
+	}
+
 	store.log.Debug("Retrieved job %s (status: %s)", jobID, job.Status)
 	return job, nil
 }
@@ -276,6 +282,12 @@ func (store *ETCDJobStore) ListJobs(
 		if err != nil {
 			store.log.Warn("Failed to parse job: %v", err)
 			continue // Skip malformed jobs
+		}
+
+		// Skip jobs with nil Spec (corrupt data)
+		if job.Spec == nil {
+			store.log.Warn("Skipping job %s: nil Spec (corrupt data)", job.ID)
+			continue
 		}
 
 		// Apply filter

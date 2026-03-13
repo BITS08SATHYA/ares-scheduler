@@ -211,7 +211,11 @@ func (lss *LocalSchedulerServer) handleSchedule(w http.ResponseWriter, r *http.R
 
 			jobRecord, err := lss.executor.JobStore.GetJob(context.Background(), req.JobID)
 			if err != nil {
-				lss.log.Error("❌ Failed to get Job record: %v", err)
+				lss.log.Error("Failed to get Job record: %v", err)
+				return
+			}
+			if jobRecord == nil {
+				lss.log.Error("Job record not found for %s", req.JobID)
 				return
 			}
 

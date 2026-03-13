@@ -1262,6 +1262,10 @@ func (gs *GlobalScheduler) cancelJobOnCluster(ctx context.Context, jobID string)
 		gs.log.Error("PREEMPTION: Failed to get job %s: %v", jobID, err)
 		return
 	}
+	if job == nil {
+		gs.log.Error("PREEMPTION: Job %s not found, skipping", jobID)
+		return
+	}
 
 	job.Status = common.StatusFailed
 	job.ErrorMsg = "preempted by higher priority job"

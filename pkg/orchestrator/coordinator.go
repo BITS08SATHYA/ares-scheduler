@@ -356,6 +356,9 @@ func (jc *JobCoordinator) MonitorJob(ctx context.Context, jobID string, leaseID 
 	if err != nil {
 		return fmt.Errorf("get job failed: %w", err)
 	}
+	if jobRecord == nil {
+		return fmt.Errorf("job not found: %s", jobID)
+	}
 
 	// Track RUNNING transition for ActiveJobs gauge
 	if jobRecord.Status == common.StatusRunning {
@@ -499,6 +502,9 @@ func (jc *JobCoordinator) SafeUpdateJobStatus(
 	if err != nil {
 		return err
 	}
+	if jobRecord == nil {
+		return fmt.Errorf("job not found: %s", jobID)
+	}
 
 	jobRecord.Status = newStatus
 
@@ -542,6 +548,9 @@ func (jc *JobCoordinator) CompleteJob(
 	if err != nil {
 		return err
 	}
+	if jobRecord == nil {
+		return fmt.Errorf("job not found: %s", jobID)
+	}
 
 	jobRecord.Status = finalStatus
 	jobRecord.ExitCode = exitCode
@@ -582,6 +591,9 @@ func (jc *JobCoordinator) RetryJob(ctx context.Context, jobID string, leaseID in
 	jobRecord, err := jc.jobStore.GetJob(ctx, jobID)
 	if err != nil {
 		return fmt.Errorf("get job failed: %w", err)
+	}
+	if jobRecord == nil {
+		return fmt.Errorf("job not found: %s", jobID)
 	}
 
 	if jobRecord.Attempts >= jobRecord.Spec.MaxRetries {
@@ -646,6 +658,9 @@ func (jc *JobCoordinator) CancelJob(ctx context.Context, jobID string, leaseID i
 	jobRecord, err := jc.jobStore.GetJob(ctx, jobID)
 	if err != nil {
 		return fmt.Errorf("get job failed: %w", err)
+	}
+	if jobRecord == nil {
+		return fmt.Errorf("job not found: %s", jobID)
 	}
 
 	if jobRecord.Status != common.StatusPending && jobRecord.Status != common.StatusRunning {

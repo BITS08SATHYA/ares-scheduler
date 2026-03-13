@@ -611,12 +611,15 @@ func (e *Executor) monitorAndUpdateJob(
 			e.Log.Info("📥 Fetching Job record from etcd for %s...", jobID)
 			jobRecord, err := e.JobStore.GetJob(ctx, jobID)
 			if err != nil {
-				e.Log.Error("❌ Failed to get Job record: %v (will retry next tick)", err)
-				e.Log.Info("🔄 Continuing to next tick...")
+				e.Log.Error("Failed to get Job record: %v (will retry next tick)", err)
+				continue
+			}
+			if jobRecord == nil {
+				e.Log.Error("Job record not found in etcd for %s (will retry next tick)", jobID)
 				continue
 			}
 
-			e.Log.Info("✅ Job record fetched, current status in etcd: %s", jobRecord.Status)
+			e.Log.Info("Job record fetched, current status in etcd: %s", jobRecord.Status)
 
 			// ================================================================
 			// STEP 3: Map Pod status to Job status
