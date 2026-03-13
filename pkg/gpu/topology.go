@@ -49,11 +49,15 @@ const (
 
 // NewGPUTopologyManager: Create new topology manager
 func NewGPUTopologyManager(redisClient *redis.RedisClient, discovery *GPUDiscovery) *GPUTopologyManager {
+	nodeName := ""
+	if discovery != nil {
+		nodeName = discovery.nodeName
+	}
 	return &GPUTopologyManager{
 		redisClient: redisClient,
 		log:         logger.Get(),
 		discovery:   discovery,
-		cacheKey:    fmt.Sprintf("%s:%s", CacheKeyTopologyPrefix, discovery.nodeName),
+		cacheKey:    fmt.Sprintf("%s:%s", CacheKeyTopologyPrefix, nodeName),
 		cacheTTL:    TopologyCacheTTL,
 	}
 }
