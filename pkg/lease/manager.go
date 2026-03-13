@@ -86,6 +86,7 @@ type LeaseManager struct {
 	activeLeases      map[string]*LeaseInfo
 	heartbeatTicker   time.Duration
 	heartbeatContexts map[string]context.CancelFunc // Store cancel functions
+	heartbeatWg       sync.WaitGroup                // Wait for heartbeat goroutines to exit
 	releaseOnces      map[string]*sync.Once
 }
 
@@ -122,6 +123,11 @@ func (lm *LeaseManager) Close() int {
 	lm.heartbeatContexts = make(map[string]context.CancelFunc)
 	lm.activeLeases = make(map[string]*LeaseInfo)
 	lm.releaseOnces = make(map[string]*sync.Once)
+
+	// Wait for all heartbeat goroutines to finish (unlock first to avoid deadlock)
+	lm.mu.Unlock()
+	lm.heartbeatWg.Wait()
+	lm.mu.Lock()
 
 	lm.log.Infof("LeaseManager shutdown complete")
 	return count
@@ -196,7 +202,11 @@ func (lm *LeaseManager) AcquireLeaseForJob(ctx context.Context, jobID string) (b
 	lm.releaseOnces[jobID] = &sync.Once{}
 
 	// Start background heartbeat goroutine
-	go lm.runHeartbeat(heartbeatCtx, jobID, leaseID, leaseKey)
+	lm.heartbeatWg.Add(1)
+	go func() {
+		defer lm.heartbeatWg.Done()
+		lm.runHeartbeat(heartbeatCtx, jobID, leaseID, leaseKey)
+	}()
 
 	return true, leaseID, nil
 }
@@ -360,10 +370,9 @@ func (lm *LeaseManager) ReleaseLeaseForJob(ctx context.Context, jobID string) er
 		return fmt.Errorf("lease not found for job %s", jobID)
 	}
 
-	// FIX: Stop heartbeat goroutine before releasing lease
+	// Stop heartbeat goroutine before releasing lease
 	if hasCancel {
-		cancel()                           // Signals context.Done() in runHeartbeat
-		time.Sleep(100 * time.Millisecond) // Give goroutine time to exit
+		cancel() // Signals context.Done() in runHeartbeat
 		lm.log.Debugf("heartbeat stopped for job %s", jobID)
 	}
 
