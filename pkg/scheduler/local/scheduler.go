@@ -414,9 +414,15 @@ func (ls *LocalScheduler) SelectBestGPUsInNode(
 		return nil, nil, fmt.Errorf("no GPUs found on node %s", nodeID)
 	}
 
-	// Filter out already-allocated GPUs so two jobs never get the same physical GPU
+	// Filter out already-allocated GPUs so two jobs never get the same physical GPU.
+	// Copy the allocation map under the lock to avoid racing with concurrent
+	// ReserveResources/ReleaseResources calls that modify the map.
 	ls.nodesMu.RLock()
-	nodeAllocations := ls.allocatedGPUs[nodeID]
+	origAllocations := ls.allocatedGPUs[nodeID]
+	nodeAllocations := make(map[int]string, len(origAllocations))
+	for idx, jobID := range origAllocations {
+		nodeAllocations[idx] = jobID
+	}
 	ls.nodesMu.RUnlock()
 
 	if len(nodeAllocations) > 0 {

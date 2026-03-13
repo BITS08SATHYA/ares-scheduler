@@ -71,18 +71,29 @@ func (vc *VectorClock) Increment(nodeID string) {
 
 // Merge: Combine two vector clocks (take max of each entry)
 // Used when receiving a message from another node
+//
+// Lock ordering: snapshot `other` first (RLock), release, then Lock `vc`.
+// Previous code held both locks simultaneously: vc.mu.Lock() then other.mu.RLock().
+// Concurrent vc1.Merge(vc2) + vc2.Merge(vc1) would deadlock (each goroutine
+// holds one lock and waits for the other).
 func (vc *VectorClock) Merge(other *VectorClock) {
 	if other == nil {
 		return
 	}
 
+	// Snapshot other's counters under its lock, then release
+	other.mu.RLock()
+	snapshot := make(map[string]uint64, len(other.Counters))
+	for k, v := range other.Counters {
+		snapshot[k] = v
+	}
+	other.mu.RUnlock()
+
+	// Now merge snapshot into vc under vc's lock only
 	vc.mu.Lock()
 	defer vc.mu.Unlock()
 
-	other.mu.RLock()
-	defer other.mu.RUnlock()
-
-	for nodeID, otherCount := range other.Counters {
+	for nodeID, otherCount := range snapshot {
 		if otherCount > vc.Counters[nodeID] {
 			vc.Counters[nodeID] = otherCount
 		}
@@ -211,32 +222,38 @@ func (r *LWWRegister) Merge(remote *LWWRegister) bool {
 		return false
 	}
 
+	// Snapshot remote state under its lock, then release to avoid
+	// holding both locks simultaneously (deadlock if concurrent reverse merge)
+	remote.mu.RLock()
+	remoteValue := remote.Value
+	remoteTimestamp := remote.Timestamp
+	remoteNodeID := remote.NodeID
+	remoteClock := remote.Clock
+	remote.mu.RUnlock()
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	remote.mu.RLock()
-	defer remote.mu.RUnlock()
-
 	// Compare timestamps
-	if remote.Timestamp.After(r.Timestamp) {
-		r.Value = remote.Value
-		r.Timestamp = remote.Timestamp
-		r.NodeID = remote.NodeID
-		r.Clock.Merge(remote.Clock)
+	if remoteTimestamp.After(r.Timestamp) {
+		r.Value = remoteValue
+		r.Timestamp = remoteTimestamp
+		r.NodeID = remoteNodeID
+		r.Clock.Merge(remoteClock)
 		return true
 	}
 
 	// Exact tie: use nodeID as deterministic tiebreaker
-	if remote.Timestamp.Equal(r.Timestamp) && remote.NodeID > r.NodeID {
-		r.Value = remote.Value
-		r.Timestamp = remote.Timestamp
-		r.NodeID = remote.NodeID
-		r.Clock.Merge(remote.Clock)
+	if remoteTimestamp.Equal(r.Timestamp) && remoteNodeID > r.NodeID {
+		r.Value = remoteValue
+		r.Timestamp = remoteTimestamp
+		r.NodeID = remoteNodeID
+		r.Clock.Merge(remoteClock)
 		return true
 	}
 
 	// Local wins — still merge the clock for causal tracking
-	r.Clock.Merge(remote.Clock)
+	r.Clock.Merge(remoteClock)
 	return false
 }
 
@@ -318,13 +335,18 @@ func (gs *GSet) Merge(other *GSet) {
 		return
 	}
 
+	// Snapshot other's elements to avoid holding both locks
+	other.mu.RLock()
+	snapshot := make(map[string]bool, len(other.Elements))
+	for element := range other.Elements {
+		snapshot[element] = true
+	}
+	other.mu.RUnlock()
+
 	gs.mu.Lock()
 	defer gs.mu.Unlock()
 
-	other.mu.RLock()
-	defer other.mu.RUnlock()
-
-	for element := range other.Elements {
+	for element := range snapshot {
 		gs.Elements[element] = true
 	}
 }
@@ -418,13 +440,22 @@ func (os *ORSet) Merge(other *ORSet) {
 		return
 	}
 
+	// Snapshot other's elements to avoid holding both locks
+	other.mu.RLock()
+	snapshot := make(map[string]map[string]bool, len(other.Elements))
+	for element, otherTags := range other.Elements {
+		tagsCopy := make(map[string]bool, len(otherTags))
+		for tag := range otherTags {
+			tagsCopy[tag] = true
+		}
+		snapshot[element] = tagsCopy
+	}
+	other.mu.RUnlock()
+
 	os.mu.Lock()
 	defer os.mu.Unlock()
 
-	other.mu.RLock()
-	defer other.mu.RUnlock()
-
-	for element, otherTags := range other.Elements {
+	for element, otherTags := range snapshot {
 		if os.Elements[element] == nil {
 			os.Elements[element] = make(map[string]bool)
 		}

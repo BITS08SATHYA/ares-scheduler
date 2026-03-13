@@ -536,6 +536,9 @@ func (js *JobStore) UpdateJobState(
 	if err != nil {
 		return fmt.Errorf("get job: %w", err)
 	}
+	if job == nil {
+		return fmt.Errorf("job not found: %s", jobID)
+	}
 
 	if !isValidTransition(job.Status, newState) {
 		return fmt.Errorf("invalid state transition: %s → %s", job.Status, newState)

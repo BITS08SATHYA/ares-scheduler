@@ -22,7 +22,7 @@ import (
 // Each mutable field is an LWW register; cluster membership uses OR-Set.
 //
 // Immutable fields (ClusterID, Region, Zone) don't need CRDTs.
-// Mutable fields (IsHealthy, AvailableGPUs, etc.) use LWW registers.
+// Mutable fields (IsHealthy, GPUsInUse, etc.) use LWW registers.
 type CRDTClusterState struct {
 	mu sync.RWMutex
 
@@ -32,11 +32,11 @@ type CRDTClusterState struct {
 	Zone      string `json:"zone"`
 
 	// Mutable state (LWW registers)
-	IsHealthy       *LWWRegister `json:"is_healthy"`
-	AvailableGPUs   *LWWRegister `json:"available_gpus"`
-	TotalGPUs       *LWWRegister `json:"total_gpus"`
-	AvailableMemGB  *LWWRegister `json:"available_mem_gb"`
-	TotalMemGB      *LWWRegister `json:"total_mem_gb"`
+	IsHealthy      *LWWRegister `json:"is_healthy"`
+	GPUsInUse      *LWWRegister `json:"gpus_in_use"`
+	TotalGPUs      *LWWRegister `json:"total_gpus"`
+	MemGBInUse     *LWWRegister `json:"mem_gb_in_use"`
+	TotalMemGB     *LWWRegister `json:"total_mem_gb"`
 	RunningJobCount *LWWRegister `json:"running_job_count"`
 	LastHeartbeat   *LWWRegister `json:"last_heartbeat"`
 	SchedulerAddr   *LWWRegister `json:"scheduler_addr"`
@@ -52,11 +52,11 @@ func NewCRDTClusterState(nodeID string, clusterID string, region string, zone st
 		ClusterID:       clusterID,
 		Region:          region,
 		Zone:            zone,
-		IsHealthy:       NewLWWRegister(nodeID, true),
-		AvailableGPUs:   NewLWWRegister(nodeID, 0),
-		TotalGPUs:       NewLWWRegister(nodeID, 0),
-		AvailableMemGB:  NewLWWRegister(nodeID, 0.0),
-		TotalMemGB:      NewLWWRegister(nodeID, 0.0),
+		IsHealthy:      NewLWWRegister(nodeID, true),
+		GPUsInUse:      NewLWWRegister(nodeID, 0),
+		TotalGPUs:      NewLWWRegister(nodeID, 0),
+		MemGBInUse:     NewLWWRegister(nodeID, 0.0),
+		TotalMemGB:     NewLWWRegister(nodeID, 0.0),
 		RunningJobCount: NewLWWRegister(nodeID, 0),
 		LastHeartbeat:   NewLWWRegister(nodeID, time.Now()),
 		SchedulerAddr:   NewLWWRegister(nodeID, ""),
@@ -70,8 +70,8 @@ func (cs *CRDTClusterState) UpdateLoad(nodeID string, gpusInUse int, memGBInUse 
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 
-	cs.AvailableGPUs.Set(nodeID, gpusInUse)
-	cs.AvailableMemGB.Set(nodeID, memGBInUse)
+	cs.GPUsInUse.Set(nodeID, gpusInUse)
+	cs.MemGBInUse.Set(nodeID, memGBInUse)
 	cs.RunningJobCount.Set(nodeID, runningJobs)
 	cs.LastHeartbeat.Set(nodeID, time.Now())
 	cs.Clock.Increment(nodeID)
@@ -107,14 +107,14 @@ func (cs *CRDTClusterState) Merge(remote *CRDTClusterState) *MergeResult {
 	if cs.IsHealthy.Merge(remote.IsHealthy) {
 		result.Conflicts = append(result.Conflicts, "is_healthy")
 	}
-	if cs.AvailableGPUs.Merge(remote.AvailableGPUs) {
-		result.Conflicts = append(result.Conflicts, "available_gpus")
+	if cs.GPUsInUse.Merge(remote.GPUsInUse) {
+		result.Conflicts = append(result.Conflicts, "gpus_in_use")
 	}
 	if cs.TotalGPUs.Merge(remote.TotalGPUs) {
 		result.Conflicts = append(result.Conflicts, "total_gpus")
 	}
-	if cs.AvailableMemGB.Merge(remote.AvailableMemGB) {
-		result.Conflicts = append(result.Conflicts, "available_mem_gb")
+	if cs.MemGBInUse.Merge(remote.MemGBInUse) {
+		result.Conflicts = append(result.Conflicts, "mem_gb_in_use")
 	}
 	if cs.TotalMemGB.Merge(remote.TotalMemGB) {
 		result.Conflicts = append(result.Conflicts, "total_mem_gb")

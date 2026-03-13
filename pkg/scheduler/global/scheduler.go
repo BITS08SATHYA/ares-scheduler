@@ -544,6 +544,11 @@ func (gs *GlobalScheduler) ScheduleJob(
 		gs.recordSchedulingFailure()
 		return nil, fmt.Errorf("local scheduling failed: %w", err)
 	}
+	if localDecision == nil {
+		rollbackGPUs()
+		gs.recordSchedulingFailure()
+		return nil, fmt.Errorf("local scheduler returned nil decision for job %s", jobRecord.ID)
+	}
 
 	// Step 3: Create decision
 	decision := &cluster.GlobalSchedulingDecision{
@@ -1255,6 +1260,10 @@ func (gs *GlobalScheduler) cancelJobOnCluster(ctx context.Context, jobID string)
 	job, err := gs.jobStore.GetJob(ctx, jobID)
 	if err != nil {
 		gs.log.Error("PREEMPTION: Failed to get job %s: %v", jobID, err)
+		return
+	}
+	if job == nil {
+		gs.log.Error("PREEMPTION: Job %s not found, skipping", jobID)
 		return
 	}
 
