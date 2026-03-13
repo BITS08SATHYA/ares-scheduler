@@ -348,7 +348,10 @@ func (kc *K8sClientImpl) WatchPod(ctx context.Context, podName string, callback 
 	defer watcher.Stop()
 
 	for event := range watcher.ResultChan() {
-		pod := event.Object.(*corev1.Pod)
+		pod, ok := event.Object.(*corev1.Pod)
+		if !ok {
+			continue // Skip non-Pod events (e.g., Status objects on error)
+		}
 		callback(&executor.PodInfo{
 			PodName:   pod.Name,
 			Namespace: pod.Namespace,
