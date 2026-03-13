@@ -417,14 +417,18 @@ func NewAPIGatewayWithCoordinator(
 	etcdClient, err := etcd.NewETCDClient(etcdEndpoints, 10*time.Second)
 	if err != nil {
 		log.Error("Failed to connect to etcd: %v", err)
-		etcdClient.Close()
+		if etcdClient != nil {
+			etcdClient.Close()
+		}
 		return nil, fmt.Errorf("etcd connection failed: %w", err)
 	}
 
 	redisClient, err := redis.NewRedisClient(redisAddr, "", 0)
 	if err != nil {
 		log.Error("Failed to connect to Redis: %v", err)
-		redisClient.Close()
+		if redisClient != nil {
+			redisClient.Close()
+		}
 		return nil, fmt.Errorf("redis connection failed: %w", err)
 	}
 
@@ -445,7 +449,9 @@ func NewAPIGatewayWithCoordinator(
 	// ========================================================================
 	// LAYER 4: Cluster Management
 	// ========================================================================
-	clusterManager = cluster.NewClusterManager(redisClient, nil)
+	if clusterManager == nil {
+		clusterManager = cluster.NewClusterManager(redisClient, nil)
+	}
 	log.Info("Layer 4: Cluster Manager Initialized")
 
 	// ========================================================================
