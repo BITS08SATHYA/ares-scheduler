@@ -387,8 +387,11 @@ func (ex *Executor) ExecuteJob(
 	// Start background monitoring
 	//go ex.monitorJobExecution(ctx, execCtx)
 
+	// Use the caller's context so monitoring stops on executor shutdown.
+	// context.Background() would leak this goroutine indefinitely.
+	monitorCtx := ctx
 	go func() {
-		err := ex.monitorAndUpdateJob(context.Background(), execCtx, decision.JobID)
+		err := ex.monitorAndUpdateJob(monitorCtx, execCtx, decision.JobID)
 		if err != nil && err != context.Canceled {
 			// Log error but don't crash (monitoring is best-effort)
 			ex.Log.Error("Monitoring failed for job %s: %v", decision.JobID, err)

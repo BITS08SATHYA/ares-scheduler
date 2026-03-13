@@ -109,8 +109,10 @@ type LocalSchedulingDecision struct {
 const (
 	CacheKeyNodeState    = "ares:cluster:%s:node:%s"
 	CacheKeyLocalMetrics = "ares:cluster:%s:metrics"
+	CacheKeyGPUAlloc     = "ares:gpu-alloc:%s:%s" // clusterID, nodeID
 	NodeStateCacheTTL    = 30 * time.Second
 	MetricsCacheTTL      = 60 * time.Second
+	GPUAllocCacheTTL     = 24 * time.Hour
 	HealthCheckInterval  = 30 * time.Second
 )
 
@@ -139,6 +141,12 @@ func NewLocalScheduler(
 	ls.onGPUDoubleAssignBlocked = func() {
 		atomic.AddInt64(&ls.metrics.GPUDoubleAssignBlocks, 1)
 	}
+
+	// Restore GPU allocations from Redis on startup
+	if err := ls.loadAllGPUAllocations(context.Background()); err != nil {
+		ls.log.Warn("Failed to load GPU allocations from Redis (non-fatal): %v", err)
+	}
+
 	return ls
 }
 
@@ -721,12 +729,22 @@ func (ls *LocalScheduler) ScheduleJobWithPriority(
 		return scores[i].Score > scores[j].Score
 	})
 
-	// Get best node
-	bestNode, _ := ls.GetNodeState(scores[0].NodeID)
-	if bestNode == nil {
-		return nil, fmt.Errorf("internal error: best node not found")
+	// Get best node — retry with next-best if the top node was unregistered
+	// between scoring and lookup (race window)
+	var bestNode *NodeState
+	var bestIdx int
+	for i, s := range scores {
+		node, err := ls.GetNodeState(s.NodeID)
+		if err == nil && node != nil {
+			bestNode = node
+			bestIdx = i
+			break
+		}
 	}
-
+	if bestNode == nil {
+		ls.recordSchedulingFailure()
+		return nil, fmt.Errorf("all scored nodes became unavailable")
+	}
 	// Select GPUs
 	var gpuIndices []int
 	var affinityScore *gpu.GPUAffinityScore
@@ -744,8 +762,8 @@ func (ls *LocalScheduler) ScheduleJobWithPriority(
 		JobID:            jobSpec.RequestID,
 		NodeID:           bestNode.NodeID,
 		GPUIndices:       gpuIndices,
-		NodeScore:        scores[0].Score,
-		PlacementReasons: append(scores[0].Reasons, fmt.Sprintf("priority=%d", jobSpec.Priority)),
+		NodeScore:        scores[bestIdx].Score,
+		PlacementReasons: append(scores[bestIdx].Reasons, fmt.Sprintf("priority=%d", jobSpec.Priority)),
 		ScheduledAt:      time.Now(),
 	}
 
@@ -934,10 +952,15 @@ func (ls *LocalScheduler) ReserveResources(
 	}
 	ls.nodesMu.Unlock()
 
-	// Reserve resources
+	// Reserve resources under lock (node pointer is shared state)
+	ls.nodesMu.Lock()
 	node.AvailableGPUs -= gpuCount
 	node.AvailableMemoryGB -= memoryGB
 	node.RunningJobsCount++
+	ls.nodesMu.Unlock()
+
+	// Persist GPU allocations to Redis for crash recovery
+	ls.saveGPUAllocations(ctx, nodeID)
 
 	ls.log.Info("Reserved %d GPUs %v on node %s for job %s", gpuCount, gpuIndices, nodeID, jobID)
 	return ls.UpdateNodeState(ctx, node)
@@ -969,17 +992,122 @@ func (ls *LocalScheduler) ReleaseResources(
 	}
 	ls.nodesMu.Unlock()
 
-	// Free resources
+	// Free resources under lock (node pointer is shared state)
+	ls.nodesMu.Lock()
 	node.AvailableGPUs += gpuCount
 	node.AvailableMemoryGB += float64(memoryMB) / 1024.0
 	node.RunningJobsCount--
-
 	if node.RunningJobsCount < 0 {
 		node.RunningJobsCount = 0
 	}
+	ls.nodesMu.Unlock()
+
+	// Persist updated GPU allocations to Redis
+	ls.saveGPUAllocations(ctx, nodeID)
 
 	ls.log.Info("Released %d GPUs on node %s from job %s", gpuCount, nodeID, jobID)
 	return ls.UpdateNodeState(ctx, node)
+}
+
+// ============================================================================
+// GPU ALLOCATION PERSISTENCE
+// ============================================================================
+
+// saveGPUAllocations: Persist GPU allocations for a node to Redis
+// Called after ReserveResources and ReleaseResources to survive crashes
+func (ls *LocalScheduler) saveGPUAllocations(ctx context.Context, nodeID string) {
+	ls.nodesMu.RLock()
+	allocs := ls.allocatedGPUs[nodeID]
+	// Copy under lock to avoid races
+	allocCopy := make(map[string]string, len(allocs))
+	for idx, jobID := range allocs {
+		allocCopy[fmt.Sprintf("%d", idx)] = jobID
+	}
+	ls.nodesMu.RUnlock()
+
+	key := fmt.Sprintf(CacheKeyGPUAlloc, ls.clusterID, nodeID)
+
+	if len(allocCopy) == 0 {
+		// No allocations — delete the key
+		if err := ls.redisClient.Del(ctx, key); err != nil {
+			ls.log.Warn("Failed to delete GPU alloc key %s: %v", key, err)
+		}
+		return
+	}
+
+	data, err := json.Marshal(allocCopy)
+	if err != nil {
+		ls.log.Warn("Failed to marshal GPU allocations for node %s: %v", nodeID, err)
+		return
+	}
+
+	if err := ls.redisClient.Set(ctx, key, string(data), GPUAllocCacheTTL); err != nil {
+		ls.log.Warn("Failed to persist GPU allocations for node %s: %v", nodeID, err)
+	}
+}
+
+// loadAllGPUAllocations: Restore GPU allocations from Redis on startup
+func (ls *LocalScheduler) loadAllGPUAllocations(ctx context.Context) error {
+	pattern := fmt.Sprintf(CacheKeyGPUAlloc, ls.clusterID, "*")
+	keys, err := ls.redisClient.Keys(ctx, pattern)
+	if err != nil {
+		return fmt.Errorf("failed to scan GPU alloc keys: %w", err)
+	}
+
+	if len(keys) == 0 {
+		return nil
+	}
+
+	// Read all allocations from Redis without holding the lock
+	prefix := fmt.Sprintf("ares:gpu-alloc:%s:", ls.clusterID)
+	allNodeAllocs := make(map[string]map[int]string)
+	restored := 0
+
+	for _, key := range keys {
+		// Extract nodeID from key: ares:gpu-alloc:{clusterID}:{nodeID}
+		if len(key) <= len(prefix) {
+			continue
+		}
+		nodeID := key[len(prefix):]
+
+		val, err := ls.redisClient.Get(ctx, key)
+		if err != nil || val == "" {
+			continue
+		}
+
+		var raw map[string]string
+		if err := json.Unmarshal([]byte(val), &raw); err != nil {
+			ls.log.Warn("Failed to unmarshal GPU alloc for node %s: %v", nodeID, err)
+			continue
+		}
+
+		nodeAllocs := make(map[int]string, len(raw))
+		for idxStr, jobID := range raw {
+			var idx int
+			if _, err := fmt.Sscanf(idxStr, "%d", &idx); err == nil {
+				nodeAllocs[idx] = jobID
+			}
+		}
+
+		if len(nodeAllocs) > 0 {
+			allNodeAllocs[nodeID] = nodeAllocs
+			restored += len(nodeAllocs)
+		}
+	}
+
+	// Lock only for the in-memory update
+	if len(allNodeAllocs) > 0 {
+		ls.nodesMu.Lock()
+		for nodeID, allocs := range allNodeAllocs {
+			ls.allocatedGPUs[nodeID] = allocs
+		}
+		ls.nodesMu.Unlock()
+	}
+
+	if restored > 0 {
+		ls.log.Info("Restored %d GPU allocations from Redis across %d nodes", restored, len(allNodeAllocs))
+	}
+	return nil
 }
 
 // ============================================================================

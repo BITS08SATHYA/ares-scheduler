@@ -216,6 +216,10 @@ func (gs *GlobalScheduler) SelectBestCluster(
 	var bestCluster *cluster.ClusterInfo
 	var bestScore *cluster.ClusterScore
 
+	// Hold lock during entire scoring + optimistic update to prevent
+	// concurrent heartbeat updates from modifying AvailableGPUs mid-loop
+	gs.clustersMu.Lock()
+
 	for _, _cluster := range clusters {
 		if !_cluster.IsHealthy {
 			gs.log.Debug("Skipping unhealthy cluster %s", _cluster.ClusterID)
@@ -229,8 +233,9 @@ func (gs *GlobalScheduler) SelectBestCluster(
 		}
 
 		// Use gs.clusters (optimistic cache) for scoring — this reflects
-		// in-flight scheduling decisions that heartbeat hasn't confirmed yet
-		clusterInfo := gs.GetClusterState(_cluster.ClusterID)
+		// in-flight scheduling decisions that heartbeat hasn't confirmed yet.
+		// Access map directly since we hold the lock.
+		clusterInfo := gs.clusters[_cluster.ClusterID]
 		if clusterInfo == nil {
 			// Fallback to clusterManager if not in cache
 			clusterInfo, _ = gs.clusterManager.GetClusterInfo(_cluster.ClusterID)
@@ -256,12 +261,14 @@ func (gs *GlobalScheduler) SelectBestCluster(
 	}
 
 	if bestCluster == nil {
+		gs.clustersMu.Unlock()
 		return nil, nil, fmt.Errorf("no suitable clusters in federation")
 	}
 
 	// ★ PREEMPTION TRIGGER: If best cluster has insufficient GPUs, return error
 	// This triggers the preemption path in ScheduleJob (line 443)
 	if bestCluster.AvailableGPUs < jobSpec.GPUCount {
+		gs.clustersMu.Unlock()
 		return nil, nil, fmt.Errorf("no cluster has sufficient GPUs: need %d, best has %d",
 			jobSpec.GPUCount, bestCluster.AvailableGPUs)
 	}
@@ -270,9 +277,6 @@ func (gs *GlobalScheduler) SelectBestCluster(
 	// Without this, rapid scheduling bursts pile jobs onto one cluster because
 	// heartbeat hasn't arrived yet to report the cluster is busy.
 	// The heartbeat reconciles the real state every 10 seconds.
-	// NOTE: bestCluster points directly into gs.clusters map, so updating
-	// through either reference modifies the same object.
-	gs.clustersMu.Lock()
 	bestCluster.AvailableGPUs -= jobSpec.GPUCount
 	if bestCluster.AvailableGPUs < 0 {
 		bestCluster.AvailableGPUs = 0
