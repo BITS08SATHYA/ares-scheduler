@@ -615,17 +615,18 @@ func (gm *GangManager) ReportMemberReady(gangID string, memberIndex int) error {
 		return fmt.Errorf("gang %s in wrong phase for ready report: %s", gangID, gang.Phase)
 	}
 
-	// Check barrier timeout
-	if gang.Phase == GangBarrier && time.Since(gang.PhaseTime) > gang.Spec.BarrierTimeout {
+	// Transition to barrier phase on first ready report
+	if gang.Phase == GangAllocated {
+		gang.Phase = GangBarrier
+		gang.PhaseTime = time.Now()
+	}
+
+	// Check barrier timeout (must be after phase transition so PhaseTime is correct)
+	if time.Since(gang.PhaseTime) > gang.Spec.BarrierTimeout {
 		gang.Phase = GangTimeout
 		gang.LastError = "barrier timed out waiting for all members"
 		gm.totalGangsTimedOut++
 		return fmt.Errorf("gang %s barrier timed out", gangID)
-	}
-
-	if gang.Phase == GangAllocated {
-		gang.Phase = GangBarrier
-		gang.PhaseTime = time.Now()
 	}
 
 	// Mark member ready
@@ -725,16 +726,21 @@ func (gm *GangManager) GetGang(gangID string) *GangState {
 
 // GetPendingGangs: Get gangs waiting for resources (for scheduler loop)
 func (gm *GangManager) GetPendingGangs() []*GangState {
+	// Copy the wait queue slice under the outer lock to minimize lock hold time
 	gm.mu.RLock()
-	defer gm.mu.RUnlock()
+	queue := make([]*GangState, len(gm.waitQueue))
+	copy(queue, gm.waitQueue)
+	gm.mu.RUnlock()
 
+	// Check phases without holding the outer lock
 	pending := make([]*GangState, 0)
-	for _, gang := range gm.waitQueue {
+	for _, gang := range queue {
 		gang.mu.RLock()
-		if gang.Phase == GangPending || gang.Phase == GangScheduling {
+		isPending := gang.Phase == GangPending || gang.Phase == GangScheduling
+		gang.mu.RUnlock()
+		if isPending {
 			pending = append(pending, gang)
 		}
-		gang.mu.RUnlock()
 	}
 
 	// Sort by priority (highest first)
