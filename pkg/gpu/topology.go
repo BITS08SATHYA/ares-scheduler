@@ -124,18 +124,21 @@ func (gtm *GPUTopologyManager) parseNVLinkMatrix(output string) ([][]int, error)
 			continue
 		}
 
+		// parts[0] is "GPUx" label, parts[1..] are connectivity values
+		// parts[j] corresponds to GPU index j-1
 		for j := 1; j < len(parts); j++ {
+			gpuJ := j - 1 // actual GPU index for column j
 			connectivity := parts[j]
-			if strings.Contains(connectivity, "NV") && j > i {
-				pairs = append(pairs, []int{i, j})
+			if strings.Contains(connectivity, "NV") && gpuJ > i {
+				pairs = append(pairs, []int{i, gpuJ})
 
 				// Extract NVLink count: "NV12" -> 12, "NV6" -> 6, "NV2" -> 2
 				linkCount := gtm.extractNVLinkCount(connectivity)
-				pairKey := fmt.Sprintf("%d-%d", i, j)
+				pairKey := fmt.Sprintf("%d-%d", i, gpuJ)
 				gtm.nvlinkCounts[pairKey] = linkCount
 
 				gtm.log.Debug("NVLink pair GPU %d ↔ GPU %d: %s (%d links)",
-					i, j, connectivity, linkCount)
+					i, gpuJ, connectivity, linkCount)
 			}
 		}
 	}
