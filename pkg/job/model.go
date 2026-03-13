@@ -2,10 +2,12 @@ package job
 
 import (
 	"fmt"
+	"math"
+	"math/rand"
+	"time"
+
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/logger"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler/common"
-	"math"
-	"time"
 )
 
 // Layer 3: Job Model - Job creation and state machine
@@ -232,8 +234,8 @@ func CalculateNextRetryTime(attempt int) time.Duration {
 	}
 
 	// Add random jitter (±10%)
-	jitterPercent := 0.1
-	jitter := time.Duration(float64(exponentialDelay) * jitterPercent)
+	jitterFraction := (rand.Float64()*2 - 1) * 0.1 // range: -0.1 to +0.1
+	jitter := time.Duration(float64(exponentialDelay) * jitterFraction)
 
 	return exponentialDelay + jitter
 }
