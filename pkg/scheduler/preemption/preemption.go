@@ -148,6 +148,13 @@ func (pm *PreemptionManager) FindPreemptionVictim(
 	runningJobs []*common.Job,
 ) *PreemptionDecision {
 
+	if incomingJob == nil {
+		return &PreemptionDecision{
+			ShouldPreempt: false,
+			Reason:        "incoming job spec is nil",
+		}
+	}
+
 	if !pm.config.Enabled {
 		return &PreemptionDecision{
 			ShouldPreempt: false,
@@ -218,6 +225,11 @@ func (pm *PreemptionManager) buildCandidates(
 	now := time.Now()
 
 	for _, job := range runningJobs {
+		// Skip nil jobs or jobs with nil spec
+		if job == nil || job.Spec == nil {
+			continue
+		}
+
 		// Skip non-running jobs
 		if job.Status != common.StatusRunning {
 			continue
@@ -309,17 +321,17 @@ func (pm *PreemptionManager) scoreCandidate(
 func (pm *PreemptionManager) checkRateLimits() bool {
 	now := time.Now()
 
-	// Reset hourly counter
+	// Reset counters under lock (lastHourReset/lastDayReset are not atomic)
+	pm.mu.Lock()
 	if now.Sub(pm.lastHourReset) > time.Hour {
 		atomic.StoreUint64(&pm.preemptionsThisHour, 0)
 		pm.lastHourReset = now
 	}
-
-	// Reset daily counter
 	if now.Sub(pm.lastDayReset) > 24*time.Hour {
 		atomic.StoreUint64(&pm.preemptionsToday, 0)
 		pm.lastDayReset = now
 	}
+	pm.mu.Unlock()
 
 	hourly := atomic.LoadUint64(&pm.preemptionsThisHour)
 	daily := atomic.LoadUint64(&pm.preemptionsToday)
