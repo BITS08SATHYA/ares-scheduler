@@ -276,7 +276,9 @@ func main() {
 // ============================================================================
 
 func initializeLogger(logLevel string) *logger.Logger {
-	return logger.Get()
+	log := logger.Get()
+	log.SetLevelStr(logLevel)
+	return log
 }
 
 // ============================================================================
