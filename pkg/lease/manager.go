@@ -239,15 +239,18 @@ func (lm *LeaseManager) runHeartbeat(
 	for {
 		select {
 		case <-ctx.Done():
-			// Context cancelled, (from ReleaseLeaseForJob) -- fixed
+			// Context cancelled (from ReleaseLeaseForJob or shutdown).
+			// Use a fresh context for cleanup since ctx is already cancelled.
 			lm.log.Infof("heartbeat stopping for job %s (context cancelled)", jobID)
 			lm.mu.RLock()
 			once, ok := lm.releaseOnces[jobID]
 			lm.mu.RUnlock()
 			if ok {
+				cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
 				once.Do(func() {
-					lm.releaseLease(ctx, jobID, leaseID, leaseKey)
+					lm.releaseLease(cleanupCtx, jobID, leaseID, leaseKey)
 				})
+				cleanupCancel()
 			}
 			return
 
@@ -270,15 +273,15 @@ func (lm *LeaseManager) runHeartbeat(
 				if consecutiveFailures >= maxConsecutiveFailures {
 					lm.log.Errorf("CRITICAL: Lease renewal failed %d times for job %s - possible etcd outage",
 						maxConsecutiveFailures, jobID)
-					// In production: trigger alerting system, graceful shutdown
-					// For now: continue trying
 					lm.mu.RLock()
 					once, ok := lm.releaseOnces[jobID]
 					lm.mu.RUnlock()
 					if ok {
+						cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
 						once.Do(func() {
-							lm.releaseLease(ctx, jobID, leaseID, leaseKey)
+							lm.releaseLease(cleanupCtx, jobID, leaseID, leaseKey)
 						})
+						cleanupCancel()
 					}
 					return
 				}
