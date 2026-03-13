@@ -713,6 +713,9 @@ func (gtm *GPUTopologyManager) SelectBestGPUSet(
 	if requestedCount == 1 {
 		// Just return the best single GPU (most memory, healthiest)
 		bestGPU := gtm.selectSingleBestGPU(availableGPUs)
+		if bestGPU == nil {
+			return nil, nil, fmt.Errorf("no suitable GPU found")
+		}
 		return []int{bestGPU.Index}, &GPUAffinityScore{
 			GPU1Index:      bestGPU.Index,
 			GPU2Index:      -1, // No second GPU
