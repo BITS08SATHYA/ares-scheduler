@@ -601,7 +601,11 @@ func (e *Executor) monitorAndUpdateJob(
 				newJobStatus = common.StatusRunning
 				if lastKnownStatus != common.StatusRunning {
 					shouldUpdate = true
-					jobRecord.StartTime = time.Now()
+					if !podInfo.StartedAt.IsZero() {
+						jobRecord.StartTime = podInfo.StartedAt
+					} else {
+						jobRecord.StartTime = time.Now()
+					}
 					if e.OnJobRunning != nil {
 						e.OnJobRunning(execCtx.JobID)
 					}
@@ -649,9 +653,16 @@ func (e *Executor) monitorAndUpdateJob(
 				e.JobsMu.Unlock()
 				atomic.AddUint64(&e.TotalSuccessful, 1)
 
-				// ★ FIX: Release GPU resources
+				// Release GPU resources (recover from panic to prevent resource leak)
 				if e.OnJobComplete != nil {
-					e.OnJobComplete(execCtx.JobID, execCtx.NodeID, len(execCtx.GPUIndices), 0)
+					func() {
+						defer func() {
+							if r := recover(); r != nil {
+								e.Log.Error("OnJobComplete callback panicked for job %s: %v", execCtx.JobID, r)
+							}
+						}()
+						e.OnJobComplete(execCtx.JobID, execCtx.NodeID, len(execCtx.GPUIndices), 0)
+					}()
 				}
 
 			case PhaseFailed:
@@ -698,9 +709,16 @@ func (e *Executor) monitorAndUpdateJob(
 				e.JobsMu.Unlock()
 				atomic.AddUint64(&e.TotalFailed, 1)
 
-				// ★ FIX: Release GPU resources on failure too
+				// Release GPU resources on failure too (recover from panic)
 				if e.OnJobComplete != nil {
-					e.OnJobComplete(execCtx.JobID, execCtx.NodeID, len(execCtx.GPUIndices), 0)
+					func() {
+						defer func() {
+							if r := recover(); r != nil {
+								e.Log.Error("OnJobComplete callback panicked for job %s: %v", execCtx.JobID, r)
+							}
+						}()
+						e.OnJobComplete(execCtx.JobID, execCtx.NodeID, len(execCtx.GPUIndices), 0)
+					}()
 				}
 
 			case PhaseUnknown:
