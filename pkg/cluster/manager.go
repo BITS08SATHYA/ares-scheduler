@@ -415,7 +415,11 @@ func (cm *ClusterManager) UpdateClusterCapacity(
 		clusterID, gpuCount, cpuCount, memoryGB)
 
 	if shouldNotify {
-		go cm.notifyClusterStateChange(context.Background(), clusterID, StateJoining, StateReady)
+		go func() {
+			notifyCtx, notifyCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer notifyCancel()
+			cm.notifyClusterStateChange(notifyCtx, clusterID, StateJoining, StateReady)
+		}()
 	}
 
 	return nil
