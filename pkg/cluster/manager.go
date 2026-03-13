@@ -125,15 +125,13 @@ func (cm *ClusterManager) JoinCluster(ctx context.Context, config *ClusterConfig
 		cm.log.Warn("Failed to persist cluster (non-fatal): %v", err)
 	}
 
-	// ★ FIX: Stay in JOINING state here. The handler should call
-	// UpdateClusterCapacity() first, THEN transition to READY.
+	// Stay in JOINING state until first heartbeat with capacity arrives.
 	// This prevents a race where the scheduler sees a READY cluster
 	// with 0 GPUs and 0 memory before capacity data arrives.
 	// Callers that want immediate READY (e.g. tests) can call
 	// UpdateClusterState(ctx, id, StateReady) after setting capacity.
-	cluster.State = StateReady
 
-	cm.log.Info("Cluster %s joined federation (region=%s, zone=%s, addr=%s)",
+	cm.log.Info("Cluster %s joined federation in JOINING state (region=%s, zone=%s, addr=%s)",
 		config.ClusterID, config.Region, config.Zone, config.ControlAddr)
 
 	// Notify listeners
@@ -400,6 +398,14 @@ func (cm *ClusterManager) UpdateClusterCapacity(
 		return fmt.Errorf("cluster not found: %s", clusterID)
 	}
 
+	// Transition JOINING → READY on first capacity heartbeat with GPUs
+	shouldNotify := false
+	if cluster.State == StateJoining && gpuCount > 0 {
+		cluster.State = StateReady
+		shouldNotify = true
+		cm.log.Info("Cluster %s transitioned JOINING → READY (GPUs=%d)", clusterID, gpuCount)
+	}
+
 	cluster.TotalGPUs = gpuCount
 	cluster.TotalCPUs = cpuCount
 	cluster.TotalMemGB = memoryGB
@@ -407,6 +413,10 @@ func (cm *ClusterManager) UpdateClusterCapacity(
 
 	cm.log.Debug("Updated cluster %s capacity: GPUs=%d, CPUs=%d, Memory=%.0fGB",
 		clusterID, gpuCount, cpuCount, memoryGB)
+
+	if shouldNotify {
+		go cm.notifyClusterStateChange(context.Background(), clusterID, StateJoining, StateReady)
+	}
 
 	return nil
 }
@@ -573,4 +583,12 @@ func (cm *ClusterManager) GetClusterStats() map[string]interface{} {
 		"memory_in_use_gb":    memGBInUse,
 		"memory_util_pct":     memUtil,
 	}
+}
+
+// GetHeartbeatTimeout returns the heartbeat timeout configuration
+func (cm *ClusterManager) GetHeartbeatTimeout() time.Duration {
+	if cm.config == nil {
+		return 60 * time.Second
+	}
+	return cm.config.HeartbeatTimeout
 }

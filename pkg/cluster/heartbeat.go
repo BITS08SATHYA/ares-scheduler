@@ -318,10 +318,3 @@ func (ha *HeartbeatAgent) GetHeartbeatStats() map[string]interface{} {
 	}
 }
 
-// GetHeartbeatTimeout returns the heartbeat timeout configuration
-func (cm *ClusterManager) GetHeartbeatTimeout() time.Duration {
-	if cm.config == nil {
-		return 60 * time.Second
-	}
-	return cm.config.HeartbeatTimeout
-}
