@@ -103,33 +103,8 @@ func NewGlobalScheduler(
 	log.Info("Subscribed to ClusterManager events")
 	log.Info("Will populate clusters from cluster join events")
 
-	// Start gang scheduling loop
-	go gs.gangManager.RunSchedulingLoop(context.Background(), func() []gang.NodeResources {
-		gs.clustersMu.RLock()
-		defer gs.clustersMu.RUnlock()
-		nodes := make([]gang.NodeResources, 0, len(gs.clusters))
-		for _, c := range gs.clusters {
-			if !c.IsHealthy {
-				continue
-			}
-			gpuType := "any"
-			if len(c.GPUTypes) > 0 {
-				gpuType = c.GPUTypes[0]
-			}
-			nodes = append(nodes, gang.NodeResources{
-				ClusterID:     c.ClusterID,
-				NodeID:        c.ClusterID,
-				Zone:          c.Zone,
-				AvailableGPUs: c.AvailableGPUs,
-				TotalGPUs:     c.TotalGPUs,
-				GPUType:       gpuType,
-				HasNVLink:     false,
-				NUMANodes:     1,
-				GPUsPerNUMA:   c.TotalGPUs,
-			})
-		}
-		return nodes
-	})
+	// Start gang scheduling loop (uses aggregateNodeResources for retries)
+	go gs.gangManager.RunSchedulingLoop(context.Background(), gs.aggregateNodeResources)
 	log.Info("Gang scheduling loop started")
 
 	return gs
@@ -244,6 +219,12 @@ func (gs *GlobalScheduler) SelectBestCluster(
 	for _, _cluster := range clusters {
 		if !_cluster.IsHealthy {
 			gs.log.Debug("Skipping unhealthy cluster %s", _cluster.ClusterID)
+			continue
+		}
+
+		// Skip clusters still in JOINING state (no capacity data yet)
+		if !_cluster.IsAvailable() {
+			gs.log.Debug("Skipping unavailable cluster %s (state=%s)", _cluster.ClusterID, _cluster.State)
 			continue
 		}
 
@@ -441,8 +422,11 @@ func (gs *GlobalScheduler) ScheduleJob(
 	gs.log.Info("Global Scheduler ScheduleJob entered")
 	gs.log.Info("Job Record: %v", jobRecord)
 
-	if jobRecord == nil || jobRecord.Spec.Name == "" {
-		return nil, fmt.Errorf("Invalid job spec")
+	if jobRecord == nil {
+		return nil, fmt.Errorf("job record is nil")
+	}
+	if jobRecord.Spec == nil || jobRecord.Spec.Name == "" {
+		return nil, fmt.Errorf("invalid job spec: missing name")
 	}
 
 	if jobRecord.Spec.GPUCount < 0 || jobRecord.Spec.GPUCount > 256 {
@@ -463,7 +447,7 @@ func (gs *GlobalScheduler) ScheduleJob(
 			ctx,
 			jobRecord.Spec.TenantID,
 			jobRecord.Spec.GPUCount,
-			jobRecord.Spec.CPUMillis/1000,           // Convert millicores to cores
+			jobRecord.Spec.CPUMillis/1000, // Convert millicores to cores
 			float64(jobRecord.Spec.MemoryMB)/1024.0, // Convert MB to GB
 		)
 		if !drfDecision.Allowed {
@@ -1303,19 +1287,62 @@ func (gs *GlobalScheduler) scheduleGangJob(
 		}
 	}
 
-	// Return a decision indicating gang is pending coordination
-	// TODO: After SubmitGang, check if all members have arrived and call
-	// gs.gangManager.TryScheduleGang() to actually place the gang.
-	// Currently the gang stays in "pending" forever because nothing triggers
-	// scheduling after the last member registers. Needs a background goroutine
-	// or a check here: if gangState.PendingCount == 0, call TryScheduleGang.
-	// Requires node resource aggregation across clusters (Phase 2).
+	// Try to schedule the gang now that this member has been registered.
+	// TryScheduleGang does its own locking and phase checks internally.
+	if gangState.Phase == gang.GangPending || gangState.Phase == gang.GangScheduling {
+		nodes := gs.aggregateNodeResources()
+		placement, err := gs.gangManager.TryScheduleGang(ctx, gangState, nodes)
+		if err != nil {
+			gs.log.Warn("GANG: Scheduling attempt for %s failed: %v", jobRecord.Spec.GangID, err)
+		}
+		if placement != nil && len(placement.ClustersUsed) > 0 {
+			clusterID := placement.ClustersUsed[0]
+			return &cluster.GlobalSchedulingDecision{
+				JobID:            jobRecord.ID,
+				ClusterID:        clusterID,
+				PlacementReasons: []string{fmt.Sprintf("gang %s: placed %d members across %d nodes", jobRecord.Spec.GangID, len(placement.Assignments), len(placement.NodesUsed))},
+				ScheduledAt:      time.Now(),
+			}, nil
+		}
+	}
+
+	// Gang not yet schedulable (still waiting for members or resources)
 	return &cluster.GlobalSchedulingDecision{
 		JobID:            jobRecord.ID,
 		ClusterID:        "gang-pending",
-		PlacementReasons: []string{fmt.Sprintf("gang %s: waiting for %d members", jobRecord.Spec.GangID, jobRecord.Spec.GangSize)},
+		PlacementReasons: []string{fmt.Sprintf("gang %s: waiting for members or resources", jobRecord.Spec.GangID)},
 		ScheduledAt:      time.Now(),
 	}, nil
+}
+
+// aggregateNodeResources: Build node resource list from all healthy clusters
+// Used by gang scheduling to find placement across the federation
+func (gs *GlobalScheduler) aggregateNodeResources() []gang.NodeResources {
+	gs.clustersMu.RLock()
+	defer gs.clustersMu.RUnlock()
+
+	nodes := make([]gang.NodeResources, 0, len(gs.clusters))
+	for _, c := range gs.clusters {
+		if !c.IsHealthy {
+			continue
+		}
+		gpuType := "any"
+		if len(c.GPUTypes) > 0 {
+			gpuType = c.GPUTypes[0]
+		}
+		nodes = append(nodes, gang.NodeResources{
+			ClusterID:     c.ClusterID,
+			NodeID:        c.ClusterID,
+			Zone:          c.Zone,
+			AvailableGPUs: c.AvailableGPUs,
+			TotalGPUs:     c.TotalGPUs,
+			GPUType:       gpuType,
+			HasNVLink:     false,
+			NUMANodes:     1,
+			GPUsPerNUMA:   c.TotalGPUs,
+		})
+	}
+	return nodes
 }
 
 func (gs *GlobalScheduler) GetGangManager() *gang.GangManager {
