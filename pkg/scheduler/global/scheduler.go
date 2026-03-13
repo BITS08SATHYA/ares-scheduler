@@ -434,7 +434,10 @@ func (gs *GlobalScheduler) ScheduleJob(
 	}
 
 	// ★ GANG SCHEDULING: If this is a gang job, route to gang manager
-	if gs.gangManager != nil && jobRecord.Spec.GangID != "" {
+	if jobRecord.Spec.GangID != "" {
+		if gs.gangManager == nil {
+			return nil, fmt.Errorf("gang scheduling requested but gang manager is not initialized")
+		}
 		gs.log.Info("Gang job detected: %s (gang=%s, member=%d)",
 			jobRecord.ID, jobRecord.Spec.GangID, jobRecord.Spec.GangMemberIdx)
 		return gs.scheduleGangJob(ctx, jobRecord)
@@ -442,6 +445,9 @@ func (gs *GlobalScheduler) ScheduleJob(
 
 	// Step 0
 	// ★ DRF Fairness Check
+	if jobRecord.Spec.TenantID != "" && gs.drfManager == nil {
+		gs.log.Warn("DRF fairness check skipped: drfManager not initialized (tenant=%s)", jobRecord.Spec.TenantID)
+	}
 	if gs.drfManager != nil && jobRecord.Spec.TenantID != "" {
 		drfDecision := gs.drfManager.CheckFairness(
 			ctx,
