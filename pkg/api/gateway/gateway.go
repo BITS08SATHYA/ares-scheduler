@@ -670,17 +670,24 @@ func (ag *APIGateway) wrapHandler(handler func(http.ResponseWriter, *http.Reques
 		startTime := time.Now()
 		ag.log.Info("API Request: %s %s from %s", r.Method, r.URL.Path, r.RemoteAddr)
 
+		// Recover from panics to ensure metrics are recorded and client gets a response
+		defer func() {
+			if rec := recover(); rec != nil {
+				ag.log.Error("Handler panic: %v", rec)
+				atomic.AddUint64(&ag.totalErrors, 1)
+				http.Error(w, "internal server error", http.StatusInternalServerError)
+			}
+
+			// Metrics (always recorded, even after panic recovery)
+			duration := time.Since(startTime)
+			atomic.AddUint64(&ag.totalRequests, 1)
+			atomic.AddInt64(&ag.requestDuration, duration.Nanoseconds())
+			ag.metrics.RecordRequest(duration)
+			ag.log.Info("API Response completed in %.2fms", duration.Seconds()*1000)
+		}()
+
 		// Call handler
 		handler(w, r)
-
-		// Metrics
-		duration := time.Since(startTime)
-		atomic.AddUint64(&ag.totalRequests, 1)
-		atomic.AddInt64(&ag.requestDuration, duration.Nanoseconds())
-
-		ag.metrics.RecordRequest(duration)
-
-		ag.log.Info("API Response completed in %.2fms", duration.Seconds()*1000)
 	}
 }
 
