@@ -464,6 +464,9 @@ func (gm *GangManager) findOptimalPlacement(spec *GangSpec, nodes []NodeResource
 		for m := 0; m < membersOnNode; m++ {
 			memberIdx := totalAssigned
 			gpuStart := node.TotalGPUs - remaining
+			if gpuStart < 0 {
+				gpuStart = 0
+			}
 			gpuIndices := make([]int, spec.GPUsPerMember)
 			for g := 0; g < spec.GPUsPerMember; g++ {
 				gpuIndices[g] = gpuStart + (m * spec.GPUsPerMember) + g
@@ -658,13 +661,16 @@ func (gm *GangManager) ReportMemberReady(gangID string, memberIndex int) error {
 // ReportMemberFailed: Called when a gang member fails
 // If any member fails, the entire gang fails (all-or-nothing).
 func (gm *GangManager) ReportMemberFailed(gangID string, memberIndex int, err string) error {
-	gm.mu.RLock()
+	gm.mu.Lock()
 	gang, exists := gm.gangs[gangID]
-	gm.mu.RUnlock()
-
 	if !exists {
+		gm.mu.Unlock()
 		return fmt.Errorf("gang %s not found", gangID)
 	}
+	// Remove failed gang from map to prevent unbounded growth
+	delete(gm.gangs, gangID)
+	gm.totalGangsFailed++
+	gm.mu.Unlock()
 
 	gang.mu.Lock()
 	defer gang.mu.Unlock()
@@ -680,23 +686,28 @@ func (gm *GangManager) ReportMemberFailed(gangID string, memberIndex int, err st
 	gang.PhaseTime = time.Now()
 	gang.EndTime = time.Now()
 	gang.LastError = fmt.Sprintf("member %d failed: %s", memberIndex, err)
-	gm.totalGangsFailed++
 
 	gm.log.Warn("GANG: %s FAILED — member %d error: %s (cancelling all members)",
 		gangID, memberIndex, err)
+
+	// Remove from wait queue
+	gm.removeFromWaitQueue(gangID)
 
 	return nil
 }
 
 // ReportGangCompleted: All members finished successfully
 func (gm *GangManager) ReportGangCompleted(gangID string) error {
-	gm.mu.RLock()
+	gm.mu.Lock()
 	gang, exists := gm.gangs[gangID]
-	gm.mu.RUnlock()
-
 	if !exists {
+		gm.mu.Unlock()
 		return fmt.Errorf("gang %s not found", gangID)
 	}
+	// Remove completed gang from map to prevent unbounded growth
+	delete(gm.gangs, gangID)
+	gm.totalGangsCompleted++
+	gm.mu.Unlock()
 
 	gang.mu.Lock()
 	defer gang.mu.Unlock()
@@ -704,11 +715,13 @@ func (gm *GangManager) ReportGangCompleted(gangID string) error {
 	gang.Phase = GangSucceeded
 	gang.PhaseTime = time.Now()
 	gang.EndTime = time.Now()
-	gm.totalGangsCompleted++
 
 	duration := gang.EndTime.Sub(gang.CreateTime)
 	gm.log.Info("GANG: ★ %s SUCCEEDED — %d members completed in %s",
 		gangID, gang.Spec.MinMembers, duration)
+
+	// Remove from wait queue (in case it's still there)
+	gm.removeFromWaitQueue(gangID)
 
 	return nil
 }
