@@ -252,13 +252,9 @@ func (ag *APIGateway) handleClusterHeartbeat(w http.ResponseWriter, r *http.Requ
 
 	clusterInfo, err := ag.clusterManager.GetClusterInfo(hbReq.ClusterID)
 	if err == nil && clusterInfo != nil {
-		clusterInfo.AvailableGPUs = clusterInfo.TotalGPUs - hbReq.GPUsInUse
-		clusterInfo.AvailableMemoryGB = clusterInfo.TotalMemoryGB - hbReq.MemGBInUse
-		clusterInfo.RunningJobsCount = hbReq.RunningJobs
-		clusterInfo.LastHeartbeat = time.Now()
-
 		// ★ Reconcile load into GlobalScheduler's optimistic cache
-		// This corrects the optimistic decrements made by SelectBestCluster
+		// This corrects the optimistic decrements made by SelectBestCluster.
+		// UpdateClusterLoad holds the scheduler's clustersMu lock internally.
 		if ag.globalScheduler != nil {
 			ag.globalScheduler.UpdateClusterLoad(
 				hbReq.ClusterID,
@@ -272,16 +268,11 @@ func (ag *APIGateway) handleClusterHeartbeat(w http.ResponseWriter, r *http.Requ
 		// This ensures the global scheduler knows what GPU hardware each cluster has
 		// so metrics correctly track A100/T4/H100/etc. even when jobs request "any"
 		if len(hbReq.GPUTypes) > 0 {
-			clusterInfo.GPUTypes = hbReq.GPUTypes
-
 			// Sync to GlobalScheduler's internal cluster cache
 			if ag.globalScheduler != nil {
 				ag.globalScheduler.UpdateClusterGPUTypes(hbReq.ClusterID, hbReq.GPUTypes)
 			}
 		}
-
-		// Note: GlobalScheduler doesn't have UpdateClusterState anymore
-		// But we update the in-memory copy directly above
 	}
 
 	response := &cluster.ClusterHeartbeatResponse{
