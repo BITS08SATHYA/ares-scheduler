@@ -779,7 +779,9 @@ func (ag *APIGateway) handleScheduleJob(w http.ResponseWriter, r *http.Request) 
 
 	// BUILD RESPONSE
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(result)
+	if err := json.NewEncoder(w).Encode(result); err != nil {
+		ag.log.Error("Failed to encode scheduling response: %v", err)
+	}
 }
 
 // handleJobStatus: GET /status/job?job_id=X
