@@ -88,22 +88,19 @@ func (store *ETCDJobStore) SaveJob(ctx context.Context, job *common.Job, leaseID
 		return fmt.Errorf("job ID cannot be empty")
 	}
 
-	store.log.Info("Job Data received: ", job)
-	// Marshal job to JSON
-	jobData, err := json.Marshal(job)
+	// Store the job with lease for auto-cleanup
+	key := fmt.Sprintf("%s/%s", store.keyPrefix, job.ID)
 
+	// Marshal under lock to prevent reading a partially-modified job
+	store.mu.Lock()
+	defer store.mu.Unlock()
+
+	store.log.Debug("Saving job %s (status: %s)", job.ID, job.Status)
+	jobData, err := json.Marshal(job)
 	if err != nil {
 		store.log.Error("Failed to marshal job %s: %v", job.ID, err)
 		return fmt.Errorf("marshal failed: %w", err)
 	}
-
-	// Store the job with lease for auto-cleanup
-	key := fmt.Sprintf("%s/%s", store.keyPrefix, job.ID)
-
-	// Use transaction with ModRevision check (optimistic locking)
-	// Add mutex to  ETCDJobStore
-	store.mu.Lock()
-	defer store.mu.Unlock()
 
 	err = store.etcd.PutWithLease(ctx, key, string(jobData), leaseID)
 	if err != nil {
