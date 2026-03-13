@@ -170,7 +170,7 @@ func (pm *PreemptionManager) FindPreemptionVictim(
 	if len(candidates) == 0 {
 		return &PreemptionDecision{
 			ShouldPreempt: false,
-			IncomingJobID: "",
+			IncomingJobID: incomingJob.RequestID,
 			IncomingPri:   incomingJob.Priority,
 			Reason:        "no preemptible candidates found",
 		}
