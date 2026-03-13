@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -235,7 +236,7 @@ func (pm *PreemptionManager) buildCandidates(
 		}
 
 		// Rule 3: Don't preempt jobs that were already preempted
-		if job.ErrorMsg == "preempted by higher priority job" {
+		if strings.Contains(job.ErrorMsg, "preempted") {
 			continue
 		}
 
