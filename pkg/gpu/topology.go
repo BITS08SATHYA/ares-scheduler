@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math/rand"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -124,18 +125,21 @@ func (gtm *GPUTopologyManager) parseNVLinkMatrix(output string) ([][]int, error)
 			continue
 		}
 
+		// parts[0] is "GPUx" label, parts[1..] are connectivity values
+		// parts[j] corresponds to GPU index j-1
 		for j := 1; j < len(parts); j++ {
+			gpuJ := j - 1 // actual GPU index for column j
 			connectivity := parts[j]
-			if strings.Contains(connectivity, "NV") && j > i {
-				pairs = append(pairs, []int{i, j})
+			if strings.Contains(connectivity, "NV") && gpuJ > i {
+				pairs = append(pairs, []int{i, gpuJ})
 
 				// Extract NVLink count: "NV12" -> 12, "NV6" -> 6, "NV2" -> 2
 				linkCount := gtm.extractNVLinkCount(connectivity)
-				pairKey := fmt.Sprintf("%d-%d", i, j)
+				pairKey := fmt.Sprintf("%d-%d", i, gpuJ)
 				gtm.nvlinkCounts[pairKey] = linkCount
 
 				gtm.log.Debug("NVLink pair GPU %d ↔ GPU %d: %s (%d links)",
-					i, j, connectivity, linkCount)
+					i, gpuJ, connectivity, linkCount)
 			}
 		}
 	}
@@ -649,8 +653,10 @@ func (gtm *GPUTopologyManager) scoreNVSwitchDomainLocality(
 // ============================================================================
 
 func (gtm *GPUTopologyManager) hasNVLink(nvlinkPairs [][]int, gpu1, gpu2 int) bool {
+	if gpu1 < 0 || gpu2 < 0 {
+		return false
+	}
 	for _, pair := range nvlinkPairs {
-		// ★★★ FIX: Check pair has at least 2 elements ★★★
 		if len(pair) < 2 {
 			continue
 		}
@@ -820,6 +826,14 @@ func (gtm *GPUTopologyManager) generateGPUCombinations(
 	// For large sets, we sample instead of enumerating all combinations.
 	const maxCombinations = 10000
 
+	// Shuffle GPUs before enumeration to avoid biasing toward lower indices
+	// when we hit the cap. This ensures fair sampling across all GPUs.
+	shuffled := make([]*common.GPUDevice, len(gpus))
+	copy(shuffled, gpus)
+	rand.Shuffle(len(shuffled), func(i, j int) {
+		shuffled[i], shuffled[j] = shuffled[j], shuffled[i]
+	})
+
 	var result [][]*common.GPUDevice
 	var combine func(int, []*common.GPUDevice)
 	combine = func(start int, current []*common.GPUDevice) {
@@ -833,8 +847,8 @@ func (gtm *GPUTopologyManager) generateGPUCombinations(
 			return
 		}
 
-		for i := start; i < len(gpus); i++ {
-			combine(i+1, append(current, gpus[i]))
+		for i := start; i < len(shuffled); i++ {
+			combine(i+1, append(current, shuffled[i]))
 		}
 	}
 
@@ -868,9 +882,18 @@ func (gtm *GPUTopologyManager) DetectTopology(ctx context.Context) (*common.GPUT
 		return topology, nil
 	}
 
-	nvlink, _ := gtm.DetectNVLink(ctx)
-	numa, _ := gtm.DetectNUMAMapping(ctx)
-	pcie, _ := gtm.DetectPCIeGeneration(ctx)
+	nvlink, nvlinkErr := gtm.DetectNVLink(ctx)
+	if nvlinkErr != nil {
+		gtm.log.Warn("NVLink detection failed (non-fatal): %v", nvlinkErr)
+	}
+	numa, numaErr := gtm.DetectNUMAMapping(ctx)
+	if numaErr != nil {
+		gtm.log.Warn("NUMA mapping detection failed (non-fatal): %v", numaErr)
+	}
+	pcie, pcieErr := gtm.DetectPCIeGeneration(ctx)
+	if pcieErr != nil {
+		gtm.log.Warn("PCIe generation detection failed (non-fatal): %v", pcieErr)
+	}
 
 	// Detect GPU count for NVSwitch domain detection
 	gpuCount := 0
@@ -887,6 +910,22 @@ func (gtm *GPUTopologyManager) DetectTopology(ctx context.Context) (*common.GPUT
 				if idx+1 > gpuCount {
 					gpuCount = idx + 1
 				}
+			}
+		}
+	}
+	if gpuCount == 0 && numa != nil {
+		// Infer from NUMA mapping (handles PCIe-only systems with no NVLink)
+		for gpuIdx := range numa {
+			if gpuIdx+1 > gpuCount {
+				gpuCount = gpuIdx + 1
+			}
+		}
+	}
+	if gpuCount == 0 && pcie != nil {
+		// Infer from PCIe mapping
+		for gpuIdx := range pcie {
+			if gpuIdx+1 > gpuCount {
+				gpuCount = gpuIdx + 1
 			}
 		}
 	}

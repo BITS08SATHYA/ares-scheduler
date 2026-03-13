@@ -101,6 +101,25 @@ func (ar *APIRequest) ToJobSpec() *common.JobSpec {
 	if maxRetries == 0 {
 		maxRetries = 3 // Default: 3 retries
 	}
+	if maxRetries > 10 {
+		maxRetries = 10 // Cap retries
+	}
+
+	priority := ar.Priority
+	if priority < 0 {
+		priority = 0
+	}
+	if priority > 100 {
+		priority = 100
+	}
+
+	gpuCount := ar.GPUCount
+	if gpuCount < 0 {
+		gpuCount = 0
+	}
+	if gpuCount > 256 {
+		gpuCount = 256
+	}
 
 	targetLatencyMs := ar.TargetLatencyMs
 	if targetLatencyMs == 0 {
@@ -118,7 +137,7 @@ func (ar *APIRequest) ToJobSpec() *common.JobSpec {
 		Args:    ar.Args,
 
 		// GPU Requirements (Feature 13 - GPU-Aware Scheduling)
-		GPUCount: ar.GPUCount,
+		GPUCount: gpuCount,
 		GPUType:  ar.GPUType,
 
 		// Topology Preferences (Feature 4 - Topology-Aware Scheduling)
@@ -130,7 +149,7 @@ func (ar *APIRequest) ToJobSpec() *common.JobSpec {
 		CPUMillis: cpuMillis,
 
 		// Job Control (Feature 5 - Priority & Preemption)
-		Priority: ar.Priority,
+		Priority: priority,
 
 		// Retry Policy (Feature 21 - Backoff & Retry Policy)
 		TimeoutSecs: timeoutSecs,
@@ -651,17 +670,24 @@ func (ag *APIGateway) wrapHandler(handler func(http.ResponseWriter, *http.Reques
 		startTime := time.Now()
 		ag.log.Info("API Request: %s %s from %s", r.Method, r.URL.Path, r.RemoteAddr)
 
+		// Recover from panics to ensure metrics are recorded and client gets a response
+		defer func() {
+			if rec := recover(); rec != nil {
+				ag.log.Error("Handler panic: %v", rec)
+				atomic.AddUint64(&ag.totalErrors, 1)
+				http.Error(w, "internal server error", http.StatusInternalServerError)
+			}
+
+			// Metrics (always recorded, even after panic recovery)
+			duration := time.Since(startTime)
+			atomic.AddUint64(&ag.totalRequests, 1)
+			atomic.AddInt64(&ag.requestDuration, duration.Nanoseconds())
+			ag.metrics.RecordRequest(duration)
+			ag.log.Info("API Response completed in %.2fms", duration.Seconds()*1000)
+		}()
+
 		// Call handler
 		handler(w, r)
-
-		// Metrics
-		duration := time.Since(startTime)
-		atomic.AddUint64(&ag.totalRequests, 1)
-		atomic.AddInt64(&ag.requestDuration, duration.Nanoseconds())
-
-		ag.metrics.RecordRequest(duration)
-
-		ag.log.Info("API Response completed in %.2fms", duration.Seconds()*1000)
 	}
 }
 

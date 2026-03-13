@@ -170,6 +170,11 @@ func (dm *DRFManager) CheckFairness(
 		dm.tenantUsage[tenantID] = usage
 	}
 
+	// Warn if capacity has not been configured — shares will be 0 and all jobs allowed
+	if dm.totalGPUs == 0 && dm.totalCPUs == 0 && dm.totalMemGB == 0 {
+		dm.log.Warn("DRF capacity not set (call UpdateCapacity first) — fairness checks ineffective")
+	}
+
 	// Calculate projected shares (after this job would be admitted)
 	projectedGPUs := usage.GPUsInUse + requestedGPUs
 	projectedCPUs := usage.CPUsInUse + requestedCPUs

@@ -118,6 +118,12 @@ var (
 		getEnvFloat64("ARES_NODE_MEMORY_GB", DefaultMemoryGB),
 		"Node memory in GB (env: ARES_NODE_MEMORY_GB)",
 	)
+
+	etcdEndpoint = flag.String(
+		"etcd-endpoint",
+		getEnvString("ARES_ETCD_ENDPOINT", "localhost:2379"),
+		"etcd endpoint (env: ARES_ETCD_ENDPOINT)",
+	)
 )
 
 // ============================================================================
@@ -177,13 +183,7 @@ func main() {
 	// ========================================================================
 
 	log.Info("Connecting to etcd...")
-	//etcdEndpoints := []string{"etcd-0.etcd.ares-system.svc.cluster.local:2379"}
-	//etcdClient, err := etcd.NewETCDClient(etcdEndpoints, 5*time.Second)
-
-	etcdEndpoints := []string{
-		//"http://etcd-client.ares-system.svc.cluster.local:2379",
-		"http://34.48.35.8:2379",
-	}
+	etcdEndpoints := []string{*etcdEndpoint}
 	etcdClient, err := etcd.NewETCDClient(etcdEndpoints, 5*time.Second)
 
 	if err != nil {

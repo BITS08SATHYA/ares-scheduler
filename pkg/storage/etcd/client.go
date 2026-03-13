@@ -229,7 +229,8 @@ func (ec *ETCDClient) Get(ctx context.Context, key string) (string, error) {
 		return "", err
 	}
 
-	getCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	// Use caller's deadline if shorter, otherwise default to 5s
+	getCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
 	resp, err := ec.cli.Get(getCtx, key)
@@ -289,7 +290,8 @@ func (ec *ETCDClient) GetWithRevision(ctx context.Context, key string) (string, 
 // Returns true if the write succeeded, false if the fence key changed (another scheduler
 // acquired the lease), and error for network/etcd failures.
 func (ec *ETCDClient) PutIfModRevision(ctx context.Context, fenceKey string, expectedModRevision int64, writeKey string, writeValue string, leaseID int64) (bool, error) {
-	putCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	// Use caller's deadline if shorter, otherwise default to 5s
+	putCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
 	txn := ec.cli.Txn(putCtx)
