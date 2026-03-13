@@ -544,6 +544,11 @@ func (gs *GlobalScheduler) ScheduleJob(
 		gs.recordSchedulingFailure()
 		return nil, fmt.Errorf("local scheduling failed: %w", err)
 	}
+	if localDecision == nil {
+		rollbackGPUs()
+		gs.recordSchedulingFailure()
+		return nil, fmt.Errorf("local scheduler returned nil decision for job %s", jobRecord.ID)
+	}
 
 	// Step 3: Create decision
 	decision := &cluster.GlobalSchedulingDecision{
