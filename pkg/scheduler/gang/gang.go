@@ -937,6 +937,19 @@ func (gm *GangManager) RunSchedulingLoop(ctx context.Context, getNodes func() []
 				}
 				if placement != nil {
 					gm.log.Info("GANG: Scheduled %s — launching %d members", gang.Spec.GangID, len(placement.Assignments))
+
+					// PHYSICAL RESERVATION: Decrement AvailableGPUs on the nodes slice
+					// so subsequent gangs in this tick see reduced capacity.
+					// Without this, multiple gangs could double-book the same GPUs.
+					for _, assignment := range placement.Assignments {
+						for i := range nodes {
+							if nodes[i].NodeID == assignment.NodeID && nodes[i].ClusterID == assignment.ClusterID {
+								nodes[i].AvailableGPUs -= len(assignment.GPUIndices)
+								break
+							}
+						}
+					}
+
 					// Remove from wait queue
 					gm.removeFromWaitQueue(gang.Spec.GangID)
 				}

@@ -9,7 +9,6 @@ import (
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler/common"
 	_ "k8s.io/client-go/kubernetes"
 	"runtime/debug"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -70,6 +69,7 @@ type ExecutorConfig struct {
 // ExecutionContext: Runtime context for a job being executed
 type ExecutionContext struct {
 	JobID         string
+	LeaseID       int64      // Carried from K8Decision for fencing validation
 	LocalDecision K8Decision // From Layer 6 (Local Scheduler)
 	PodName       string
 	Namespace     string
@@ -270,10 +270,6 @@ func NewExecutor(
 		return nil, fmt.Errorf("Job Store cannot be nil")
 	}
 
-	if leaseManager == nil {
-		return nil, fmt.Errorf("Lease Manager cannot be nil")
-	}
-
 	executor := &Executor{
 		ClusterID:     clusterID,
 		ControlPlane:  fmt.Sprintf("ares-executor-%s", clusterID),
@@ -294,6 +290,44 @@ func NewExecutor(
 	executor.Log.Info("Pod Lifecycle monitoring enabled")
 
 	return executor, nil
+}
+
+// ============================================================================
+// FENCING HELPERS
+// ============================================================================
+
+// fencedSaveJob validates lease ownership then saves with fencing (intermediate status updates).
+// Falls back to unfenced SaveJob if LeaseManager is nil (backward compat / tests).
+func (e *Executor) fencedSaveJob(ctx context.Context, jobRecord *common.Job, leaseID int64, jobID string) error {
+	if e.LeaseManager == nil {
+		e.Log.Warn("FENCING: LeaseManager nil, falling back to unfenced SaveJob (job=%s)", jobID)
+		return e.JobStore.SaveJob(ctx, jobRecord, leaseID)
+	}
+
+	modRevision, err := e.LeaseManager.CheckLeaseOwnership(ctx, jobID, leaseID)
+	if err != nil {
+		return fmt.Errorf("fencing: lease lost for job %s: %w", jobID, err)
+	}
+
+	e.Log.Info("FENCING: Lease verified for job %s (modRevision=%d), saving fenced", jobID, modRevision)
+	return e.JobStore.SaveJobFenced(ctx, jobRecord, leaseID, modRevision)
+}
+
+// fencedSaveFinal validates lease ownership then saves permanently (completed jobs).
+// Falls back to unfenced SaveJobFinal if LeaseManager is nil.
+func (e *Executor) fencedSaveFinal(ctx context.Context, jobRecord *common.Job, leaseID int64, jobID string) error {
+	if e.LeaseManager == nil {
+		e.Log.Warn("FENCING: LeaseManager nil, falling back to unfenced SaveJobFinal (job=%s)", jobID)
+		return e.JobStore.SaveJobFinal(ctx, jobRecord)
+	}
+
+	_, err := e.LeaseManager.CheckLeaseOwnership(ctx, jobID, leaseID)
+	if err != nil {
+		return fmt.Errorf("fencing: lease lost for job %s: %w", jobID, err)
+	}
+
+	e.Log.Info("FENCING: Lease verified for job %s, saving final (permanent)", jobID)
+	return e.JobStore.SaveJobFinal(ctx, jobRecord)
 }
 
 // ============================================================================
@@ -334,7 +368,8 @@ func (ex *Executor) ExecuteJob(
 
 	// Create execution context
 	execCtx := &ExecutionContext{
-		JobID: decision.JobID,
+		JobID:   decision.JobID,
+		LeaseID: decision.LeaseID,
 		LocalDecision: K8Decision{
 			JobID:            decision.JobID,
 			NodeID:           decision.NodeID,
@@ -625,19 +660,16 @@ func (e *Executor) monitorAndUpdateJob(
 				jobRecord.EndTime = time.Now()
 				jobRecord.ExitCode = 0
 				e.Log.Info("→ Status change detected: %s → SUCCEEDED (final)", lastKnownStatus)
-				// This job completed Successfully. So it needs to be persisted to the Etcd without leaseID.
-				// As you know, the design goal is if the executor crashes in the middle of job execution,
-				// the lease associated with the job expires, and thus auto deletes the job from etcd.
-				// Thus avoiding, split-brain situation. Here, the job completed successfully, meaning that
-				// executor give up the lease and job (auto deletes from etcd) and /getJobByJobID returns
-				// no such job exists! To mitigate this, I did save the job in the Etcd store without leaseID.
-				// Save without lease
-				saveErr := e.JobStore.SaveJobFinal(ctx, jobRecord)
+				// Fenced save: verify lease ownership before persisting final state.
+				// Completed jobs are saved without lease (permanent) but we must verify
+				// we still own the lease to prevent split-brain overwrites.
+				saveErr := e.fencedSaveFinal(ctx, jobRecord, execCtx.LeaseID, jobID)
 				if saveErr != nil {
-					e.Log.Error("❌ Failed to persist SUCCEEDED job: %v", saveErr)
-					continue
+					e.Log.Error("FENCING: Cannot persist SUCCEEDED job %s: %v", jobID, saveErr)
+					e.Log.Error("Stopping monitoring — new lease owner handles this job")
+					return nil
 				}
-				e.Log.Info("✅ Succeeded Job Persisted Permanently (no lease)")
+				e.Log.Info("Succeeded Job Persisted Permanently (fenced, no lease)")
 
 				// Clean up: move from ActiveJobs -> CompletedJobs
 				e.JobsMu.Lock()
@@ -687,13 +719,14 @@ func (e *Executor) monitorAndUpdateJob(
 				}
 				e.Log.Error("→ Status change detected: %s → FAILED (final)", lastKnownStatus)
 
-				// Save without lease
-				saveErr := e.JobStore.SaveJobFinal(ctx, jobRecord)
+				// Fenced save: verify lease ownership before persisting final state
+				saveErr := e.fencedSaveFinal(ctx, jobRecord, execCtx.LeaseID, jobID)
 				if saveErr != nil {
-					e.Log.Error("❌ Failed to persist FAILED job: %v", saveErr)
-					continue
+					e.Log.Error("FENCING: Cannot persist FAILED job %s: %v", jobID, saveErr)
+					e.Log.Error("Stopping monitoring — new lease owner handles this job")
+					return nil
 				}
-				e.Log.Info("✅ Failed Job Persisted Permanently (no lease)")
+				e.Log.Info("Failed Job Persisted Permanently (fenced, no lease)")
 
 				// Clean up: move from ActiveJobs → CompletedJobs
 				e.JobsMu.Lock()
@@ -743,47 +776,22 @@ func (e *Executor) monitorAndUpdateJob(
 
 				jobRecord.Status = newJobStatus
 
-				// Extract lease ID
-				leaseID := int64(0)
-				if jobRecord.ExecutionLease != nil && jobRecord.ExecutionLease.LeaseID != "" {
-					parsed, parseErr := strconv.ParseInt(jobRecord.ExecutionLease.LeaseID, 10, 64)
-					if parseErr != nil {
-						e.Log.Error("❌ Lease ID parse failed: %v", parseErr)
-						e.Log.Error("   Lease ID string: '%s'", jobRecord.ExecutionLease.LeaseID)
-						e.Log.Info("🔄 Continuing to next tick...")
-						continue
-					}
-					leaseID = parsed
-					e.Log.Info("✅ Lease ID: %d", leaseID)
-				} else {
-					e.Log.Error("❌ No ExecutionLease found!")
-					e.Log.Info("🔄 Continuing to next tick...")
-					continue
-				}
+				e.Log.Info("Calling fencedSaveJob(jobID=%s, leaseID=%d, status=%s)...", jobID, execCtx.LeaseID, newJobStatus)
 
-				if leaseID == 0 {
-					e.Log.Error("❌ Lease ID is 0, cannot save!")
-					e.Log.Info("🔄 Continuing to next tick...")
-					continue
-				}
-
-				e.Log.Info("📤 Calling SaveJob(jobID=%s, leaseID=%d, status=%s)...", jobID, leaseID, newJobStatus)
-
-				saveErr := e.JobStore.SaveJob(ctx, jobRecord, leaseID)
+				saveErr := e.fencedSaveJob(ctx, jobRecord, execCtx.LeaseID, jobID)
 
 				if saveErr != nil {
-					e.Log.Error("❌❌❌ SaveJob FAILED! ❌❌❌")
-					e.Log.Error("   Error: %v", saveErr)
-					e.Log.Error("   Error type: %T", saveErr)
-					e.Log.Error("   JobID: %s", jobID)
-					e.Log.Error("   LeaseID: %d", leaseID)
-					e.Log.Error("   Status: %s", newJobStatus)
-					e.Log.Info("🔄 Continuing to next tick...")
+					if strings.Contains(saveErr.Error(), "lease lost") {
+						e.Log.Error("FENCING: Lease lost for job %s, stopping monitoring (new owner handles it)", jobID)
+						return nil
+					}
+					e.Log.Error("fencedSaveJob failed (transient): %v", saveErr)
+					e.Log.Info("Continuing to next tick...")
 					continue
 				}
 
 				lastKnownStatus = newJobStatus
-				e.Log.Info("✅✅✅ SaveJob SUCCESS! Job now: %s ✅✅✅", newJobStatus)
+				e.Log.Info("fencedSaveJob SUCCESS! Job now: %s", newJobStatus)
 			} else {
 				e.Log.Info("ℹ️ No update needed (status unchanged)")
 			}
