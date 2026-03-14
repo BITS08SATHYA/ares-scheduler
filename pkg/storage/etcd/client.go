@@ -282,6 +282,19 @@ func (ec *ETCDClient) GetWithRevision(ctx context.Context, key string) (string, 
 	return string(resp.Kvs[0].Value), resp.Kvs[0].ModRevision, nil
 }
 
+// GetWithRevisionAndLease returns (value, modRevision, etcdLeaseID, error).
+// The etcdLeaseID is the lease attached to the key, useful for ownership verification.
+func (ec *ETCDClient) GetWithRevisionAndLease(ctx context.Context, key string) (string, int64, int64, error) {
+	resp, err := ec.cli.Get(ctx, key)
+	if err != nil {
+		return "", 0, 0, err
+	}
+	if len(resp.Kvs) == 0 {
+		return "", 0, 0, nil
+	}
+	return string(resp.Kvs[0].Value), resp.Kvs[0].ModRevision, resp.Kvs[0].Lease, nil
+}
+
 // PutIfModRevision: Atomic fenced write
 // Writes writeKey=writeValue ONLY IF fenceKey's ModRevision still equals expectedModRevision.
 // This is the proper fencing pattern: instead of "read lease, check owner, then write job"

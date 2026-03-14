@@ -315,9 +315,8 @@ func (lm *LeaseManager) runHeartbeat(
 func (lm *LeaseManager) CheckLeaseOwnership(ctx context.Context, jobID string, leaseID int64) (int64, error) {
 	leaseKey := fmt.Sprintf("ares:leases:%s", jobID)
 
-	// Step 1: Check if lease key exists in etcd (source of truth)
-	// Use GetWithRevision instead of Plain Get
-	leaseData, modRevision, err := lm.etcdClient.GetWithRevision(ctx, leaseKey)
+	// Step 1: Check if lease key exists in etcd and get the attached etcd lease ID
+	leaseData, modRevision, etcdLeaseID, err := lm.etcdClient.GetWithRevisionAndLease(ctx, leaseKey)
 	if err != nil {
 		lm.log.Errorf("FENCING: Failed to check lease in etcd: %v", err)
 		return 0, fmt.Errorf("fencing error: %w", err)
@@ -329,24 +328,16 @@ func (lm *LeaseManager) CheckLeaseOwnership(ctx context.Context, jobID string, l
 		return 0, fmt.Errorf("fencing error: lease not found in etcd (split-brain prevented!)")
 	}
 
-	// Step 2: Verify it's still our lease (parse and check SchedulerID)
-	var lease Lease
-	if err = json.Unmarshal([]byte(leaseData), &lease); err != nil {
-		lm.log.Errorf("FENCING: Failed to parse lease: %v", err)
-		return 0, fmt.Errorf("fencing error: failed to parse lease: %w", err)
+	// Step 2: Verify by etcd lease ID — the authoritative ownership proof.
+	// The key is attached to a specific etcd lease grant; if the lease ID matches
+	// the one we were given at scheduling time, the lease is still ours.
+	// This works correctly in the two-tier architecture where the global scheduler
+	// acquires the lease and the local scheduler's executor verifies it.
+	if etcdLeaseID != leaseID {
+		lm.log.Errorf("FENCING: Lease ID mismatch for job %s (expected %d, got %d) - split-brain prevented!",
+			jobID, leaseID, etcdLeaseID)
+		return 0, fmt.Errorf("fencing error: lease ID mismatch (expected %d, got %d)", leaseID, etcdLeaseID)
 	}
-
-	if lease.SchedulerID != lm.schedulerID {
-		lm.log.Errorf("FENCING: Lease owned by different scheduler (expected %s, got %s)",
-			lm.schedulerID, lease.SchedulerID)
-		return 0, fmt.Errorf("fencing error: lease owned by another scheduler %s (split-brain prevented!)", lease.SchedulerID)
-	}
-
-	// Step 3: Verify leaseID matches (extra safety check)
-	//if lease.JobID != jobID {
-	//	lm.log.Errorf("FENCING: JobID mismatch in lease")
-	//	return fmt.Errorf("fencing error: job ID mismatch")
-	//}
 
 	lm.log.Infof("fencing check passed for job %s (lease still ours in etcd)", jobID)
 	return modRevision, nil
