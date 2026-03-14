@@ -239,7 +239,9 @@ func (r *LWWRegister) Merge(remote *LWWRegister) bool {
 		r.Value = remoteValue
 		r.Timestamp = remoteTimestamp
 		r.NodeID = remoteNodeID
-		r.Clock.Merge(remoteClock)
+		if r.Clock != nil {
+			r.Clock.Merge(remoteClock)
+		}
 		return true
 	}
 
@@ -248,12 +250,16 @@ func (r *LWWRegister) Merge(remote *LWWRegister) bool {
 		r.Value = remoteValue
 		r.Timestamp = remoteTimestamp
 		r.NodeID = remoteNodeID
-		r.Clock.Merge(remoteClock)
+		if r.Clock != nil {
+			r.Clock.Merge(remoteClock)
+		}
 		return true
 	}
 
 	// Local wins — still merge the clock for causal tracking
-	r.Clock.Merge(remoteClock)
+	if r.Clock != nil {
+		r.Clock.Merge(remoteClock)
+	}
 	return false
 }
 
