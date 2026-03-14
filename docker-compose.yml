@@ -22,7 +22,7 @@ services:
       - --initial-cluster-state=new
       - --log-level=info
       - --logger=zap
-      - --log-outputs=s
+      - --log-outputs=stderr
   redis:
     image: redis:7-alpine
     container_name: ares-redis
