@@ -41,6 +41,7 @@ func (lss *LocalSchedulerServer) Start() error {
 
 	// Register HTTP handlers
 	mux.HandleFunc("/schedule", lss.handleSchedule)
+	mux.HandleFunc("/cancel", lss.handleCancel)
 	mux.HandleFunc("/health", lss.handleHealth)
 	mux.HandleFunc("/status", lss.handleStatus)
 	mux.HandleFunc("/metrics", lss.handleMetrics)
@@ -271,6 +272,54 @@ func (lss *LocalSchedulerServer) handleSchedule(w http.ResponseWriter, r *http.R
 
 	}
 
+}
+
+// handleCancel: POST /cancel - Cancel a running job and free its resources
+func (lss *LocalSchedulerServer) handleCancel(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		json.NewEncoder(w).Encode(map[string]string{"error": "expected POST"})
+		return
+	}
+
+	var req struct {
+		JobID  string `json:"job_id"`
+		Reason string `json:"reason,omitempty"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": fmt.Sprintf("invalid request: %v", err)})
+		return
+	}
+
+	if req.JobID == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "job_id is required"})
+		return
+	}
+
+	lss.log.Info("PREEMPTION: Received cancel request for job %s (reason: %s)", req.JobID, req.Reason)
+
+	// Step 1: Delete the pod via executor
+	if lss.executor != nil {
+		if err := lss.executor.CancelJob(req.JobID); err != nil {
+			lss.log.Warn("PREEMPTION: Pod deletion failed for job %s: %v (may already be gone)", req.JobID, err)
+		} else {
+			lss.log.Info("PREEMPTION: Pod deleted for job %s", req.JobID)
+		}
+	}
+
+	// Step 2: Release GPU resources on the local scheduler
+	lss.scheduler.ReleaseJobResources(req.JobID)
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"job_id":  req.JobID,
+		"message": "job cancelled",
+	})
 }
 
 // handleHealth: GET /health - Get cluster health

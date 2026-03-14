@@ -190,18 +190,18 @@ func (pm *PreemptionManager) FindPreemptionVictim(
 	})
 
 	// Pick the best victim that frees enough resources
-	for _, candidate := range candidates {
-		if candidate.GPUCount >= incomingJob.GPUCount {
-			gap := incomingJob.Priority - candidate.Priority
+	for i := range candidates {
+		if candidates[i].GPUCount >= incomingJob.GPUCount {
+			gap := incomingJob.Priority - candidates[i].Priority
 			return &PreemptionDecision{
 				ShouldPreempt: true,
-				Victim:        &candidate,
+				Victim:        &candidates[i],
 				IncomingPri:   incomingJob.Priority,
-				VictimPri:     candidate.Priority,
+				VictimPri:     candidates[i].Priority,
 				PriorityGap:   gap,
 				GracePeriod:   time.Duration(pm.config.GracePeriodSec) * time.Second,
 				Reason: fmt.Sprintf("preempting job %s (pri=%d) for incoming (pri=%d), gap=%d",
-					candidate.JobID, candidate.Priority, incomingJob.Priority, gap),
+					candidates[i].JobID, candidates[i].Priority, incomingJob.Priority, gap),
 			}
 		}
 	}

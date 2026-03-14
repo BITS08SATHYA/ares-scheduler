@@ -1011,6 +1011,50 @@ func (ls *LocalScheduler) ReleaseResources(
 	return ls.UpdateNodeState(ctx, node)
 }
 
+// ReleaseJobResources: Release all resources held by a job (looked up by jobID)
+// Used by the cancel/preemption path where we only know the jobID
+func (ls *LocalScheduler) ReleaseJobResources(jobID string) {
+	ls.nodesMu.Lock()
+	var foundNodeID string
+	gpuCount := 0
+	for nodeID, gpuMap := range ls.allocatedGPUs {
+		for idx, owner := range gpuMap {
+			if owner == jobID {
+				delete(gpuMap, idx)
+				gpuCount++
+				foundNodeID = nodeID
+			}
+		}
+	}
+	ls.nodesMu.Unlock()
+
+	if foundNodeID == "" {
+		ls.log.Warn("ReleaseJobResources: no GPU allocations found for job %s", jobID)
+		return
+	}
+
+	// Update node state
+	node, err := ls.GetNodeState(foundNodeID)
+	if err != nil {
+		ls.log.Error("ReleaseJobResources: node %s not found: %v", foundNodeID, err)
+		return
+	}
+
+	ls.nodesMu.Lock()
+	node.AvailableGPUs += gpuCount
+	node.RunningJobsCount--
+	if node.RunningJobsCount < 0 {
+		node.RunningJobsCount = 0
+	}
+	ls.nodesMu.Unlock()
+
+	ctx := context.Background()
+	ls.saveGPUAllocations(ctx, foundNodeID)
+	ls.UpdateNodeState(ctx, node)
+
+	ls.log.Info("ReleaseJobResources: freed %d GPUs on node %s for job %s", gpuCount, foundNodeID, jobID)
+}
+
 // ============================================================================
 // GPU ALLOCATION PERSISTENCE
 // ============================================================================

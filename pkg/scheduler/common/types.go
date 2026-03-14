@@ -68,7 +68,8 @@ const (
 	StatusSucceeded JobStatus = "SUCCEEDED" // Completed OK
 	StatusFailed    JobStatus = "FAILED"    // Failed, may retry
 	StatusRetrying  JobStatus = "RETRYING"
-	StatusQueued    JobStatus = "QUEUED" // Accepted but waiting for resources
+	StatusQueued    JobStatus = "QUEUED"    // Accepted but waiting for resources
+	StatusPreempted JobStatus = "PREEMPTED" // Evicted by a higher-priority job
 )
 
 // Job: Mutable runtime state (the "execution instance")

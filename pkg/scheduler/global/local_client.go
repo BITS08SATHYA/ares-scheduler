@@ -200,6 +200,49 @@ func (c *LocalSchedulerClient) GetClusterHealth(
 	return health, nil
 }
 
+// CancelJob calls remote LocalScheduler to cancel a running job (for preemption)
+func (c *LocalSchedulerClient) CancelJob(
+	ctx context.Context,
+	localSchedulerAddr string,
+	jobID string,
+	reason string,
+) error {
+	if localSchedulerAddr == "" {
+		return fmt.Errorf("local scheduler address cannot be empty")
+	}
+
+	reqBody, err := json.Marshal(map[string]string{
+		"job_id": jobID,
+		"reason": reason,
+	})
+	if err != nil {
+		return fmt.Errorf("marshal failed: %w", err)
+	}
+
+	url := fmt.Sprintf("%s/cancel", localSchedulerAddr)
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(reqBody))
+	if err != nil {
+		return fmt.Errorf("request creation failed: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	c.log.Info("PREEMPTION: Calling LocalScheduler cancel: POST %s (job=%s)", url, jobID)
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return fmt.Errorf("http request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("cancel failed (status %d): %s", resp.StatusCode, string(body))
+	}
+
+	c.log.Info("PREEMPTION: Job %s cancelled on %s", jobID, localSchedulerAddr)
+	return nil
+}
+
 func trimTrailingSlash(path string) string {
 	if len(path) > 0 && path[len(path)-1] == '/' {
 		return path[:len(path)-1]

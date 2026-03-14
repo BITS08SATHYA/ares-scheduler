@@ -1267,7 +1267,36 @@ func (gs *GlobalScheduler) cancelJobOnCluster(ctx context.Context, jobID string)
 		return
 	}
 
-	job.Status = common.StatusFailed
+	// Step 1: Send cancel to the local scheduler to delete the pod and free GPUs
+	if job.ClusterID != "" {
+		gs.clustersMu.RLock()
+		clusterInfo, exists := gs.clusters[job.ClusterID]
+		gs.clustersMu.RUnlock()
+
+		if exists && clusterInfo.LocalSchedulerAddr != "" {
+			localClient := NewLocalSchedulerClient()
+			cancelErr := localClient.CancelJob(ctx, clusterInfo.LocalSchedulerAddr, jobID, "preempted by higher priority job")
+			if cancelErr != nil {
+				gs.log.Warn("PREEMPTION: Failed to cancel pod on cluster %s: %v (marking as preempted anyway)", job.ClusterID, cancelErr)
+			} else {
+				gs.log.Info("PREEMPTION: Pod cancelled on cluster %s for job %s", job.ClusterID, jobID)
+			}
+
+			// Restore GPU count on the global cluster cache so retry can find capacity
+			gs.clustersMu.Lock()
+			if ci, ok := gs.clusters[job.ClusterID]; ok {
+				ci.AvailableGPUs += job.Spec.GPUCount
+				gs.log.Info("PREEMPTION: Restored %d GPUs on cluster %s (now %d available)",
+					job.Spec.GPUCount, job.ClusterID, ci.AvailableGPUs)
+			}
+			gs.clustersMu.Unlock()
+		} else {
+			gs.log.Warn("PREEMPTION: No local scheduler address for cluster %s", job.ClusterID)
+		}
+	}
+
+	// Step 2: Mark job as PREEMPTED in etcd
+	job.Status = common.StatusPreempted
 	job.ErrorMsg = "preempted by higher priority job"
 
 	err = gs.jobStore.SaveJobFinal(ctx, job)
@@ -1276,7 +1305,7 @@ func (gs *GlobalScheduler) cancelJobOnCluster(ctx context.Context, jobID string)
 		return
 	}
 
-	gs.log.Info("PREEMPTION: Job %s marked as FAILED (preempted)", jobID)
+	gs.log.Info("PREEMPTION: Job %s marked as PREEMPTED", jobID)
 }
 
 // scheduleGangJob: Route gang jobs to the gang manager
