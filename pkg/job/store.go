@@ -276,7 +276,11 @@ func (store *ETCDJobStore) ListJobs(
 	jobs := make([]*common.Job, 0, len(jobMap))
 
 	// Parse each job and apply filter
-	for _, jobData := range jobMap {
+	for key, jobData := range jobMap {
+		if jobData == "" {
+			store.log.Warn("Skipping empty job data for key %s", key)
+			continue
+		}
 		job := &common.Job{}
 		err := json.Unmarshal([]byte(jobData), job)
 		if err != nil {
@@ -325,7 +329,7 @@ func (store *ETCDJobStore) ListJobs(
 // Returns a channel that receives job updates
 // Uses etcd watch internally
 func (store *ETCDJobStore) WatchJobs(ctx context.Context, jobID string) <-chan *common.Job {
-	jobChan := make(chan *common.Job)
+	jobChan := make(chan *common.Job, 1)
 
 	go func() {
 		defer close(jobChan)
@@ -357,7 +361,11 @@ func (store *ETCDJobStore) WatchJobs(ctx context.Context, jobID string) <-chan *
 					}
 
 					store.log.Debug("Watched job %s changed (status: %s)", job.ID, job.Status)
-					jobChan <- job
+					select {
+					case jobChan <- job:
+					case <-ctx.Done():
+						return
+					}
 				}
 			}
 		}
@@ -458,12 +466,20 @@ func (store *ETCDJobStore) CleanupOldJobs(ctx context.Context, olderThan time.Du
 
 // DeleteJobs: Delete multiple jobs at once
 func (store *ETCDJobStore) DeleteJobs(ctx context.Context, jobIDs []string) error {
+	var errs []error
+	deleted := 0
 	for _, jobID := range jobIDs {
 		if err := store.DeleteJob(ctx, jobID); err != nil {
-			return err
+			store.log.Warn("Failed to delete job %s: %v", jobID, err)
+			errs = append(errs, fmt.Errorf("job %s: %w", jobID, err))
+		} else {
+			deleted++
 		}
 	}
-	store.log.Debug("Deleted %d jobs", len(jobIDs))
+	store.log.Debug("Deleted %d/%d jobs", deleted, len(jobIDs))
+	if len(errs) > 0 {
+		return fmt.Errorf("failed to delete %d/%d jobs: %v", len(errs), len(jobIDs), errs[0])
+	}
 	return nil
 }
 
