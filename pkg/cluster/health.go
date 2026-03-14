@@ -296,7 +296,9 @@ func (hm *HealthMonitor) notifyHealthy(ctx context.Context, clusterID string) {
 
 	for _, listener := range listeners {
 		go func(l HealthChangeListener) {
-			err := l.OnHealthy(ctx, clusterID)
+			notifyCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			defer cancel()
+			err := l.OnHealthy(notifyCtx, clusterID)
 			if err != nil {
 				hm.log.Warn("Health listener error: %v", err)
 			}
@@ -312,7 +314,9 @@ func (hm *HealthMonitor) notifyUnhealthy(ctx context.Context, clusterID string, 
 
 	for _, listener := range listeners {
 		go func(l HealthChangeListener) {
-			err := l.OnUnhealthy(ctx, clusterID, reason)
+			notifyCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			defer cancel()
+			err := l.OnUnhealthy(notifyCtx, clusterID, reason)
 			if err != nil {
 				hm.log.Warn("Health listener error: %v", err)
 			}

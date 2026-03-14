@@ -128,7 +128,7 @@ func (ae *AutonomyEngine) ExitAutonomy(ctx context.Context) error {
 		ae.clusterID, autonomousDuration.Seconds(), localJobsQueued)
 
 	// Process queued jobs (send to global scheduler)
-	go ae.processQueuedJobs(context.Background())
+	go ae.processQueuedJobs(ctx)
 
 	// Notify listeners
 	ae.notifyExitAutonomy(ctx)
