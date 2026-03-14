@@ -689,7 +689,6 @@ func (e *Executor) monitorAndUpdateJob(
 					CompletedAt: time.Now(),
 				}
 				e.JobsMu.Unlock()
-				atomic.AddUint64(&e.TotalSuccessful, 1)
 
 				// Release GPU resources (recover from panic to prevent resource leak)
 				if e.OnJobComplete != nil {
@@ -702,6 +701,7 @@ func (e *Executor) monitorAndUpdateJob(
 						e.OnJobComplete(execCtx.JobID, execCtx.NodeID, len(execCtx.GPUIndices), 0)
 					}()
 				}
+				atomic.AddUint64(&e.TotalSuccessful, 1)
 
 			case PhaseFailed:
 				newJobStatus = common.StatusFailed
