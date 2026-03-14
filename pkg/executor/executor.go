@@ -804,6 +804,19 @@ func (e *Executor) monitorAndUpdateJob(
 			// ================================================================
 			if shouldStop {
 				e.Log.Info("🏁 Pod completed, stopping monitoring (final status: %s)", newJobStatus)
+
+				// Release lease to stop heartbeat renewal — without this,
+				// the heartbeat goroutine keeps renewing the lease forever.
+				if e.LeaseManager != nil {
+					releaseCtx, releaseCancel := context.WithTimeout(context.Background(), 5*time.Second)
+					defer releaseCancel()
+					if err := e.LeaseManager.ReleaseLeaseForJob(releaseCtx, jobID); err != nil {
+						e.Log.Error("Failed to release lease for completed job %s: %v", jobID, err)
+					} else {
+						e.Log.Info("✓ Lease released for completed job %s", jobID)
+					}
+				}
+
 				return nil
 			}
 
