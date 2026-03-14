@@ -39,13 +39,15 @@ spec:
             - name: ARES_REDIS_ADDR
               value: "34.145.167.199:6379"
 #              value: "34.86.13.151:6379"
+            - name: ARES_ETCD_ENDPOINT
+              value: "34.48.35.8:2379"
             - name: ARES_CONTROL_PLANE
               value: "http://35.245.157.53:8080"
 
             - name: ARES_LOCAL_SCHEDULER_EXTERNAL_ADDR
               value: "http://34.48.68.132:9090"
 
-            - name: WORKER_CLUSTER_ID
+            - name: ARES_CLUSTER_ID
               valueFrom:
                 configMapKeyRef:
                   name: cluster-config
