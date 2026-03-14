@@ -19,6 +19,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -55,7 +56,7 @@ const (
 var (
 	clusterID = flag.String(
 		"cluster-id",
-		getEnvString("WORKER_CLUSTER_ID", ""),
+		getEnvString("ARES_CLUSTER_ID", ""),
 		"Cluster ID (required, env: ARES_CLUSTER_ID)",
 	)
 
@@ -142,6 +143,9 @@ func main() {
 	log.Info("║   K8s-Native GPU Discovery + Executor Wrapper         ║")
 	log.Info("╚═══════════════════════════════════════════════════════╝")
 	log.Info("")
+
+	// Trim whitespace from cluster ID to prevent registration/heartbeat mismatch
+	*clusterID = strings.TrimSpace(*clusterID)
 
 	// Validate required flags
 	if *clusterID == "" {
@@ -375,10 +379,17 @@ func main() {
 	var topologyData map[string]interface{}
 	topology, err := topologyManager.DetectTopology(ctx)
 	if err == nil && topology != nil {
+		// Extract a single PCIe generation value from the per-GPU map.
+		// The validation expects an integer (3, 4, or 5), not a map.
+		pcieGen := 4 // default
+		for _, gen := range topology.PCIeGen {
+			pcieGen = gen
+			break
+		}
 		topologyData = map[string]interface{}{
 			"nvlink_pairs": topology.NVLinkPairs,
 			"gpu_to_numa":  topology.GPUToNUMA,
-			"pcie_gen":     topology.PCIeGen,
+			"pcie_gen":     pcieGen,
 		}
 		log.Info("✓ GPU topology detected")
 	} else {
