@@ -34,6 +34,7 @@ type HealthMonitor struct {
 	// Event listeners
 	healthListeners []HealthChangeListener
 	listenerMu      sync.RWMutex
+	notifyWg        sync.WaitGroup
 }
 
 // HealthChangeListener: Callback for health changes
@@ -295,7 +296,9 @@ func (hm *HealthMonitor) notifyHealthy(ctx context.Context, clusterID string) {
 	hm.listenerMu.RUnlock()
 
 	for _, listener := range listeners {
+		hm.notifyWg.Add(1)
 		go func(l HealthChangeListener) {
+			defer hm.notifyWg.Done()
 			err := l.OnHealthy(ctx, clusterID)
 			if err != nil {
 				hm.log.Warn("Health listener error: %v", err)
@@ -311,13 +314,21 @@ func (hm *HealthMonitor) notifyUnhealthy(ctx context.Context, clusterID string, 
 	hm.listenerMu.RUnlock()
 
 	for _, listener := range listeners {
+		hm.notifyWg.Add(1)
 		go func(l HealthChangeListener) {
+			defer hm.notifyWg.Done()
 			err := l.OnUnhealthy(ctx, clusterID, reason)
 			if err != nil {
 				hm.log.Warn("Health listener error: %v", err)
 			}
 		}(listener)
 	}
+}
+
+// WaitForNotifications: Wait for all in-flight notification goroutines to complete.
+// Call during shutdown to ensure clean termination.
+func (hm *HealthMonitor) WaitForNotifications() {
+	hm.notifyWg.Wait()
 }
 
 // ============================================================================

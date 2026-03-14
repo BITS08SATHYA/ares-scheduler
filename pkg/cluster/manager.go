@@ -194,7 +194,7 @@ func (cm *ClusterManager) GetCluster(clusterID string) (*Cluster, error) {
 	return cluster, nil
 }
 
-// GetCluster: Get cluster by ID
+// GetClusterInfo: Get cluster info (public view) by ID
 func (cm *ClusterManager) GetClusterInfo(clusterID string) (*ClusterInfo, error) {
 	cm.mu.RLock()
 	defer cm.mu.RUnlock()
