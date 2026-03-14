@@ -941,7 +941,7 @@ func (ls *LocalScheduler) ReserveResources(
 		return fmt.Errorf("insufficient memory to reserve")
 	}
 
-	// Track which GPU indices are allocated to this job
+	// Track GPU indices and reserve resources atomically under a single lock
 	ls.nodesMu.Lock()
 	if ls.allocatedGPUs[nodeID] == nil {
 		ls.allocatedGPUs[nodeID] = make(map[int]string)
@@ -956,10 +956,6 @@ func (ls *LocalScheduler) ReserveResources(
 		}
 		ls.allocatedGPUs[nodeID][idx] = jobID
 	}
-	ls.nodesMu.Unlock()
-
-	// Reserve resources under lock (node pointer is shared state)
-	ls.nodesMu.Lock()
 	node.AvailableGPUs -= gpuCount
 	node.AvailableMemoryGB -= memoryGB
 	node.RunningJobsCount++
@@ -987,19 +983,19 @@ func (ls *LocalScheduler) ReleaseResources(
 		return err
 	}
 
-	// Release tracked GPU indices for this job
+	// Release tracked GPU indices and free resources atomically
 	ls.nodesMu.Lock()
 	if nodeGPUs, exists := ls.allocatedGPUs[nodeID]; exists {
+		var toDelete []int
 		for idx, owner := range nodeGPUs {
 			if owner == jobID {
-				delete(nodeGPUs, idx)
+				toDelete = append(toDelete, idx)
 			}
 		}
+		for _, idx := range toDelete {
+			delete(nodeGPUs, idx)
+		}
 	}
-	ls.nodesMu.Unlock()
-
-	// Free resources under lock (node pointer is shared state)
-	ls.nodesMu.Lock()
 	node.AvailableGPUs += gpuCount
 	node.AvailableMemoryGB += float64(memoryMB) / 1024.0
 	node.RunningJobsCount--

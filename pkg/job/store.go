@@ -325,7 +325,7 @@ func (store *ETCDJobStore) ListJobs(
 // Returns a channel that receives job updates
 // Uses etcd watch internally
 func (store *ETCDJobStore) WatchJobs(ctx context.Context, jobID string) <-chan *common.Job {
-	jobChan := make(chan *common.Job)
+	jobChan := make(chan *common.Job, 1)
 
 	go func() {
 		defer close(jobChan)
@@ -357,7 +357,11 @@ func (store *ETCDJobStore) WatchJobs(ctx context.Context, jobID string) <-chan *
 					}
 
 					store.log.Debug("Watched job %s changed (status: %s)", job.ID, job.Status)
-					jobChan <- job
+					select {
+					case jobChan <- job:
+					case <-ctx.Done():
+						return
+					}
 				}
 			}
 		}

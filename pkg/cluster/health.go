@@ -110,6 +110,17 @@ func (hm *HealthMonitor) ReceivedHeartbeat(ctx context.Context, heartbeat *Heart
 		health.ConsecutiveFails++
 	}
 
+	// Update cluster capacity (triggers JOINING → READY on first heartbeat)
+	if heartbeat.GPUCount > 0 || heartbeat.MemoryGB > 0 {
+		hm.clusterManager.UpdateClusterCapacity(
+			ctx,
+			heartbeat.ClusterID,
+			heartbeat.GPUCount,
+			0, // CPUs not in heartbeat yet
+			heartbeat.MemoryGB,
+		)
+	}
+
 	// Update cluster manager with new load
 	hm.clusterManager.UpdateClusterLoad(
 		ctx,
