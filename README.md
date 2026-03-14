@@ -2,6 +2,8 @@
 
 # Ares: Distributed GPU Scheduler for Kubernetes
 
+### v0.1.0
+
 **Multi-cluster scheduling with exactly-once execution, GPU topology optimization, CRDT-based consistency 
 and Gang Scheduling.**
 
@@ -9,14 +11,13 @@ and Gang Scheduling.**
 
 [![Go](https://img.shields.io/badge/Go-1.21+-00ADD8?logo=go&logoColor=white)]()
 [![License](https://img.shields.io/badge/license-MIT-blue)]()
-[![Tests](https://img.shields.io/badge/tests-3%2C973_lines-brightgreen)]()
+[![Benchmark](https://img.shields.io/badge/suites_passing-5%2F7-yellow)]()
 
-[Architecture](#architecture) · [Features](#features) · [Quick Start](#-quick-start) · [Deep Dives](#-technical-deep-dives) · [Blog](https://sathyanyu.substack.com)
+[Architecture](#architecture) · [Benchmark Results](#-benchmark-results) · [Features](#features) · [Quick Start](#-quick-start) · [Blog](https://sathyanyu.substack.com)
 
 </div>
 
 ---
-
 ## The Problem
 
 GPU clusters are expensive. A single p4d.24xlarge (8× A100 GPUs) costs $22.77/hour.
@@ -29,7 +30,7 @@ It gets worse at scale. When jobs span multiple clusters, you need coordination.
 
 - ✅ **[Exactly-once execution](#exactly-once-execution)** — Jobs never run twice, even when workers crash, networks partition, or clients retry. Three-layer defense: Redis idempotency → etcd distributed leases → fencing tokens.
 
-- ✅ **[GPU topology-aware placement](#gpu-topology-aware-placement)** — Parses `nvidia-smi` topology matrices, builds NVLink connection graphs, and scores every placement candidate. NVLink-connected GPUs get placed together; PCIe fallback is penalized.
+- ✅ **[GPU topology-aware placement](#gpu-topology-aware-placement)** — Parses `nvidia-smi` topology matrices, builds NVLink connection graphs, and scores every placement candidate. Validated against NCCL benchmarks on 8× A100 NVSwitch (p4d.24xlarge). Optimizes at the inter-node boundary where NVLink→network bandwidth ratios create 4–5× differences.
 
 - ✅ **[Multi-cluster coordination](#multi-cluster-coordination)** — Global scheduler scores clusters by available capacity, GPU match, and health. Local schedulers handle per-cluster placement. Tested across GKE and AWS EKS.
 
@@ -39,9 +40,9 @@ It gets worse at scale. When jobs span multiple clusters, you need coordination.
 
 - ✅ **[DRF fair scheduling](#drf-fair-scheduling)** — Dominant Resource Fairness prevents any single tenant from monopolizing GPUs. Based on Ghodsi et al. (NSDI, 2011).
 
-- ✅ **[Priority preemption](#priority-preemption)** — High-priority jobs evict lower-priority ones with configurable grace periods, rate limits, and cascade prevention.
+- 🔧 **[Priority preemption](#priority-preemption)** *(in progress)* — High-priority jobs evict lower-priority ones with configurable grace periods, rate limits, and cascade prevention. Core logic implemented; preemption trigger under active development.
 
-- ✅ **[Checkpoint & recovery](#checkpoint--recovery)** — Jobs save progress to shared storage and resume after crashes or preemptions. Completes the reliability chain: exactly-once → retry → preempt → resume.
+- 🔧 **[Checkpoint & recovery](#checkpoint--recovery)** *(in progress)* — Jobs save progress to shared storage and resume after crashes or preemptions. Metadata management and S3 path injection implemented; end-to-end failure recovery under active development.
 
 - ✅ **[Cluster autonomy](#cluster-autonomy)** — Local schedulers continue operating when the global control plane is unreachable. No single point of failure.
 
@@ -50,33 +51,11 @@ It gets worse at scale. When jobs span multiple clusters, you need coordination.
 ---
 
 ## Architecture
-
-```
-                         ┌──────────────────────────────────┐
-                         │        API Gateway (8080)        │
-                         │   Rate limiting · Auth · Metrics │
-                         └──────────────┬───────────────────┘
-                                        │
-                         ┌──────────────▼───────────────────┐
-                         │       Global Scheduler           │
-                         │  Cluster scoring · DRF · Gang    │
-                         │  Preemption · CRDT sync          │
-                         └──────┬───────────────┬───────────┘
-                                │               │
-                    ┌───────────▼──┐      ┌─────▼──────────┐
-                    │  Cluster A   │      │   Cluster B    │
-                    │  (GKE)       │      │   (AWS EKS)    │
-                    │              │      │                │
-                    │ Local Sched  │      │  Local Sched   │
-                    │ GPU Topology │      │  GPU Topology  │
-                    │ Executor     │      │  Executor      │
-                    │ Lease Mgr    │      │  Lease Mgr     │
-                    └──────────────┘      └────────────────┘
-                    
+![Sequence Diagram](docs/diagrams/ares-architecture-1.png)
+```                 
 Storage: etcd (leases, consensus) · Redis (idempotency, caching)
 ```
-
-![Sequence Diagram](docs/diagrams/Ares_Architecture-Page-2.png)
+![Sequence Diagram](docs/diagrams/ares-job-flow-1.png)
 
 ### How a Job Flows Through Ares
 
@@ -93,7 +72,6 @@ Storage: etcd (leases, consensus) · Redis (idempotency, caching)
 11. **Job completes** — Result committed with fencing token validation (atomic compare-and-swap on etcd `ModRevision`). State transitions to `SUCCEEDED` or `FAILED`.
 
 ---
-
 ## Features
 
 ### Codebase Breakdown
@@ -117,9 +95,11 @@ Storage: etcd (leases, consensus) · Redis (idempotency, caching)
 | `tests/unit/` | 3,973 | Unit tests: idempotency, leases, storage (etcd + Redis), GPU discovery, GPU topology, API gateway |
 | **Total** | **27,334** | |
 
+
 ### Exactly-Once Execution
 
-**The problem**: A client submits a training job. The network times out. The client retries. Without protection, the job runs twice — wasting $400 of GPU compute and producing duplicate results.
+**The problem**: A client submits a training job. The network times out. The client retries. 
+Without protection, the job runs twice — wasting $400 of GPU compute and producing duplicate results.
 
 **Ares uses three independent layers**, any one of which prevents duplicates:
 
@@ -152,39 +132,50 @@ Layer 3: FENCING TOKENS (monotonic counters)
 
 ### GPU Topology-Aware Placement
 
-**The problem**: An 8-GPU server (like p4d.24xlarge) has two CPU sockets, each with 4 GPUs. GPUs within the same socket communicate via NVLink at 600 GB/s. GPUs across sockets communicate via PCIe at 16 GB/s. That's a **37.5× bandwidth difference** for the same server.
+**The problem**: An 8-GPU server (like p4d.24xlarge) has complex interconnect topologies. GPUs within the same node communicate via NVLink at ~200 GB/s bus bandwidth. GPUs across nodes communicate over network fabric at ~40-50 GB/s. That's a **4–5× bandwidth difference** — placing a distributed training job on the wrong node boundary turns a 3-hour job into a 12-hour job.
 
 **Ares parses the actual GPU topology** from `nvidia-smi topo --matrix` and builds a connection graph:
 
 ```
-GPU Topology (p4d.24xlarge, 8× A100):
+GPU Topology (p4d.24xlarge, 8× A100-SXM4-40GB):
+Actual nvidia-smi output from our benchmark hardware:
 
       GPU0  GPU1  GPU2  GPU3  GPU4  GPU5  GPU6  GPU7
-GPU0   X    NV12  NV12  NV12  SYS   SYS   SYS   SYS
-GPU1  NV12   X    NV12  NV12  SYS   SYS   SYS   SYS
-GPU2  NV12  NV12   X    NV12  SYS   SYS   SYS   SYS
-GPU3  NV12  NV12  NV12   X    SYS   SYS   SYS   SYS
-GPU4  SYS   SYS   SYS   SYS   X    NV12  NV12  NV12
-GPU5  SYS   SYS   SYS   SYS  NV12   X    NV12  NV12
-GPU6  SYS   SYS   SYS   SYS  NV12  NV12   X    NV12
-GPU7  SYS   SYS   SYS   SYS  NV12  NV12  NV12   X
+GPU0   X    NV12  NV12  NV12  NV12  NV12  NV12  NV12
+GPU1  NV12   X    NV12  NV12  NV12  NV12  NV12  NV12
+GPU2  NV12  NV12   X    NV12  NV12  NV12  NV12  NV12
+GPU3  NV12  NV12  NV12   X    NV12  NV12  NV12  NV12
+GPU4  NV12  NV12  NV12  NV12   X    NV12  NV12  NV12
+GPU5  NV12  NV12  NV12  NV12  NV12   X    NV12  NV12
+GPU6  NV12  NV12  NV12  NV12  NV12  NV12   X    NV12
+GPU7  NV12  NV12  NV12  NV12  NV12  NV12  NV12   X
 
-NV12 = NVLink (600 GB/s)    SYS = Cross-socket/PCIe (16 GB/s)
+NUMA node 0: GPU 0-3 (CPU cores 0-23, 48-71)
+NUMA node 1: GPU 4-7 (CPU cores 24-47, 72-95)
+
+NV12 = 12 NVLink bridges (~200 GB/s bus bandwidth at large message sizes)
 ```
 
-**Scoring algorithm**:
+**Key insight from benchmarking**: NVSwitch creates a flat all-to-all crossbar within a node same-NUMA vs cross-NUMA 
+placement shows < 1% bandwidth difference (39.9 vs 40.2 GB/s). The topology scorer's value is at the
+**inter-node boundary**, where NVLink→network transitions create 4–5× bandwidth drops. 
+On non-NVSwitch hardware (PCIe-based systems like p3.8xlarge), intra-node placement produces 5–37× differences 
+and the scorer's per-GPU optimization becomes critical.
+
+**Scoring algorithm** (example on PCIe-based hardware like p3.8xlarge):
 ```
-For a 2-GPU job requesting A100s:
+For a 2-GPU job requesting V100s:
 
   Candidate [GPU0, GPU1]: NVLink connection → +50 points     = 50
-  Candidate [GPU0, GPU4]: Cross-socket      → -30 points     = -30
-  Candidate [GPU2, GPU3]: NVLink connection → +50 points      = 50
+  Candidate [GPU0, GPU2]: PCIe only         → -30 points     = -30
   
-  Winner: GPU0 + GPU1 (or GPU2 + GPU3) — both use NVLink.
-  Avoided: GPU0 + GPU4 — would force PCIe communication.
+  Winner: GPU0 + GPU1 — uses NVLink.
+  Avoided: GPU0 + GPU2 — would force PCIe communication (5-37× slower).
 ```
 
-**Current status**: Topology parsing and scoring work with mock GPUs and real `nvidia-smi` output. NCCL `all_reduce_perf` benchmarks on p4d.24xlarge are the next milestone to quantify the actual speedup.
+On NVSwitch hardware (p4d.24xlarge), all GPU pairs score equally (NV12 everywhere). The scorer detects this and shifts optimization to **inter-node placement** — keeping gang members on the same physical node rather than splitting across network boundaries.
+
+**Benchmark validated**: Topology parsing and scoring tested against real `nvidia-smi` output from p4d.24xlarge (8× A100-SXM4-40GB). NCCL `all_reduce_perf` benchmarks confirmed NVSwitch intra-node topology invariance (< 1% delta) and informed the scorer's focus on inter-node placement boundaries. See [Benchmark Results](#-benchmark-results).
 
 [→ Deep dive: docs/gpu-topology.md](docs/gpu-topology.md)
 
@@ -347,28 +338,76 @@ curl -X POST http://localhost:8080/schedule \
 ## 🧪 Testing
 
 ```bash
-# Run the benchmark suite (stress, exactly-once, failure injection, gang scheduling)
+# Run the full benchmark suite (7 suites)
 go run cmd/benchmark/main.go -control-plane http://localhost:8080 -suite all
+
+# Run individual suites
+go run cmd/benchmark/main.go -control-plane http://localhost:8080 -suite exactly-once
+go run cmd/benchmark/main.go -control-plane http://localhost:8080 -suite stress
+go run cmd/benchmark/main.go -control-plane http://localhost:8080 -suite gang-scheduling
+go run cmd/benchmark/main.go -control-plane http://localhost:8080 -suite drf-fairness
+go run cmd/benchmark/main.go -control-plane http://localhost:8080 -suite multi-cluster-routing
 
 # Unit tests (3,973 lines across 7 test files)
 go test ./tests/unit/...
 ```
 
-**Test coverage areas**: Idempotency deduplication, lease acquisition/renewal/expiry, etcd storage operations, Redis caching, GPU discovery parsing, GPU topology scoring, API gateway routing and error handling.
+**7 benchmark suites**: stress (1,600 jobs), exactly-once (1,000 requests), failure-injection, gang-scheduling, DRF-fairness, priority-preemption, multi-cluster-routing. Results exported as JSON: [`benchmark_results.json`](benchmark_results.json).
+
+**Unit test coverage**: Idempotency deduplication, lease acquisition/renewal/expiry, etcd storage operations, Redis caching, GPU discovery parsing, GPU topology scoring, API gateway routing and error handling.
 
 ---
 
-## 📊 Performance
+## 📊 Benchmark Results
 
-| Operation | Latency | Notes |
-|-----------|---------|-------|
-| Job submission (end-to-end) | ~15-20ms | Includes all layers below |
-| Redis deduplication | ~1-2ms | Idempotency check |
-| etcd lease acquisition | ~5-10ms | Distributed lock |
-| GPU placement scoring | ~2ms | Topology algorithm |
-| State transition | ~3ms | etcd write |
+All benchmarks run against Ares with etcd + Redis on real infrastructure. Raw data: [`benchmark_results.json`](benchmark_results.json).
 
-**Throughput**: ~100 jobs/sec per scheduler instance (etcd-limited). Scales linearly with additional scheduler instances.
+### Test Suite Status
+
+| Suite | Status | Key Result |
+|-------|--------|------------|
+| **Stress** | ✅ Passed | 1,600 jobs, 0 errors, p50 = 80ms, burst throughput 105 rps |
+| **Exactly-Once** | ✅ Proven | 100 unique jobs × 10 replays = 1,000 requests. 900 duplicates blocked. **0 duplicate executions.** |
+| **Gang Scheduling** | ✅ Proven | All-or-nothing verified. 0 violations across 5 small gangs + 3 medium gangs. Oversubscription handled. |
+| **DRF Fairness** | ✅ Proven | Jain's fairness index = **1.0** (perfect). No starvation. Dynamic rebalancing across tenants. |
+| **Multi-Cluster Routing** | ✅ Passed | 30 jobs routed by GPU type (T4, A10G, H100, NVLink). All placed correctly. |
+| **Priority Preemption** | 🔧 In Progress | Job submission and priority ordering work. Preemption trigger not yet firing. |
+| **Failure Injection** | 🔧 In Progress | Jobs submitted and tracked. Recovery mechanism not yet completing. |
+
+### Stress Test Breakdown
+
+| Phase | Requests | Errors | p50 Latency | Throughput |
+|-------|----------|--------|-------------|------------|
+| Sequential (1,000 jobs) | 1,000 | 0 | 79ms | 12.3 rps |
+| Burst (100 concurrent) | 100 | 0 | 537ms | 105 rps |
+| Sustained (500 jobs, 50 concurrent) | 500 | 0 | 463ms | 105 rps |
+
+### Exactly-Once Proof
+
+```
+100 unique job IDs → each submitted 10 times → 1,000 total requests
+├── 100 accepted (first submission of each unique ID)
+├── 900 blocked (duplicate RequestIDs caught by Redis layer)
+├── 0 duplicate executions
+└── 0 missed jobs
+```
+
+### NCCL Hardware Validation (p4d.24xlarge, 8× A100-SXM4-40GB)
+
+Ares's GPU topology scorer was validated against real NCCL `all_reduce_perf` benchmarks on p4d.24xlarge hardware. Key finding: **intra-node GPU placement on NVSwitch is topology-invariant** — the NVSwitch full crossbar (NV12 between all GPU pairs) makes every GPU equidistant within a node.
+
+| Test | GPUs | Avg Bus BW | Peak BW (256MB) |
+|------|------|-----------|-----------------|
+| Same NUMA domain (GPU 0,1) | 2 | 39.9 GB/s | 179 GB/s |
+| Cross NUMA domain (GPU 0,4) | 2 | 40.2 GB/s | 180 GB/s |
+| Same NUMA (0,1,2,3) | 4 | 46.2 GB/s | 206 GB/s |
+| Cross NUMA (0,1,4,5) | 4 | 46.7 GB/s | 206 GB/s |
+| 8-GPU sequential order | 8 | 45.1 GB/s | 215 GB/s |
+| 8-GPU interleaved order | 8 | 44.9 GB/s | 214 GB/s |
+
+**Design implication**: On NVSwitch hardware, Ares skips intra-node topology optimization (< 1% delta) and focuses scheduling decisions at the **inter-node boundary** — NVLink (~200 GB/s) vs. network fabric (EFA/InfiniBand at ~40–50 GB/s), where the 4–5× bandwidth gap makes placement critical.
+
+Full benchmark data: [`result.txt`](benchmarks/nccl/result.txt) · [Blog post →](https://sathyanyu.substack.com)
 
 ---
 
@@ -376,7 +415,9 @@ go test ./tests/unit/...
 
 ### Blog Posts
 
-- [Exactly-Once Execution in Distributed Schedulers](https://sathyanyu.substack.com) — Why at-least-once isn't good enough, and how fencing tokens close the gap
+- [Exactly-Once Execution: Building a Distributed Scheduler That Never Runs a Job Twice](https://sathyanyu.substack.com) — Three-layer defense: Redis → etcd leases → fencing tokens
+- [Inside Ares: Architecture of a Distributed GPU Scheduler (Part 1)](https://sathyanyu.substack.com) — High-level design, problems, and trade-offs
+- [Building Ares: GPU-Aware Scheduler with Exactly-Once Execution (MVP)](https://sathyanyu.substack.com) — Phase 1 overview: topology placement + exactly-once semantics
 
 ### Design Documents
 
@@ -422,9 +463,19 @@ k8s/
 
 ## Roadmap
 
-**Implemented**: Exactly-once execution, GPU topology scoring, multi-cluster coordination, gang scheduling, DRF fairness, priority preemption, checkpoint & recovery, cluster autonomy, CRDT consistency, health monitoring, heartbeat propagation, dynamic cluster registration, observability pipeline, API gateway with rate limiting.
+**v0.1.0 (current release)**:
 
-**Next**: NCCL benchmarks on p4d.24xlarge to validate topology scorer with real `all_reduce_perf` measurements. NUMA-aware memory placement. Network bandwidth-aware scheduling. RBAC and tenant isolation. Audit logging.
+*Validated (benchmark-proven)*: Exactly-once execution, GPU topology scoring, multi-cluster routing, gang scheduling, DRF fairness.
+
+*Implemented (code complete)*: CRDT-based consistency, cluster autonomy, health monitoring, heartbeat propagation, dynamic cluster registration, observability pipeline (7 Prometheus subsystems), API gateway with rate limiting.
+
+*In progress*: Priority preemption (submission works, preemption trigger under development), failure recovery (job tracking works, recovery completion under development).
+
+**v0.2.0 (next)**: Complete priority preemption and failure recovery. Get to 7/7 benchmark suites passing. End-to-end GPU placement integration via `CUDA_VISIBLE_DEVICES`.
+
+**v0.3.0**: Cross-node NCCL benchmarks (NVLink vs EFA) to validate inter-node topology scheduling. NUMA-aware memory placement. RBAC and tenant isolation.
+
+**Future**: Network bandwidth-aware scheduling. Audit logging. Multi-cloud federation (GKE + EKS + AKS).
 
 ---
 
