@@ -9,9 +9,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/BITS08SATHYA/ares-scheduler/pkg/cluster"
 	"net/http"
+	"strings"
 	"time"
+
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/cluster"
 )
 
 // ============================================================================
@@ -38,6 +40,9 @@ func (ag *APIGateway) handleRegisterCluster(w http.ResponseWriter, r *http.Reque
 			fmt.Sprintf("invalid JSON: %v", err))
 		return
 	}
+
+	// Sanitize cluster ID
+	regReq.ClusterID = strings.TrimSpace(regReq.ClusterID)
 
 	// Validate all fields including topology cross-validation
 	if err := ag.validateClusterRegistration(&regReq); err != nil {
@@ -158,6 +163,7 @@ func (ag *APIGateway) handleDeregisterCluster(w http.ResponseWriter, r *http.Req
 	}
 	defer r.Body.Close()
 
+	deregReq.ClusterID = strings.TrimSpace(deregReq.ClusterID)
 	if deregReq.ClusterID == "" {
 		ag.respondError(w, http.StatusBadRequest, "MISSING_FIELD", "cluster_id required")
 		return
@@ -211,6 +217,7 @@ func (ag *APIGateway) handleClusterHeartbeat(w http.ResponseWriter, r *http.Requ
 	}
 	defer r.Body.Close()
 
+	hbReq.ClusterID = strings.TrimSpace(hbReq.ClusterID)
 	if hbReq.ClusterID == "" {
 		ag.respondError(w, http.StatusBadRequest, "MISSING_FIELD", "cluster_id required")
 		return
