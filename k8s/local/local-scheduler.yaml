@@ -17,7 +17,8 @@ spec:
       annotations:
         container.apparmor.security.beta.kubernetes.io/ares-local: "unconfined"
     spec:
-      # ✅ NO nodeSelector - runs on all WORKER nodes
+      nodeSelector:
+        cloud.google.com/gke-accelerator: "nvidia-tesla-t4"
 
       hostNetwork: false
       hostPID: false
