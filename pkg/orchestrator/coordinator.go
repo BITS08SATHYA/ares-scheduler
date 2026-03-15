@@ -115,29 +115,31 @@ func (jc *JobCoordinator) ScheduleJob(
 	}
 
 	// ========================================================================
-	// STEP 1: Check for duplicate request (idempotency)
+	// STEP 1: Atomic check-and-reserve (idempotency)
+	// Uses Redis SetNX — exactly one concurrent request wins the race.
 	// ========================================================================
 
-	cachedResult, isDuplicate, err := jc.idempotencyMgr.CheckDuplicate(ctx, jobSpec.RequestID)
+	cachedResult, isDuplicate, err := jc.idempotencyMgr.CheckAndReserve(ctx, jobSpec.RequestID)
+	if err != nil {
+		// Redis unavailable — fail the request so client retries with same ID later
+		return nil, fmt.Errorf("idempotency check failed: %w", err)
+	}
 	if isDuplicate {
 		if jc.metricsRecorder != nil && jc.metricsRecorder.OnDuplicateBlocked != nil {
 			jc.metricsRecorder.OnDuplicateBlocked()
 		}
 		jc.log.Debug("Duplicate request detected: %s, returning cached result", jobSpec.RequestID)
+		if cachedResult != nil {
+			return &SchedulingResult{
+				JobID:     cachedResult.JobID,
+				CreatedAt: cachedResult.SubmitTime,
+			}, nil
+		}
+		// Duplicate but cached result unreadable — return minimal response
 		return &SchedulingResult{
-			JobID:     cachedResult.JobID,
-			CreatedAt: cachedResult.SubmitTime,
+			JobID:     "duplicate-pending",
+			CreatedAt: time.Now(),
 		}, nil
-	}
-
-	if err != nil {
-		jc.log.Warn("Idempotency check failed (non-fatal): %v", err)
-	}
-
-	// STEP 1b: Immediately reserve this request ID to block concurrent replays
-	err = jc.idempotencyMgr.RecordSuccess(ctx, jobSpec.RequestID, "pending")
-	if err != nil {
-		jc.log.Warn("Failed to reserve request ID (non-fatal): %v", err)
 	}
 
 	// ========================================================================

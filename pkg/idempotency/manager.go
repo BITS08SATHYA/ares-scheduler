@@ -85,6 +85,66 @@ func (im *IdempotencyManager) CheckDuplicate(ctx context.Context, requestID stri
 	return nil, false, nil
 }
 
+// CheckAndReserve: Atomically check for duplicate AND reserve the request ID.
+// Uses Redis SetNX (SET if Not eXists) — a single atomic operation that
+// eliminates the race window between CheckDuplicate and RecordSuccess.
+//
+// Returns: (previous result if duplicate, was duplicate, error)
+// - If new request: reserves it atomically, returns (nil, false, nil)
+// - If duplicate: returns (cached result, true, nil)
+// - If Redis error: returns (nil, false, error) — caller should fail the request
+func (im *IdempotencyManager) CheckAndReserve(ctx context.Context, requestID string) (*IdempotencyResult, bool, error) {
+	if requestID == "" {
+		return nil, false, fmt.Errorf("request ID cannot be empty")
+	}
+
+	dedupeKey := fmt.Sprintf("ares:idempotency:%s", requestID)
+
+	// Create a placeholder reservation — marks this request ID as "in progress"
+	placeholder := &IdempotencyResult{
+		JobID:      "pending",
+		Status:     "reserving",
+		SubmitTime: time.Now(),
+	}
+	placeholderJSON, err := json.Marshal(placeholder)
+	if err != nil {
+		return nil, false, fmt.Errorf("marshal failed: %w", err)
+	}
+
+	// Atomic SetNX: only ONE concurrent request wins this race
+	wasSet, err := im.redisClient.SetNX(ctx, dedupeKey, string(placeholderJSON), im.ttl)
+	if err != nil {
+		im.log.Error("Idempotency atomic reserve failed (Redis unreachable): %v", err)
+		return nil, false, fmt.Errorf("idempotency check unavailable (Redis error): %w", err)
+	}
+
+	if wasSet {
+		// We won the race — this is a new, unique request
+		im.log.Info("Dedup atomic reserve: request %s reserved (new request)", requestID)
+		return nil, false, nil
+	}
+
+	// SetNX returned false — key already exists, this is a duplicate
+	// Read the existing entry to return cached result
+	cached, err := im.redisClient.Get(ctx, dedupeKey)
+	if err != nil {
+		im.log.Error("Failed to read existing dedup entry: %v", err)
+		return nil, true, nil // We know it's a duplicate even if we can't read the cached result
+	}
+
+	if cached != "" {
+		var result IdempotencyResult
+		if err := json.Unmarshal([]byte(cached), &result); err == nil {
+			im.log.Info("Dedup atomic reserve: request %s is duplicate (job=%s)", requestID, result.JobID)
+			return &result, true, nil
+		}
+	}
+
+	// Key exists but couldn't parse — still a duplicate
+	im.log.Info("Dedup atomic reserve: request %s is duplicate (cached result unreadable)", requestID)
+	return nil, true, nil
+}
+
 // ============================================================================
 // RECORDING OPERATIONS (Feature 6, 18)
 // ============================================================================
