@@ -115,11 +115,14 @@ func (jc *JobCoordinator) ScheduleJob(
 	}
 
 	// ========================================================================
-	// STEP 1: Atomic check-and-reserve (idempotency)
-	// Uses Redis SetNX — exactly one concurrent request wins the race.
+	// STEP 1: Generate job ID and atomically reserve (idempotency)
+	// Job ID is generated BEFORE SetNX so the placeholder contains the real
+	// job ID — concurrent duplicates immediately get the correct ID back.
 	// ========================================================================
 
-	cachedResult, isDuplicate, err := jc.idempotencyMgr.CheckAndReserve(ctx, jobSpec.RequestID)
+	jobID := fmt.Sprintf("job-%d-%s", time.Now().UnixNano(), jobSpec.RequestID)
+
+	cachedResult, isDuplicate, err := jc.idempotencyMgr.CheckAndReserve(ctx, jobSpec.RequestID, jobID)
 	if err != nil {
 		// Redis unavailable — fail the request so client retries with same ID later
 		return nil, fmt.Errorf("idempotency check failed: %w", err)
@@ -145,8 +148,6 @@ func (jc *JobCoordinator) ScheduleJob(
 	// ========================================================================
 	// STEP 2: Acquire distributed lease (with heartbeat)
 	// ========================================================================
-
-	jobID := fmt.Sprintf("job-%d-%s", time.Now().UnixNano(), jobSpec.RequestID)
 
 	// Acquire lease AND start heartbeat goroutine (CRITICAL FIX)
 	acquired, leaseID, err := jc.leaseManager.AcquireLeaseForJob(ctx, jobID)
@@ -770,23 +771,9 @@ func (jc *JobCoordinator) reconcileQueuedJobs(ctx context.Context) {
 	}
 
 	// ★ Calculate total available GPU slots across all clusters
-	// Only attempt to schedule that many jobs — no point hammering local
-	// schedulers with requests they'll reject due to GPU busy
 	availableSlots := jc.globalScheduler.GetTotalAvailableGPUs()
-	if availableSlots <= 0 {
-		jc.log.Debug("RECONCILER: No GPU slots available across clusters, skipping %d queued jobs", len(jobs))
-		return
-	}
 
-	// Cap the number of jobs we attempt to the available slots
-	maxAttempts := availableSlots
-	if maxAttempts > len(jobs) {
-		maxAttempts = len(jobs)
-	}
-
-	jc.log.Info("RECONCILER: Found %d queued jobs, %d GPU slots available, attempting %d",
-		len(jobs), availableSlots, maxAttempts)
-
+	// Sort by priority (descending), then FIFO within same priority
 	sort.Slice(jobs, func(i, j int) bool {
 		if jobs[i].Spec.Priority != jobs[j].Spec.Priority {
 			return jobs[i].Spec.Priority > jobs[j].Spec.Priority // higher priority first
@@ -794,16 +781,39 @@ func (jc *JobCoordinator) reconcileQueuedJobs(ctx context.Context) {
 		return jobs[i].SubmitTime.Before(jobs[j].SubmitTime) // FIFO within same priority
 	})
 
+	// Count high-priority jobs that can trigger preemption (priority >= 50)
+	highPriorityCount := 0
+	for _, j := range jobs {
+		if j.Spec.Priority >= 50 {
+			highPriorityCount++
+		}
+	}
+
+	// Cap attempts to available slots, but always allow high-priority jobs
+	// through — they can trigger preemption inside ScheduleJob to free GPUs
+	maxAttempts := availableSlots + highPriorityCount
+	if maxAttempts <= 0 {
+		jc.log.Debug("RECONCILER: No GPU slots and no high-priority jobs, skipping %d queued jobs", len(jobs))
+		return
+	}
+	if maxAttempts > len(jobs) {
+		maxAttempts = len(jobs)
+	}
+
+	jc.log.Info("RECONCILER: Found %d queued jobs (%d high-pri), %d GPU slots available, attempting %d",
+		len(jobs), highPriorityCount, availableSlots, maxAttempts)
+
 	scheduled := 0
 	for _, jobRecord := range jobs {
-		// ★ Stop once we've filled all available slots
-		if scheduled >= maxAttempts {
+		// Stop once we've filled all available slots — but never skip high-priority
+		// jobs, as ScheduleJob triggers preemption for priority >= 50
+		if scheduled >= maxAttempts && jobRecord.Spec.Priority < 50 {
 			jc.log.Debug("RECONCILER: Reached available GPU capacity (%d), deferring remaining %d jobs",
 				maxAttempts, len(jobs)-scheduled)
 			break
 		}
 
-		// Try to schedule
+		// Try to schedule (ScheduleJob internally triggers preemption for high-priority jobs)
 		globalDecision, err := jc.globalScheduler.ScheduleJob(ctx, jobRecord)
 		if err != nil {
 			jc.log.Debug("RECONCILER: Job %s still unschedulable: %v", jobRecord.ID, err)

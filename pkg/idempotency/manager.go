@@ -89,20 +89,23 @@ func (im *IdempotencyManager) CheckDuplicate(ctx context.Context, requestID stri
 // Uses Redis SetNX (SET if Not eXists) — a single atomic operation that
 // eliminates the race window between CheckDuplicate and RecordSuccess.
 //
+// The jobID parameter is stored in the placeholder so that concurrent
+// duplicates immediately see the real job ID (not a generic "pending").
+//
 // Returns: (previous result if duplicate, was duplicate, error)
 // - If new request: reserves it atomically, returns (nil, false, nil)
 // - If duplicate: returns (cached result, true, nil)
 // - If Redis error: returns (nil, false, error) — caller should fail the request
-func (im *IdempotencyManager) CheckAndReserve(ctx context.Context, requestID string) (*IdempotencyResult, bool, error) {
+func (im *IdempotencyManager) CheckAndReserve(ctx context.Context, requestID string, jobID string) (*IdempotencyResult, bool, error) {
 	if requestID == "" {
 		return nil, false, fmt.Errorf("request ID cannot be empty")
 	}
 
 	dedupeKey := fmt.Sprintf("ares:idempotency:%s", requestID)
 
-	// Create a placeholder reservation — marks this request ID as "in progress"
+	// Store the real job ID in the placeholder so duplicates get it immediately
 	placeholder := &IdempotencyResult{
-		JobID:      "pending",
+		JobID:      jobID,
 		Status:     "reserving",
 		SubmitTime: time.Now(),
 	}
