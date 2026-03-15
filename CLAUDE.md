@@ -80,6 +80,6 @@ Tests use `github.com/stretchr/testify` (assert/require). Unit tests that test s
 
 ## Current State
 
-- 5 of 7 benchmark suites passing (priority preemption trigger and failure recovery are in progress)
+- All 8 benchmark suites passing (stress, exactlyonce, failure, gang, drf, priority, multicluster, chaos)
 - K8s manifests in `k8s/global/` and `k8s/local/` for GKE + EKS deployment
 - `run.sh` builds Docker images and deploys to GKE/EKS

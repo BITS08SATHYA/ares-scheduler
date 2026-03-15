@@ -238,6 +238,7 @@ func (gs *GlobalScheduler) SelectBestCluster(
 		clusterInfo := gs.clusters[_cluster.ClusterID]
 		if clusterInfo == nil {
 			// Fallback to clusterManager if not in cache
+			gs.log.Warn("SelectBestCluster: cluster %s not in gs.clusters cache, using fallback", _cluster.ClusterID)
 			clusterInfo, _ = gs.clusterManager.GetClusterInfo(_cluster.ClusterID)
 		}
 		if clusterInfo == nil {
@@ -1288,6 +1289,14 @@ func (gs *GlobalScheduler) cancelJobOnCluster(ctx context.Context, jobID string)
 				ci.AvailableGPUs += job.Spec.GPUCount
 				gs.log.Info("PREEMPTION: Restored %d GPUs on cluster %s (now %d available)",
 					job.Spec.GPUCount, job.ClusterID, ci.AvailableGPUs)
+			} else {
+				gs.log.Error("PREEMPTION: cluster %s NOT FOUND in gs.clusters cache! Keys: %v", job.ClusterID, func() []string {
+					keys := make([]string, 0, len(gs.clusters))
+					for k := range gs.clusters {
+						keys = append(keys, k)
+					}
+					return keys
+				}())
 			}
 			gs.clustersMu.Unlock()
 		} else {

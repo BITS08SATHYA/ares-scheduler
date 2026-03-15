@@ -597,6 +597,35 @@ func (e *Executor) monitorAndUpdateJob(
 			podInfo, err := e.K8sClient.GetPod(ctx, execCtx.PodName)
 
 			if err != nil {
+				// If the pod is gone (deleted externally), treat as failed and release GPU
+				if strings.Contains(err.Error(), "not found") {
+					e.Log.Warn("Pod %s not found — deleted externally, releasing GPU for job %s", execCtx.PodName, jobID)
+					e.JobsMu.Lock()
+					delete(e.ActiveJobs, execCtx.JobID)
+					e.CompletedJobs[execCtx.JobID] = &ExecutionResult{
+						JobID:        execCtx.JobID,
+						PodName:      execCtx.PodName,
+						Status:       StatusFailed,
+						Phase:        PhaseFailed,
+						StartTime:    execCtx.StartTime,
+						EndTime:      time.Now(),
+						Duration:     time.Since(execCtx.StartTime),
+						ErrorMessage: "pod deleted externally",
+					}
+					e.JobsMu.Unlock()
+					if e.OnJobComplete != nil {
+						func() {
+							defer func() {
+								if r := recover(); r != nil {
+									e.Log.Error("OnJobComplete panicked for deleted pod job %s: %v", execCtx.JobID, r)
+								}
+							}()
+							e.OnJobComplete(execCtx.JobID, execCtx.NodeID, len(execCtx.GPUIndices), 0)
+						}()
+					}
+					atomic.AddUint64(&e.TotalFailed, 1)
+					return nil
+				}
 				e.Log.Error("❌ Failed to get Pod %s: %v (will retry next tick)", execCtx.PodName, err)
 				e.Log.Info("🔄 Continuing to next tick...")
 				continue
@@ -615,6 +644,34 @@ func (e *Executor) monitorAndUpdateJob(
 				continue
 			}
 			if jobRecord == nil {
+				// Job record deleted from etcd (e.g., external cleanup or lease revocation).
+				// If the pod has finished, clean up ActiveJobs to release GPU resources.
+				if podStatus == PhaseSucceeded || podStatus == PhaseFailed {
+					e.Log.Warn("Job %s gone from etcd but pod %s (releasing GPU)", jobID, podStatus)
+					e.JobsMu.Lock()
+					delete(e.ActiveJobs, execCtx.JobID)
+					e.CompletedJobs[execCtx.JobID] = &ExecutionResult{
+						JobID:     execCtx.JobID,
+						PodName:   execCtx.PodName,
+						Status:    StatusFailed,
+						Phase:     podStatus,
+						StartTime: execCtx.StartTime,
+						EndTime:   time.Now(),
+						Duration:  time.Since(execCtx.StartTime),
+					}
+					e.JobsMu.Unlock()
+					if e.OnJobComplete != nil {
+						func() {
+							defer func() {
+								if r := recover(); r != nil {
+									e.Log.Error("OnJobComplete panicked for orphan job %s: %v", execCtx.JobID, r)
+								}
+							}()
+							e.OnJobComplete(execCtx.JobID, execCtx.NodeID, len(execCtx.GPUIndices), 0)
+						}()
+					}
+					return nil
+				}
 				e.Log.Error("Job record not found in etcd for %s (will retry next tick)", jobID)
 				continue
 			}
@@ -670,11 +727,12 @@ func (e *Executor) monitorAndUpdateJob(
 				if saveErr != nil {
 					e.Log.Error("FENCING: Cannot persist SUCCEEDED job %s: %v", jobID, saveErr)
 					e.Log.Error("Stopping monitoring — new lease owner handles this job")
-					return nil
+				} else {
+					e.Log.Info("Succeeded Job Persisted Permanently (fenced, no lease)")
 				}
-				e.Log.Info("Succeeded Job Persisted Permanently (fenced, no lease)")
 
-				// Clean up: move from ActiveJobs -> CompletedJobs
+				// Always clean up ActiveJobs and release GPU even if save failed,
+				// to prevent GPU resource leak when lease is externally revoked
 				e.JobsMu.Lock()
 				delete(e.ActiveJobs, execCtx.JobID)
 
@@ -727,11 +785,11 @@ func (e *Executor) monitorAndUpdateJob(
 				if saveErr != nil {
 					e.Log.Error("FENCING: Cannot persist FAILED job %s: %v", jobID, saveErr)
 					e.Log.Error("Stopping monitoring — new lease owner handles this job")
-					return nil
+				} else {
+					e.Log.Info("Failed Job Persisted Permanently (fenced, no lease)")
 				}
-				e.Log.Info("Failed Job Persisted Permanently (fenced, no lease)")
 
-				// Clean up: move from ActiveJobs → CompletedJobs
+				// Always clean up ActiveJobs and release GPU even if save failed
 				e.JobsMu.Lock()
 				delete(e.ActiveJobs, execCtx.JobID)
 				e.CompletedJobs[execCtx.JobID] = &ExecutionResult{
