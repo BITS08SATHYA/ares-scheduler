@@ -45,6 +45,7 @@ func (lss *LocalSchedulerServer) Start() error {
 	mux.HandleFunc("/health", lss.handleHealth)
 	mux.HandleFunc("/status", lss.handleStatus)
 	mux.HandleFunc("/metrics", lss.handleMetrics)
+	mux.HandleFunc("/reset-gpus", lss.handleResetGPUs)
 
 	addr := fmt.Sprintf(":%d", lss.port)
 	lss.server = &http.Server{
@@ -371,5 +372,27 @@ func (lss *LocalSchedulerServer) handleMetrics(w http.ResponseWriter, r *http.Re
 		"gpu_double_assign_blocked": metrics.GPUDoubleAssignBlocks,
 		"success_rate":              lss.scheduler.SuccessRate(),
 		"last_updated":              metrics.LastUpdated,
+	})
+}
+
+// handleResetGPUs clears all in-memory GPU allocations and reloads from Redis.
+// Used by benchmark cleanup to reset GPU state without restarting the scheduler.
+func (lss *LocalSchedulerServer) handleResetGPUs(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	lss.scheduler.ClearGPUAllocations()
+
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	lss.scheduler.loadAllGPUAllocations(ctx)
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"message": "GPU allocations cleared and reloaded from Redis",
 	})
 }

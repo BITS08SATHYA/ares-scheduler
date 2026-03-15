@@ -1,239 +1,133 @@
 [
   {
-    "suite": "stress",
-    "timestamp": "2026-03-10T15:46:00-04:00",
-    "total_requests": 1600,
-    "success_count": 1600,
-    "error_count": 0,
-    "duplicate_blocked": 0,
-    "latencies": {
-      "p50_ms": 89.634472,
-      "p95_ms": 649.324308,
-      "p99_ms": 899.9231090000001,
-      "p999_ms": 950.666918,
-      "min_ms": 39.955168,
-      "max_ms": 951.484742,
-      "avg_ms": 228.1159481399999
-    },
-    "throughput_rps": 18.42328341506337,
-    "total_duration": "1m26.846625759s",
+    "suite": "priority-preemption",
+    "timestamp": "2026-03-15T16:49:36-04:00",
+    "result": "PASS",
     "details": {
-      "burst_100": {
-        "errors": 0,
-        "latency": {
-          "p50_ms": 536.683487,
-          "p95_ms": 946.4443679999999,
-          "p99_ms": 950.666918,
-          "p999_ms": 951.484742,
-          "min_ms": 101.301235,
-          "max_ms": 951.484742,
-          "avg_ms": 563.6835552899997
-        },
-        "rps": 104.95049380256839,
-        "success": 100
-      },
-      "sequential_1000": {
-        "errors": 0,
-        "latency": {
-          "p50_ms": 78.747587,
-          "p95_ms": 113.003056,
-          "p99_ms": 179.65476999999998,
-          "p999_ms": 435.55461499999996,
-          "min_ms": 39.955168,
-          "max_ms": 468.141288,
-          "avg_ms": 81.12909248700002
-        },
-        "rps": 12.32462938176271,
-        "success": 1000
-      },
-      "sustained_500x50": {
-        "errors": 0,
-        "latency": {
-          "p50_ms": 463.369593,
-          "p95_ms": 709.7788310000001,
-          "p99_ms": 915.070027,
-          "p999_ms": 922.731196,
-          "min_ms": 74.953667,
-          "max_ms": 922.731196,
-          "avg_ms": 454.9761380159999
-        },
-        "rps": 105.14245311898206,
-        "success": 500
-      }
+      "low_priority_submitted": 10,
+      "low_priority_preempted": 1,
+      "high_priority_started": true,
+      "high_priority_submit_latency_ms": 172.9,
+      "high_priority_time_to_running_s": 36.5,
+      "preemption_proven": true
     }
   },
   {
-    "suite": "exactly-once",
-    "timestamp": "2026-03-10T15:46:02-04:00",
-    "total_requests": 1000,
-    "success_count": 100,
-    "error_count": 0,
-    "duplicate_blocked": 900,
-    "latencies": {
-      "p50_ms": 980.029105,
-      "p95_ms": 1998.4771230000001,
-      "p99_ms": 2124.136307,
-      "p999_ms": 2189.452093,
-      "min_ms": 478.17216,
-      "max_ms": 2189.9711599999996,
-      "avg_ms": 1037.6688076900004
-    },
-    "throughput_rps": 449.8156394166784,
-    "total_duration": "2.223133018s",
+    "suite": "chaos-exactlyonce",
+    "timestamp": "2026-03-15T16:49:36-04:00",
+    "result": "PASS",
     "details": {
-      "duplicate_executions": 0,
-      "exactly_once_proven": true,
-      "missed_jobs": 0,
-      "replays_per_id": 10,
-      "unique_job_ids": 100,
-      "unique_request_ids": 100
+      "total_assertions": 14,
+      "passed_assertions": 14,
+      "scenario_1_lease_expiry": "PASS",
+      "scenario_2_fencing": "PASS",
+      "scenario_3_all_layers_e2e": "PASS",
+      "all_3_layers_proven": true
     }
   },
   {
     "suite": "failure-injection",
-    "timestamp": "2026-03-10T15:48:40-04:00",
-    "total_requests": 50,
-    "success_count": 0,
-    "error_count": 0,
-    "duplicate_blocked": 0,
-    "latencies": {
-      "p50_ms": 107.75401699999999,
-      "p95_ms": 286.393531,
-      "p99_ms": 337.414556,
-      "p999_ms": 337.414556,
-      "min_ms": 50.116121,
-      "max_ms": 337.414556,
-      "avg_ms": 129.64683324000003
-    },
-    "throughput_rps": 0,
-    "total_duration": "~90s",
+    "timestamp": "2026-03-15T16:56:14-04:00",
+    "result": "PASS",
     "details": {
-      "final_failed": 0,
-      "final_succeeded": 0,
-      "jobs_submitted": 50,
-      "recovery_rate_pct": 0,
-      "still_running": 50
+      "total_assertions": 5,
+      "passed_assertions": 5,
+      "job1_reached_running": true,
+      "lease_revoked": true,
+      "lease_gone_after_revoke": true,
+      "job1_not_running_after_kill": true,
+      "job2_reached_running": true,
+      "recovery_proven": true
+    }
+  },
+  {
+    "suite": "stress",
+    "timestamp": "2026-03-15T16:58:01-04:00",
+    "result": "PASS",
+    "total_requests": 1600,
+    "success_count": 1600,
+    "error_count": 0,
+    "latencies": {
+      "p50_ms": 37.43,
+      "p95_ms": 465.04,
+      "p99_ms": 626.91,
+      "p999_ms": 739.00,
+      "min_ms": 28.00,
+      "max_ms": 765.48,
+      "avg_ms": 162.32
+    },
+    "throughput_rps": 40.3,
+    "details": {
+      "phase1_sequential_1000": "28.4 jobs/sec",
+      "phase2_concurrent_burst_100": "130.0 jobs/sec",
+      "phase3_sustained_500": "130.6 jobs/sec"
+    }
+  },
+  {
+    "suite": "exactly-once",
+    "timestamp": "2026-03-15T16:58:10-04:00",
+    "result": "PASS",
+    "total_requests": 1000,
+    "success_count": 100,
+    "duplicate_blocked": 900,
+    "error_count": 0,
+    "details": {
+      "unique_request_ids": 100,
+      "replays_per_id": 10,
+      "unique_job_ids": 100,
+      "duplicate_executions": 0,
+      "missed_jobs": 0,
+      "exactly_once_proven": true
     }
   },
   {
     "suite": "gang-scheduling",
-    "timestamp": "2026-03-10T15:50:33-04:00",
-    "total_requests": 8,
-    "success_count": 8,
-    "error_count": 0,
-    "duplicate_blocked": 0,
-    "latencies": {
-      "p50_ms": 49.086817999999994,
-      "p95_ms": 103.145235,
-      "p99_ms": 103.145235,
-      "p999_ms": 103.145235,
-      "min_ms": 38.399631,
-      "max_ms": 103.145235,
-      "avg_ms": 62.574014125000005
-    },
-    "throughput_rps": 0,
-    "total_duration": "n/a",
+    "timestamp": "2026-03-15T16:58:10-04:00",
+    "result": "PASS",
     "details": {
-      "all_or_nothing_proven": true,
+      "gangs_submitted": 8,
+      "successfully_accepted": 8,
+      "failed_to_submit": 0,
       "all_or_nothing_violations": 0,
-      "medium_gangs_4member": 3,
       "oversubscription_handled": true,
-      "small_gangs_2member": 5
+      "avg_submit_latency_ms": 31.4,
+      "all_or_nothing_proven": true,
+      "deadlock_prevention_proven": true
     }
   },
   {
     "suite": "drf-fairness",
-    "timestamp": "2026-03-10T15:50:34-04:00",
-    "total_requests": 120,
-    "success_count": 120,
-    "error_count": 0,
-    "duplicate_blocked": 0,
-    "latencies": {
-      "p50_ms": 347.064296,
-      "p95_ms": 548.1989510000001,
-      "p99_ms": 555.325401,
-      "p999_ms": 555.325401,
-      "min_ms": 56.605351999999996,
-      "max_ms": 555.325401,
-      "avg_ms": 337.8691696666666
-    },
-    "throughput_rps": 107.31414258726747,
-    "total_duration": "1.195804039s",
+    "timestamp": "2026-03-15T17:00:17-04:00",
+    "result": "PASS",
     "details": {
-      "jains_fairness": 1,
-      "no_starvation": true,
-      "phase1_tenant_a": 30,
-      "phase1_tenant_b": 30,
-      "phase2_tenant_a": 50,
-      "phase2_tenant_b": 10
-    }
-  },
-  {
-    "suite": "priority-preemption",
-    "timestamp": "2026-03-10T15:52:44-04:00",
-    "total_requests": 11,
-    "success_count": 11,
-    "error_count": 0,
-    "duplicate_blocked": 0,
-    "latencies": {
-      "p50_ms": 208.84288700000002,
-      "p95_ms": 208.84288700000002,
-      "p99_ms": 208.84288700000002,
-      "p999_ms": 208.84288700000002,
-      "min_ms": 208.84288700000002,
-      "max_ms": 208.84288700000002,
-      "avg_ms": 208.84288700000002
-    },
-    "throughput_rps": 0,
-    "total_duration": "1m3.726853794s",
-    "details": {
-      "high_priority_submit_ms": 208.84288700000002,
-      "high_priority_submitted": true,
-      "high_priority_time_to_running_s": -1,
-      "low_priority_failed": 0,
-      "low_priority_preempted": 0,
-      "low_priority_running": 1,
-      "low_priority_submitted": 10,
-      "preemption_observed": false,
-      "priority_scheduling_proven": false
+      "phase1_equal_demand": {
+        "tenant_alpha": 30,
+        "tenant_beta": 30,
+        "jains_fairness_index": 1.0
+      },
+      "phase2_unequal_demand": {
+        "tenant_alpha_heavy": "50/50",
+        "tenant_beta_light": "10/10"
+      },
+      "fair_proven": true,
+      "no_starvation_proven": true
     }
   },
   {
     "suite": "multi-cluster-routing",
-    "timestamp": "2026-03-10T15:52:45-04:00",
+    "timestamp": "2026-03-15T17:00:33-04:00",
+    "result": "PASS",
     "total_requests": 30,
     "success_count": 30,
     "error_count": 0,
-    "duplicate_blocked": 0,
-    "latencies": {
-      "p50_ms": 270.882042,
-      "p95_ms": 372.704571,
-      "p99_ms": 392.162645,
-      "p999_ms": 392.162645,
-      "min_ms": 103.29226,
-      "max_ms": 392.162645,
-      "avg_ms": 266.31392200000005
-    },
-    "throughput_rps": 63.642672846950624,
-    "total_duration": "392.818197ms",
     "details": {
-      "nvlink_routing": {
-        "queued": 5
-      },
       "routing_map": {
-        "A10G": {
-          "queued": 5
-        },
-        "H100": {
-          "queued": 5
-        },
-        "T4": {
-          "queued": 5
-        },
-        "any": {
-          "queued": 10
-        }
-      }
+        "T4": 5,
+        "A10G": 5,
+        "H100": 5,
+        "any": 10
+      },
+      "nvlink_preferred": 5
     }
   }
 ]

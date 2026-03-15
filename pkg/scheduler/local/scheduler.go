@@ -1011,6 +1011,22 @@ func (ls *LocalScheduler) ReleaseResources(
 	return ls.UpdateNodeState(ctx, node)
 }
 
+// ClearGPUAllocations: Clear all in-memory GPU allocations.
+// Used by benchmark cleanup to reset GPU state without restarting.
+func (ls *LocalScheduler) ClearGPUAllocations() {
+	ls.nodesMu.Lock()
+	for nodeID := range ls.allocatedGPUs {
+		delete(ls.allocatedGPUs, nodeID)
+	}
+	// Also reset node available GPUs
+	for _, node := range ls.nodes {
+		node.AvailableGPUs = node.GPUCount
+		node.RunningJobsCount = 0
+	}
+	ls.nodesMu.Unlock()
+	ls.log.Info("Cleared all GPU allocations (benchmark reset)")
+}
+
 // ReleaseJobResources: Release all resources held by a job (looked up by jobID)
 // Used by the cancel/preemption path where we only know the jobID
 func (ls *LocalScheduler) ReleaseJobResources(jobID string) {
