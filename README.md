@@ -11,6 +11,7 @@ and Gang Scheduling.**
 
 [![Go](https://img.shields.io/badge/Go-1.21+-00ADD8?logo=go&logoColor=white)]()
 [![License](https://img.shields.io/badge/license-MIT-blue)]()
+[![Release](https://img.shields.io/github/v/release/BITS08SATHYA/ares-scheduler?color=green)](https://github.com/BITS08SATHYA/ares-scheduler/releases/latest)
 [![Benchmark](https://img.shields.io/badge/suites_passing-8%2F8-brightgreen)]()
 
 [Architecture](#architecture) · [Benchmark Results](#-benchmark-results) · [Features](#features) · [Quick Start](#-quick-start) · [Blog](https://sathyanyu.substack.com)
