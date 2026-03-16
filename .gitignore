@@ -35,5 +35,17 @@ Thumbs.db
 *.pem
 *.key
 
+# Claude Code
+CLAUDE.md
+.claude/
+
+# Cluster configs (contain environment-specific IPs)
+clusters/*.yaml
+!clusters/*-example.yaml
+!clusters/*.yaml.example
+
+# Benchmark output
+/benchmark
+
 # AWS/GCP scripts (user-specific)
 aws_gpu_node

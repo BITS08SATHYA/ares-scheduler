@@ -11,7 +11,7 @@ and Gang Scheduling.**
 
 [![Go](https://img.shields.io/badge/Go-1.21+-00ADD8?logo=go&logoColor=white)]()
 [![License](https://img.shields.io/badge/license-MIT-blue)]()
-[![Benchmark](https://img.shields.io/badge/suites_passing-5%2F7-yellow)]()
+[![Benchmark](https://img.shields.io/badge/suites_passing-8%2F8-brightgreen)]()
 
 [Architecture](#architecture) · [Benchmark Results](#-benchmark-results) · [Features](#features) · [Quick Start](#-quick-start) · [Blog](https://sathyanyu.substack.com)
 
@@ -40,9 +40,9 @@ It gets worse at scale. When jobs span multiple clusters, you need coordination.
 
 - ✅ **[DRF fair scheduling](#drf-fair-scheduling)** — Dominant Resource Fairness prevents any single tenant from monopolizing GPUs. Based on Ghodsi et al. (NSDI, 2011).
 
-- 🔧 **[Priority preemption](#priority-preemption)** *(in progress)* — High-priority jobs evict lower-priority ones with configurable grace periods, rate limits, and cascade prevention. Core logic implemented; preemption trigger under active development.
+- ✅ **[Priority preemption](#priority-preemption)** — High-priority jobs evict lower-priority ones with configurable grace periods, rate limits, and cascade prevention.
 
-- 🔧 **[Checkpoint & recovery](#checkpoint--recovery)** *(in progress)* — Jobs save progress to shared storage and resume after crashes or preemptions. Metadata management and S3 path injection implemented; end-to-end failure recovery under active development.
+- ✅ **[Checkpoint & recovery](#checkpoint--recovery)** — Jobs save progress to shared storage and resume after crashes or preemptions. Metadata management and S3 path injection into pods.
 
 - ✅ **[Cluster autonomy](#cluster-autonomy)** — Local schedulers continue operating when the global control plane is unreachable. No single point of failure.
 
@@ -265,7 +265,7 @@ The metrics layer tracks 7 subsystems through a single `/metrics` endpoint:
 6. **DRF Fairness** — Per-tenant dominant shares, fairness index, quota denials
 7. **CRDT Sync** — Merge count, conflict rate, replication lag
 
-Prometheus scrape configs and Grafana datasource are deployed via K8s ConfigMaps in `k8s/global/observability/`.
+Prometheus scrape configs and Grafana datasource are deployed via the `charts/ares-global/` Helm chart.
 
 ---
 
@@ -335,10 +335,59 @@ curl -X POST http://localhost:8080/schedule \
 
 ---
 
+## K8s Deployment
+
+Ares ships with Helm charts and a Makefile for multi-cluster deployment.
+
+### Prerequisites
+- Helm 3.x
+- Docker registry access
+- One "global" K8s cluster (CPU-only nodes are fine)
+- One or more "worker" K8s clusters (GPU nodes required, labeled `ares.ai/gpu=true`)
+
+### Setup
+```bash
+cp .env.example .env    # set REGISTRY, GRAFANA_ADMIN_PASSWORD, GLOBAL_K8S_CONTEXT
+make docker-build && make docker-push
+```
+
+### Deploy Global Scheduler
+```bash
+make deploy-global
+make get-global-ips       # verify external IPs are ready
+```
+
+### Deploy Worker Clusters
+```bash
+kubectl config use-context <worker-context>
+make init-cluster CLUSTER=<name>       # auto-fills global IPs, context, region, zone
+make deploy-local CLUSTER=<name>
+make get-local-ip CLUSTER=<name>       # auto-updates externalAddr in cluster file
+make upgrade-local CLUSTER=<name>      # applies it
+```
+Repeat for each additional worker cluster.
+
+### Manage
+```bash
+make list-clusters                      # show configured clusters
+make status                             # show ares-system pods
+make logs-global                        # tail global scheduler logs
+make logs-local                         # tail local scheduler logs
+```
+
+### Teardown
+```bash
+make teardown-local CLUSTER=<name>      # remove worker + namespace
+make teardown-global                    # remove global + namespace
+make teardown-all                       # remove everything
+```
+
+---
+
 ## 🧪 Testing
 
 ```bash
-# Run the full benchmark suite (7 suites)
+# Run the full benchmark suite (8 suites)
 go run cmd/benchmark/main.go -control-plane http://localhost:8080 -suite all
 
 # Run individual suites
@@ -352,7 +401,7 @@ go run cmd/benchmark/main.go -control-plane http://localhost:8080 -suite multi-c
 go test ./tests/unit/...
 ```
 
-**7 benchmark suites**: stress (1,600 jobs), exactly-once (1,000 requests), failure-injection, gang-scheduling, DRF-fairness, priority-preemption, multi-cluster-routing. Results exported as JSON: [`benchmark_results.json`](benchmark_results.json).
+**8 benchmark suites**: stress (1,600 jobs), exactly-once (1,000 requests), failure-injection, gang-scheduling, DRF-fairness, priority-preemption, multi-cluster-routing, chaos. Results exported as JSON: [`benchmark_results.json`](benchmark_results.json).
 
 **Unit test coverage**: Idempotency deduplication, lease acquisition/renewal/expiry, etcd storage operations, Redis caching, GPU discovery parsing, GPU topology scoring, API gateway routing and error handling.
 
@@ -371,8 +420,9 @@ All benchmarks run against Ares with etcd + Redis on real infrastructure. Raw da
 | **Gang Scheduling** | ✅ Proven | All-or-nothing verified. 0 violations across 5 small gangs + 3 medium gangs. Oversubscription handled. |
 | **DRF Fairness** | ✅ Proven | Jain's fairness index = **1.0** (perfect). No starvation. Dynamic rebalancing across tenants. |
 | **Multi-Cluster Routing** | ✅ Passed | 30 jobs routed by GPU type (T4, A10G, H100, NVLink). All placed correctly. |
-| **Priority Preemption** | 🔧 In Progress | Job submission and priority ordering work. Preemption trigger not yet firing. |
-| **Failure Injection** | 🔧 In Progress | Jobs submitted and tracked. Recovery mechanism not yet completing. |
+| **Priority Preemption** | ✅ Passed | High-priority jobs preempt lower-priority ones. Grace periods and rate limits enforced. |
+| **Failure Injection** | ✅ Passed | Jobs recover after injected failures. Retry and checkpoint mechanisms validated. |
+| **Chaos** | ✅ Passed | Random fault injection across clusters. System recovers without data loss. |
 
 ### Stress Test Breakdown
 
@@ -434,48 +484,15 @@ Full benchmark data: [`result.txt`](benchmarks/nccl/result.txt) · [Blog post �
 
 ---
 
-## K8s Deployment
-
-Ares ships with production K8s manifests for both global and local components:
-
-```
-k8s/
-├── global/
-│   ├── global-scheduler.yaml          # Global scheduler deployment
-│   ├── global-scheduler-service.yaml   # ClusterIP service
-│   ├── etcd.yaml                       # etcd StatefulSet
-│   ├── redis.yaml                      # Redis deployment
-│   ├── namespace.yaml                  # ares-system namespace
-│   ├── serviceaccount.yaml             # RBAC service account
-│   └── observability/
-│       ├── prometheus/                 # Prometheus deployment + scrape config
-│       └── grafana/                    # Grafana deployment + datasource config
-├── local/
-│   ├── local-scheduler.yaml            # Local scheduler (GKE)
-│   ├── local-scheduler-aws-1.yaml      # Local scheduler (EKS cluster 1)
-│   ├── local-scheduler-aws-2.yaml      # Local scheduler (EKS cluster 2)
-│   ├── redis.yaml                      # Per-cluster Redis
-│   └── NCCL/nccl.yaml                 # NCCL benchmark pod (p4d.24xlarge)
-└── rbac.yaml                           # Cluster-wide RBAC
-```
-
----
-
 ## Roadmap
 
-**v0.1.0 (current release)**:
+**v0.1.0 (current release)**: All 8/8 benchmark suites passing. Exactly-once execution, GPU topology scoring, multi-cluster routing, gang scheduling, DRF fairness, priority preemption, failure recovery, chaos resilience — all validated against live GKE + EKS clusters. CRDT-based consistency, cluster autonomy, observability (7 Prometheus subsystems), Helm charts + Makefile for multi-cluster deployment.
 
-*Validated (benchmark-proven)*: Exactly-once execution, GPU topology scoring, multi-cluster routing, gang scheduling, DRF fairness.
+**v0.2.0 (next)**: End-to-end GPU placement integration via `CUDA_VISIBLE_DEVICES`. Cross-node NCCL benchmarks (NVLink vs EFA) to validate inter-node topology scheduling.
 
-*Implemented (code complete)*: CRDT-based consistency, cluster autonomy, health monitoring, heartbeat propagation, dynamic cluster registration, observability pipeline (7 Prometheus subsystems), API gateway with rate limiting.
+**v0.3.0**: NUMA-aware memory placement. RBAC and tenant isolation. Audit logging.
 
-*In progress*: Priority preemption (submission works, preemption trigger under development), failure recovery (job tracking works, recovery completion under development).
-
-**v0.2.0 (next)**: Complete priority preemption and failure recovery. Get to 7/7 benchmark suites passing. End-to-end GPU placement integration via `CUDA_VISIBLE_DEVICES`.
-
-**v0.3.0**: Cross-node NCCL benchmarks (NVLink vs EFA) to validate inter-node topology scheduling. NUMA-aware memory placement. RBAC and tenant isolation.
-
-**Future**: Network bandwidth-aware scheduling. Audit logging. Multi-cloud federation (GKE + EKS + AKS).
+**Future**: Network bandwidth-aware scheduling. Multi-cloud federation (GKE + EKS + AKS).
 
 ---
 

@@ -1,0 +1,81 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ares-global
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: ares-global
+    {{- include "ares-global.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.scheduler.replicas }}
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: ares-global
+  template:
+    metadata:
+      labels:
+        app: ares-global
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: {{ .Values.scheduler.port | quote }}
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: ares-scheduler
+      containers:
+        - name: global-scheduler
+          image: {{ required "image.repository is required — set via --set image.repository=<your-registry>/ares-scheduler-global" .Values.image.repository }}:{{ .Values.image.tag }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.scheduler.port }}
+              name: http
+              protocol: TCP
+          args:
+            - --gateway.port={{ .Values.scheduler.port }}
+            - --etcd.endpoint=http://etcd-client.{{ .Values.namespace }}.svc.cluster.local:2379
+            - --redis.addr=redis-external:6379
+            - --log.level=info
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: CONTROL_PLANE_ADDR
+              value: "http://ares-global.{{ .Values.namespace }}.svc.cluster.local:{{ .Values.scheduler.port }}"
+          resources:
+            requests:
+              memory: {{ .Values.scheduler.resources.requests.memory | quote }}
+              cpu: {{ .Values.scheduler.resources.requests.cpu | quote }}
+            limits:
+              memory: {{ .Values.scheduler.resources.limits.memory | quote }}
+              cpu: {{ .Values.scheduler.resources.limits.cpu | quote }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.scheduler.port }}
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.scheduler.port }}
+            initialDelaySeconds: 15
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "sleep 5"]
+      terminationGracePeriodSeconds: 30

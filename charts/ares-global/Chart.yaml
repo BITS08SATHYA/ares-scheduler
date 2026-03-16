@@ -1,0 +1,6 @@
+apiVersion: v2
+name: ares-global
+description: Ares global GPU scheduler — cluster selection, DRF, gang scheduling, and exactly-once coordination
+type: application
+version: 0.1.0
+appVersion: "1.0.0"

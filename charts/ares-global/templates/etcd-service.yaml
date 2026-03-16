@@ -1,0 +1,59 @@
+{{- if .Values.etcd.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: etcd-client
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: etcd
+    {{- include "ares-global.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: client
+      port: 2379
+      targetPort: 2379
+      protocol: TCP
+  selector:
+    app: etcd
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: etcd-external
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: etcd
+    {{- include "ares-global.labels" . | nindent 4 }}
+spec:
+  type: LoadBalancer
+  ports:
+    - name: client
+      port: 2379
+      targetPort: 2379
+      protocol: TCP
+  selector:
+    app: etcd
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: etcd-headless
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: etcd
+    {{- include "ares-global.labels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  ports:
+    - name: client
+      port: 2379
+      targetPort: 2379
+    - name: peer
+      port: 2380
+      targetPort: 2380
+  selector:
+    app: etcd
+{{- end }}

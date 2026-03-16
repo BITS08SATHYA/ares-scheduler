@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cluster-config
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: ares-local
+    {{- include "ares-local.labels" . | nindent 4 }}
+data:
+  cluster-name-full: {{ required "cluster.id is required — set via --set cluster.id=<name>" .Values.cluster.id | quote }}
+  region: {{ .Values.cluster.region | quote }}
+  zone: {{ .Values.cluster.zone | quote }}

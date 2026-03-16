@@ -1,0 +1,9 @@
+# Global scheduler cluster config
+# Copy and fill: cp clusters/global.yaml.example clusters/global.yaml
+#
+# Usage: make deploy-global CLUSTER=global
+
+kubeContext: ""   # e.g. gke_ares-gpu-test_us-east4-a_ares-global
+
+grafana:
+  adminPassword: ""   # REQUIRED — pick a strong password
