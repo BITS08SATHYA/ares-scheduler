@@ -7,7 +7,7 @@
 **Multi-cluster scheduling with exactly-once execution, GPU topology optimization, CRDT-based consistency 
 and Gang Scheduling.**
 
-**27,000+ lines of Go · 48 files · 157 commits**
+**27,000+ lines of Go · 48 files**
 
 [![Go](https://img.shields.io/badge/Go-1.21+-00ADD8?logo=go&logoColor=white)]()
 [![License](https://img.shields.io/badge/license-MIT-blue)]()
