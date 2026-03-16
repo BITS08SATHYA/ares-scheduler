@@ -1,0 +1,17 @@
+{{- if .Values.grafana.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-datasources
+  namespace: {{ .Values.namespace }}
+data:
+  datasources.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        access: proxy
+        url: http://prometheus.{{ .Values.namespace }}.svc.cluster.local:{{ .Values.prometheus.port }}
+        isDefault: true
+        editable: true
+{{- end }}

@@ -1,0 +1,71 @@
+{{- if .Values.redis.enabled }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: redis
+    {{- include "ares-global.labels" . | nindent 4 }}
+spec:
+  serviceName: redis
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      containers:
+        - name: redis
+          image: {{ .Values.redis.image }}
+          ports:
+            - containerPort: 6379
+              name: client
+          command:
+            - redis-server
+            - --appendonly
+            - "yes"
+            - --protected-mode
+            - "no"
+            - --bind
+            - "0.0.0.0"
+            - --port
+            - "6379"
+          volumeMounts:
+            - name: redis-data
+              mountPath: /data
+          resources:
+            requests:
+              memory: {{ .Values.redis.resources.requests.memory | quote }}
+              cpu: {{ .Values.redis.resources.requests.cpu | quote }}
+            limits:
+              memory: {{ .Values.redis.resources.limits.memory | quote }}
+              cpu: {{ .Values.redis.resources.limits.cpu | quote }}
+          livenessProbe:
+            exec:
+              command:
+                - redis-cli
+                - ping
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+          readinessProbe:
+            exec:
+              command:
+                - redis-cli
+                - ping
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+  volumeClaimTemplates:
+    - metadata:
+        name: redis-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: {{ .Values.redis.storage }}
+{{- end }}

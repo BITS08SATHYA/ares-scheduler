@@ -1,0 +1,30 @@
+# Worker cluster config
+# Copy and rename per cluster: cp clusters/worker-example.yaml clusters/gpu-worker-1.yaml
+#
+# Usage: make deploy-local CLUSTER=gpu-worker-1
+
+kubeContext: ""   # e.g. gke_project_us-east4-c_gpu-worker-1
+
+# Infrastructure addresses (from: make get-global-ips)
+global:
+  controlPlane: ""   # e.g. http://35.x.x.x:8080
+  redis: ""          # e.g. 34.x.x.x:6379
+  etcd: ""           # e.g. 34.x.x.x:2379
+
+cluster:
+  id: ""             # e.g. gpu-worker-1
+  externalAddr: ""   # e.g. http://34.x.x.x:9090
+  region: ""         # e.g. us-east4
+  zone: ""           # e.g. us-east4-a
+
+# ─── Cloud-specific overrides (uncomment as needed) ─────────────────────────
+# Defaults are GKE-friendly. Override for other providers.
+#
+# nodeSelector:                          # GPU node label
+#   ares.ai/gpu: "true"                  #   GKE default (label your nodes)
+#   # nvidia.com/gpu.present: "true"     #   EKS with nvidia device plugin
+#
+# gpu:
+#   hostPath: /opt/nvidia                # GKE default
+#   # hostPath: /usr/local/nvidia        # EKS (AL2/Ubuntu AMI)
+#   # hostPath: /usr/share/nvidia        # EKS (Bottlerocket AMI)

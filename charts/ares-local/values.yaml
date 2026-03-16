@@ -1,0 +1,39 @@
+namespace: ares-system
+
+image:
+  repository: ""   # REQUIRED — set via --set image.repository=<your-registry>/ares-scheduler-local
+  tag: latest
+  pullPolicy: Always
+
+# Global cluster metadata — REQUIRED, no defaults
+global:
+  controlPlane: ""    # e.g. http://35.x.x.x:8080
+  redis: ""           # e.g. 34.x.x.x:6379
+  etcd: ""            # e.g. 34.x.x.x:2379
+
+cluster:
+  id: ""              # e.g. eks-p4d-cluster-1
+  externalAddr: ""    # e.g. http://34.x.x.x:9090
+  region: ""
+  zone: ""
+
+scheduler:
+  port: 9090
+  resources:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+  logLevel: info
+
+nodeSelector:
+  ares.ai/gpu: "true"
+
+gpu:
+  hostPath: /opt/nvidia
+
+service:
+  type: LoadBalancer
+  port: 9090

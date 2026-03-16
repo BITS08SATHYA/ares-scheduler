@@ -1,0 +1,6 @@
+apiVersion: v2
+name: ares-local
+description: Ares local GPU scheduler — per-cluster node selection, GPU topology scoring, and executor
+type: application
+version: 0.1.0
+appVersion: "1.0.0"

@@ -1,0 +1,131 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: ares-local
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: ares-local
+    {{- include "ares-local.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      app: ares-local
+  template:
+    metadata:
+      labels:
+        app: ares-local
+      annotations:
+        container.apparmor.security.beta.kubernetes.io/ares-local: "unconfined"
+    spec:
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      hostNetwork: false
+      hostPID: false
+      serviceAccountName: ares-scheduler
+      containers:
+        - name: ares-local
+          image: {{ required "image.repository is required — set via --set image.repository=<your-registry>/ares-scheduler-local" .Values.image.repository }}:{{ .Values.image.tag }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          resources:
+            requests:
+              cpu: {{ .Values.scheduler.resources.requests.cpu | quote }}
+              memory: {{ .Values.scheduler.resources.requests.memory | quote }}
+            limits:
+              cpu: {{ .Values.scheduler.resources.limits.cpu | quote }}
+              memory: {{ .Values.scheduler.resources.limits.memory | quote }}
+          env:
+            - name: ARES_REDIS_ADDR
+              value: {{ required "global.redis is required — set via --set global.redis=<host:port>" .Values.global.redis | quote }}
+            - name: ARES_ETCD_ENDPOINT
+              value: {{ required "global.etcd is required — set via --set global.etcd=<host:port>" .Values.global.etcd | quote }}
+            - name: ARES_CONTROL_PLANE
+              value: {{ required "global.controlPlane is required — set via --set global.controlPlane=<url>" .Values.global.controlPlane | quote }}
+            - name: ARES_LOCAL_SCHEDULER_EXTERNAL_ADDR
+              value: {{ .Values.cluster.externalAddr | quote }}
+            - name: ARES_CLUSTER_ID
+              valueFrom:
+                configMapKeyRef:
+                  name: cluster-config
+                  key: cluster-name-full
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: ARES_REGION
+              value: {{ .Values.cluster.region | quote }}
+            - name: ARES_ZONE
+              value: {{ .Values.cluster.zone | quote }}
+            - name: ARES_K8S_NAMESPACE
+              value: {{ .Values.namespace | quote }}
+            - name: PATH
+              value: "{{ .Values.gpu.hostPath }}/bin:/usr/bin:/usr/local/bin:/bin:/sbin"
+            - name: LD_LIBRARY_PATH
+              value: "{{ .Values.gpu.hostPath }}/lib64:{{ .Values.gpu.hostPath }}/lib:/usr/lib64"
+            - name: ARES_LOG_LEVEL
+              value: {{ .Values.scheduler.logLevel | quote }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.scheduler.port }}
+              protocol: TCP
+          volumeMounts:
+            - name: host-opt-nvidia
+              mountPath: {{ .Values.gpu.hostPath }}
+              readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.scheduler.port }}
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.scheduler.port }}
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+      volumes:
+        - name: host-opt-nvidia
+          hostPath:
+            path: {{ .Values.gpu.hostPath }}
+            type: Directory
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoExecute
+        - key: cloud.google.com/gke-accelerator
+          operator: Exists
+          effect: NoSchedule
+        - key: cloud.google.com/gke-accelerator
+          operator: Exists
+          effect: NoExecute
+        - key: accelerator
+          operator: Exists
+          effect: NoSchedule
+        - key: accelerator
+          operator: Exists
+          effect: NoExecute
+        - operator: Exists
+          effect: NoExecute
+        - operator: Exists
+          effect: NoSchedule

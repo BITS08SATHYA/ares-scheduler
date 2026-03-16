@@ -1,0 +1,19 @@
+{{- if .Values.redis.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-external
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: redis
+    {{- include "ares-global.labels" . | nindent 4 }}
+spec:
+  type: LoadBalancer
+  ports:
+    - port: 6379
+      targetPort: 6379
+      protocol: TCP
+      name: redis
+  selector:
+    app: redis
+{{- end }}

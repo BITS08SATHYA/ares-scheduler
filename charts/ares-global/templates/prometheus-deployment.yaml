@@ -1,0 +1,51 @@
+{{- if .Values.prometheus.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: prometheus
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: prometheus
+  template:
+    metadata:
+      labels:
+        app: prometheus
+    spec:
+      serviceAccountName: ares-scheduler
+      containers:
+        - name: prometheus
+          image: {{ .Values.prometheus.image }}
+          args:
+            - '--config.file=/etc/prometheus/prometheus.yml'
+            - '--storage.tsdb.path=/prometheus'
+            - '--storage.tsdb.retention.time={{ .Values.prometheus.retention }}'
+            - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+            - '--web.console.templates=/usr/share/prometheus/consoles'
+            - '--web.enable-lifecycle'
+          ports:
+            - containerPort: {{ .Values.prometheus.port }}
+              name: web
+          volumeMounts:
+            - name: config
+              mountPath: /etc/prometheus
+            - name: storage
+              mountPath: /prometheus
+          resources:
+            requests:
+              cpu: {{ .Values.prometheus.resources.requests.cpu }}
+              memory: {{ .Values.prometheus.resources.requests.memory }}
+            limits:
+              cpu: {{ .Values.prometheus.resources.limits.cpu }}
+              memory: {{ .Values.prometheus.resources.limits.memory }}
+      volumes:
+        - name: config
+          configMap:
+            name: prometheus-config
+        - name: storage
+          emptyDir: {}
+{{- end }}

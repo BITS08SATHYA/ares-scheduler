@@ -1,0 +1,63 @@
+{{- if .Values.grafana.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: grafana
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: grafana
+  template:
+    metadata:
+      labels:
+        app: grafana
+    spec:
+      serviceAccountName: ares-scheduler
+      containers:
+        - name: grafana
+          image: {{ .Values.grafana.image }}
+          ports:
+            - containerPort: {{ .Values.grafana.port }}
+              name: web
+          env:
+            - name: GF_SECURITY_ADMIN_USER
+              value: "admin"
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              value: {{ required "grafana.adminPassword is required when grafana is enabled — set via --set grafana.adminPassword=<password>" .Values.grafana.adminPassword | quote }}
+            - name: GF_SERVER_ROOT_URL
+              value: "http://localhost:{{ .Values.grafana.port }}"
+            - name: GF_INSTALL_PLUGINS
+              value: "redis-datasource"
+          volumeMounts:
+            - name: datasources
+              mountPath: /etc/grafana/provisioning/datasources
+            - name: dashboards-provider
+              mountPath: /etc/grafana/provisioning/dashboards
+            - name: dashboards
+              mountPath: /var/lib/grafana/dashboards
+            - name: storage
+              mountPath: /var/lib/grafana
+          resources:
+            requests:
+              cpu: {{ .Values.grafana.resources.requests.cpu }}
+              memory: {{ .Values.grafana.resources.requests.memory }}
+            limits:
+              cpu: {{ .Values.grafana.resources.limits.cpu }}
+              memory: {{ .Values.grafana.resources.limits.memory }}
+      volumes:
+        - name: datasources
+          configMap:
+            name: grafana-datasources
+        - name: dashboards-provider
+          configMap:
+            name: grafana-dashboard-provider
+        - name: dashboards
+          configMap:
+            name: grafana-dashboards
+        - name: storage
+          emptyDir: {}
+{{- end }}
