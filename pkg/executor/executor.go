@@ -285,7 +285,7 @@ func NewExecutor(
 
 	executor.Log.Info("Executor Initialized for cluster %s", clusterID)
 	executor.Log.Info("Namespace: %s", config.Namespace)
-	executor.Log.Info("Max Concurrent jobs: %s", config.MaxConcurrentJobs)
+	executor.Log.Info("Max Concurrent jobs: %d", config.MaxConcurrentJobs)
 	executor.Log.Info("Default timeout: %v", config.DefaultTimeout)
 	executor.Log.Info("Pod Lifecycle monitoring enabled")
 
@@ -527,7 +527,7 @@ func createPodSpec(
 		Labels:          labels,
 	}
 
-	logger.Get().Info("Generated PodSpec: ", spec)
+	logger.Get().Info("Generated PodSpec: %v", spec)
 
 	return spec
 }

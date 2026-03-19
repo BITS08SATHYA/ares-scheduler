@@ -299,7 +299,7 @@ func TestCheckLeaseOwnership(t *testing.T) {
 		require.True(t, success)
 
 		// Check ownership (should succeed)
-		err = manager.CheckLeaseOwnership(ctx, jobID, leaseID)
+		_, err = manager.CheckLeaseOwnership(ctx, jobID, leaseID)
 		assert.NoError(t, err, "Should own the lease")
 
 		t.Log("✅ Fencing test passed: ownership verified")
@@ -327,7 +327,7 @@ func TestCheckLeaseOwnership(t *testing.T) {
 		time.Sleep(200 * time.Millisecond)
 
 		// Check ownership (should fail - lease no longer in etcd)
-		err = manager.CheckLeaseOwnership(ctx, jobID, leaseID)
+		_, err = manager.CheckLeaseOwnership(ctx, jobID, leaseID)
 		assert.Error(t, err, "Should fail ownership check (lease released)")
 		assert.Contains(t, err.Error(), "not found")
 
@@ -345,7 +345,7 @@ func TestCheckLeaseOwnership(t *testing.T) {
 
 		// Manager 2 tries to check ownership (should fail - different scheduler ID)
 		manager2 := lease.NewLeaseManager(etcdClient, "scheduler-B", logger)
-		err = manager2.CheckLeaseOwnership(ctx, jobID, leaseID)
+		_, err = manager2.CheckLeaseOwnership(ctx, jobID, leaseID)
 
 		assert.Error(t, err, "Should fail ownership check (different scheduler)")
 		assert.Contains(t, err.Error(), "another scheduler")

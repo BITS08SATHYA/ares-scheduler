@@ -235,7 +235,7 @@ func (ec *ETCDClient) Get(ctx context.Context, key string) (string, error) {
 
 	resp, err := ec.cli.Get(getCtx, key)
 
-	ec.log.Debug("Get Response: %s", resp)
+	ec.log.Debug("Get Response: %v", resp)
 
 	if err != nil {
 		ec.recordFailure()

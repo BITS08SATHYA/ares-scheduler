@@ -463,7 +463,7 @@ func NewAPIGatewayWithCoordinator(
 	gpuDiscovery := gpu.NewGPUDiscovery(redisClient)
 	topologyManager := gpu.NewGPUTopologyManager(redisClient, gpuDiscovery)
 
-	log.Info("Existing Topology Manager:", topologyManager)
+	log.Info("Existing Topology Manager: %v", topologyManager)
 
 	log.Info("✓ Layer 5: GPUDiscovery, TopologyManager")
 

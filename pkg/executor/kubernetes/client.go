@@ -159,15 +159,12 @@ func (kc *K8sClientImpl) CreatePod(ctx context.Context, podSpec *executor.PodSpe
 	// Create Pod in Kubernetes
 	created, err := kc.clientset.CoreV1().Pods(kc.namespace).Create(ctx, pod, metav1.CreateOptions{})
 	if err != nil {
-		logger.Get().Error("Failed to create pod", "error", err, "podName", podSpec.PodName)
+		logger.Get().Error("Failed to create pod %s: %v", podSpec.PodName, err)
 		return "", fmt.Errorf("failed to create pod %s: %w", podSpec.PodName, err)
 	}
 
-	logger.Get().Info("Pod created successfully",
-		"podName", created.Name,
-		"namespace", created.Namespace,
-		"node", podSpec.NodeID,
-		"gpuCount", podSpec.GPUCount,
+	logger.Get().Info("Pod created successfully: %s (namespace=%s, node=%s, gpuCount=%d)",
+		created.Name, created.Namespace, podSpec.NodeID, podSpec.GPUCount,
 	)
 
 	return created.Name, nil
