@@ -207,7 +207,7 @@ func (gs *GlobalScheduler) SelectBestCluster(
 
 	clusters := gs.clusterManager.ListClusters()
 
-	gs.log.Info("Length of clusters: ", len(clusters))
+	gs.log.Info("Length of clusters: %d", len(clusters))
 
 	if len(clusters) == 0 {
 		return nil, nil, fmt.Errorf("no clusters available in federation")

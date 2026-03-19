@@ -42,6 +42,21 @@ func NewRedisClient(addr, password string, db int) (*RedisClient, error) {
 	}, nil
 }
 
+// NewTestClient creates a RedisClient for testing that connects to a given
+// address without pinging. Calls will fail but the client is non-nil so
+// callers that handle errors gracefully won't panic.
+func NewTestClient(addr string) *RedisClient {
+	cli := redis.NewClient(&redis.Options{
+		Addr:         addr,
+		MaxRetries:   0,
+		DialTimeout:  1 * time.Millisecond,
+		ReadTimeout:  1 * time.Millisecond,
+		WriteTimeout: 1 * time.Millisecond,
+		PoolSize:     1,
+	})
+	return &RedisClient{cli: cli, log: logger.Get()}
+}
+
 // Close: Close Redis connection
 func (rc *RedisClient) Close() error {
 	return rc.cli.Close()

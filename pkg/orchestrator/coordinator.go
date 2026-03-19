@@ -231,7 +231,7 @@ func (jc *JobCoordinator) ScheduleJob(
 		}, nil
 	}
 
-	jc.log.Debug("GlobalDecision json (body): ", globalDecision)
+	jc.log.Debug("GlobalDecision json (body): %v", globalDecision)
 	jc.log.Info("Job %s scheduled to cluster %s", jobID, globalDecision.ClusterID)
 
 	// ========================================================================
@@ -309,7 +309,7 @@ func (jc *JobCoordinator) ScheduleJob(
 		ActualGPUType:      jc.resolveActualGPUType(jobSpec, globalDecision),
 	}
 
-	jc.log.Debug("The final Result (json payload): ", result)
+	jc.log.Debug("The final Result (json payload): %v", result)
 
 	//jc.log.Info("Job %s fully scheduled (Pod=%s, leaseID=%d)", jobID, createdPodName, leaseID)
 

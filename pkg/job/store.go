@@ -175,13 +175,13 @@ func (store *ETCDJobStore) SaveJobFinal(ctx context.Context, job *common.Job) er
 func (store *ETCDJobStore) GetJob(ctx context.Context, jobID string) (*common.Job, error) {
 
 	store.log.Debug("Entered Get Job Method()")
-	store.log.Debug("Job ID received: ", jobID)
+	store.log.Debug("Job ID received: %s", jobID)
 	if jobID == "" {
 		return nil, fmt.Errorf("job ID cannot be empty")
 	}
 
 	key := fmt.Sprintf("%s/%s", store.keyPrefix, jobID)
-	store.log.Debug("This is the key: %v with store prefix ", key, store.keyPrefix)
+	store.log.Debug("This is the key: %v with store prefix %s", key, store.keyPrefix)
 	jobData, err := store.etcd.Get(ctx, key)
 	store.log.Debug("Job Found: %v", jobData)
 	if err != nil {

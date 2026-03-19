@@ -132,7 +132,7 @@ func (c *LocalSchedulerClient) ScheduleJob(
 
 	c.log.Debug("Calling LocalScheduler: POST %s", url)
 
-	c.log.Debug("The RequestBody is: ", reqBody)
+	c.log.Debug("The RequestBody is: %s", reqBody)
 
 	// Send request
 	resp, err := c.httpClient.Do(httpReq)
