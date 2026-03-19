@@ -468,24 +468,24 @@ func NewJobStore(etcdClient *etcd.ETCDClient, log Logger) *JobStore {
 // - Lease expires after 30 seconds
 // - Job automatically deleted from etcd (no stale jobs)
 func (js *JobStore) StoreJob(ctx context.Context, job *JobRecord, leaseID int64) error {
+	js.mu.Lock()
+	defer js.mu.Unlock()
+	return js.storeJobInternal(ctx, job, leaseID)
+}
 
-	// FIX: Serialize job OUTSIDE lock (avoid blocking during marshaling)
+// storeJobInternal writes the job to etcd. Caller must hold js.mu.
+func (js *JobStore) storeJobInternal(ctx context.Context, job *JobRecord, leaseID int64) error {
 	jobKey := fmt.Sprintf("ares:jobs:%s", job.JobID)
 	jobValue, err := json.Marshal(job)
 	if err != nil {
 		return fmt.Errorf("marshal job: %w", err)
 	}
 
-	// FIX: Network operation OUTSIDE lock (don't block other operations)
 	err = js.etcdClient.PutWithLease(ctx, jobKey, string(jobValue), leaseID)
 	if err != nil {
 		js.log.Errorf("failed to store job %s: %v", job.JobID, err)
 		return fmt.Errorf("put job: %w", err)
 	}
-
-	// Only lock for internal state updates (if needed)
-	js.mu.Lock()
-	defer js.mu.Unlock()
 
 	js.log.Infof("job stored with lease: %s (state=%s, leaseID=%d)", job.JobID, job.Status, leaseID)
 	return nil
@@ -561,7 +561,7 @@ func (js *JobStore) UpdateJobState(
 		}
 	}
 
-	return js.StoreJob(ctx, job, leaseID)
+	return js.storeJobInternal(ctx, job, leaseID)
 }
 
 func isValidTransition(from, to JobState) bool {
