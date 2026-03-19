@@ -70,8 +70,8 @@ func TestAcquireLeaseForJob(t *testing.T) {
 	t.Run("Acquire lease for new job succeeds", func(t *testing.T) {
 		jobID := "test-job-acquire-success-111"
 
-		// Clean up any existing lease
-		manager.ReleaseLeaseForJob(ctx, jobID)
+		// Clean up any stale key from prior runs
+		etcdClient.Delete(ctx, "ares:leases:"+jobID)
 		time.Sleep(200 * time.Millisecond)
 
 		success, leaseID, err := manager.AcquireLeaseForJob(ctx, jobID)
@@ -95,8 +95,8 @@ func TestAcquireLeaseForJob(t *testing.T) {
 	t.Run("Acquire lease for same job twice fails (mutual exclusion)", func(t *testing.T) {
 		jobID := "test-job-acquire-duplicate-222"
 
-		// Clean up
-		manager.ReleaseLeaseForJob(ctx, jobID)
+		// Clean up any stale key from prior runs
+		etcdClient.Delete(ctx, "ares:leases:"+jobID)
 		time.Sleep(200 * time.Millisecond)
 
 		// First acquisition succeeds
@@ -128,8 +128,8 @@ func TestAcquireLeaseForJob(t *testing.T) {
 		manager1 := lease.NewLeaseManager(etcdClient, "scheduler-1", logger)
 		manager2 := lease.NewLeaseManager(etcdClient, "scheduler-2", logger)
 
-		// Clean up
-		manager1.ReleaseLeaseForJob(ctx, jobID)
+		// Clean up any stale key from prior runs
+		etcdClient.Delete(ctx, "ares:leases:"+jobID)
 		time.Sleep(200 * time.Millisecond)
 
 		// Manager 1 acquires lease
@@ -155,8 +155,8 @@ func TestAcquireLeaseForJob(t *testing.T) {
 	t.Run("Acquire lease starts heartbeat goroutine", func(t *testing.T) {
 		jobID := "test-job-heartbeat-444"
 
-		// Clean up
-		manager.ReleaseLeaseForJob(ctx, jobID)
+		// Clean up any stale key from prior runs
+		etcdClient.Delete(ctx, "ares:leases:"+jobID)
 		time.Sleep(200 * time.Millisecond)
 
 		success, _, err := manager.AcquireLeaseForJob(ctx, jobID)
@@ -213,6 +213,9 @@ func TestReleaseLeaseForJob(t *testing.T) {
 	t.Run("Release acquired lease succeeds", func(t *testing.T) {
 		jobID := "test-job-release-success-555"
 
+		// Clean up any stale key from prior runs
+		etcdClient.Delete(ctx, "ares:leases:"+jobID)
+
 		// Acquire lease
 		success, _, err := manager.AcquireLeaseForJob(ctx, jobID)
 		require.NoError(t, err)
@@ -245,6 +248,9 @@ func TestReleaseLeaseForJob(t *testing.T) {
 
 	t.Run("After release, another scheduler can acquire", func(t *testing.T) {
 		jobID := "test-job-release-reacquire-777"
+
+		// Clean up any stale key from prior runs
+		etcdClient.Delete(ctx, "ares:leases:"+jobID)
 
 		manager1 := lease.NewLeaseManager(etcdClient, "scheduler-1", logger)
 		manager2 := lease.NewLeaseManager(etcdClient, "scheduler-2", logger)
@@ -289,8 +295,8 @@ func TestCheckLeaseOwnership(t *testing.T) {
 	t.Run("Check ownership of valid lease succeeds", func(t *testing.T) {
 		jobID := "test-job-fencing-valid-888"
 
-		// Clean up
-		manager.ReleaseLeaseForJob(ctx, jobID)
+		// Clean up any stale key from prior runs
+		etcdClient.Delete(ctx, "ares:leases:"+jobID)
 		time.Sleep(200 * time.Millisecond)
 
 		// Acquire lease
@@ -312,8 +318,8 @@ func TestCheckLeaseOwnership(t *testing.T) {
 	t.Run("Check ownership after release fails (lease gone)", func(t *testing.T) {
 		jobID := "test-job-fencing-released-999"
 
-		// Clean up
-		manager.ReleaseLeaseForJob(ctx, jobID)
+		// Clean up any stale key from prior runs
+		etcdClient.Delete(ctx, "ares:leases:"+jobID)
 		time.Sleep(200 * time.Millisecond)
 
 		// Acquire lease
@@ -334,26 +340,38 @@ func TestCheckLeaseOwnership(t *testing.T) {
 		t.Log("✅ Fencing test passed: detected lease was released (split-brain prevented)")
 	})
 
-	t.Run("Check ownership by different scheduler fails", func(t *testing.T) {
+	t.Run("Check ownership with stale lease ID fails (split-brain)", func(t *testing.T) {
 		jobID := "test-job-fencing-different-000"
+
+		// Clean up any stale key from prior runs
+		etcdClient.Delete(ctx, "ares:leases:"+jobID)
+		time.Sleep(200 * time.Millisecond)
 
 		// Manager 1 acquires lease
 		manager1 := lease.NewLeaseManager(etcdClient, "scheduler-A", logger)
-		success, leaseID, err := manager1.AcquireLeaseForJob(ctx, jobID)
+		success, leaseID1, err := manager1.AcquireLeaseForJob(ctx, jobID)
 		require.NoError(t, err)
 		require.True(t, success)
 
-		// Manager 2 tries to check ownership (should fail - different scheduler ID)
+		// Manager 1 releases, then manager 2 acquires (new lease ID)
+		manager1.ReleaseLeaseForJob(ctx, jobID)
+		time.Sleep(200 * time.Millisecond)
+
 		manager2 := lease.NewLeaseManager(etcdClient, "scheduler-B", logger)
-		_, err = manager2.CheckLeaseOwnership(ctx, jobID, leaseID)
+		success, _, err = manager2.AcquireLeaseForJob(ctx, jobID)
+		require.NoError(t, err)
+		require.True(t, success)
 
-		assert.Error(t, err, "Should fail ownership check (different scheduler)")
-		assert.Contains(t, err.Error(), "another scheduler")
+		// Manager 1 tries to verify with stale leaseID1 → should fail (lease ID mismatch)
+		_, err = manager1.CheckLeaseOwnership(ctx, jobID, leaseID1)
 
-		t.Log("✅ Fencing test passed: detected lease owned by different scheduler (split-brain prevented)")
+		assert.Error(t, err, "Should fail ownership check (stale lease ID)")
+		assert.Contains(t, err.Error(), "mismatch")
+
+		t.Log("✅ Fencing test passed: detected stale lease ID (split-brain prevented)")
 
 		// Clean up
-		manager1.ReleaseLeaseForJob(ctx, jobID)
+		manager2.ReleaseLeaseForJob(ctx, jobID)
 		time.Sleep(200 * time.Millisecond)
 	})
 }
@@ -375,8 +393,8 @@ func TestGetLeaseForJob(t *testing.T) {
 	t.Run("Get lease info for existing lease", func(t *testing.T) {
 		jobID := "test-job-getinfo-111"
 
-		// Clean up
-		manager.ReleaseLeaseForJob(ctx, jobID)
+		// Clean up any stale key from prior runs
+		etcdClient.Delete(ctx, "ares:leases:"+jobID)
 		time.Sleep(200 * time.Millisecond)
 
 		// Acquire lease
@@ -423,19 +441,18 @@ func TestGetActiveLeases(t *testing.T) {
 	manager := lease.NewLeaseManager(etcdClient, "scheduler-active", logger)
 
 	t.Run("Get active leases with multiple leases", func(t *testing.T) {
-		// Clean up any existing
-		activeLeases := manager.GetActiveLeases()
-		for jobID := range activeLeases {
-			manager.ReleaseLeaseForJob(ctx, jobID)
-		}
-		time.Sleep(200 * time.Millisecond)
-
 		// Acquire multiple leases
 		jobIDs := []string{
 			"test-job-active-1",
 			"test-job-active-2",
 			"test-job-active-3",
 		}
+
+		// Clean up any stale keys from prior runs
+		for _, jobID := range jobIDs {
+			etcdClient.Delete(ctx, "ares:leases:"+jobID)
+		}
+		time.Sleep(200 * time.Millisecond)
 
 		for _, jobID := range jobIDs {
 			success, _, err := manager.AcquireLeaseForJob(ctx, jobID)
@@ -478,6 +495,9 @@ func TestJobStore(t *testing.T) {
 
 	t.Run("Store and retrieve job", func(t *testing.T) {
 		jobID := "test-jobstore-store-333"
+
+		// Clean up any stale key from prior runs
+		etcdClient.Delete(ctx, "ares:leases:"+jobID)
 
 		// Acquire lease for job
 		success, leaseID, err := leaseMgr.AcquireLeaseForJob(ctx, jobID)
@@ -535,6 +555,9 @@ func TestUpdateJobState(t *testing.T) {
 	t.Run("Valid state transition succeeds", func(t *testing.T) {
 		jobID := "test-jobstore-transition-555"
 
+		// Clean up any stale key from prior runs
+		etcdClient.Delete(ctx, "ares:leases:"+jobID)
+
 		// Acquire lease
 		success, leaseID, err := leaseMgr.AcquireLeaseForJob(ctx, jobID)
 		require.NoError(t, err)
@@ -568,6 +591,9 @@ func TestUpdateJobState(t *testing.T) {
 
 	t.Run("Invalid state transition fails", func(t *testing.T) {
 		jobID := "test-jobstore-invalid-transition-666"
+
+		// Clean up any stale key from prior runs
+		etcdClient.Delete(ctx, "ares:leases:"+jobID)
 
 		// Acquire lease
 		success, leaseID, err := leaseMgr.AcquireLeaseForJob(ctx, jobID)
@@ -612,6 +638,10 @@ func TestEdgeCases(t *testing.T) {
 	t.Run("Rapid acquire/release cycles", func(t *testing.T) {
 		jobID := "test-edge-rapid-888"
 
+		// Clean up any stale key from prior runs
+		etcdClient.Delete(ctx, "ares:leases:"+jobID)
+		time.Sleep(200 * time.Millisecond)
+
 		for i := 0; i < 5; i++ {
 			// Acquire
 			success, _, err := manager.AcquireLeaseForJob(ctx, jobID)
@@ -635,8 +665,8 @@ func TestEdgeCases(t *testing.T) {
 		manager2 := lease.NewLeaseManager(etcdClient, "scheduler-2", logger)
 		manager3 := lease.NewLeaseManager(etcdClient, "scheduler-3", logger)
 
-		// Clean up
-		manager1.ReleaseLeaseForJob(ctx, jobID)
+		// Clean up any stale key from prior runs
+		etcdClient.Delete(ctx, "ares:leases:"+jobID)
 		time.Sleep(200 * time.Millisecond)
 
 		// All try to acquire simultaneously
