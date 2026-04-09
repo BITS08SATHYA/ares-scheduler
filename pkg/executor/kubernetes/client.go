@@ -3,20 +3,21 @@ package kubernetes
 import (
 	"context"
 	"fmt"
-	"github.com/BITS08SATHYA/ares-scheduler/pkg/executor"
-	"github.com/BITS08SATHYA/ares-scheduler/pkg/logger"
-	_ "go.etcd.io/etcd/client/v3/kubernetes"
 	"io"
-	"k8s.io/apimachinery/pkg/api/resource"
 	"os"
 	"sort"
 
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/executor"
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/logger"
+	_ "go.etcd.io/etcd/client/v3/kubernetes"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8sClient "k8s.io/client-go/kubernetes"
 	k8sCoreClient "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+	metricsv1beta1 "k8s.io/metrics/pkg/client/clientset/versioned"
 )
 
 // ============================================================================
@@ -30,16 +31,14 @@ import (
 // ============================================================================
 
 type K8sClientImpl struct {
-	clientset k8sCoreClient.Interface // ✅ Real k8s.io client
-	namespace string
-	//log       *logger.Logger
+	clientset     k8sCoreClient.Interface
+	namespace     string
+	metricsClient metricsv1beta1.Interface
 }
 
 // NewK8sClient: Create real K8s client (in-cluster or kubeconfig)
 // ✅ ENHANCED: Now exposes both custom interface and real k8s.io client
 func NewK8sClient(namespace string) (*K8sClientImpl, error) {
-
-	//log := logger.Get()
 
 	var config *rest.Config
 	var err error
@@ -70,10 +69,16 @@ func NewK8sClient(namespace string) (*K8sClientImpl, error) {
 		namespace = "default"
 	}
 
+	// Initialize metrics-server client (best-effort — not all clusters have it)
+	mc, mcErr := metricsv1beta1.NewForConfig(config)
+	if mcErr != nil {
+		logger.Get().Warn("Metrics-server client init failed (pod metrics unavailable): %v", mcErr)
+	}
+
 	return &K8sClientImpl{
-		clientset: clientset,
-		namespace: namespace,
-		//log:       logger.Get(),
+		clientset:     clientset,
+		namespace:     namespace,
+		metricsClient: mc,
 	}, nil
 }
 
@@ -327,11 +332,27 @@ func (kc *K8sClientImpl) GetPodLogs(ctx context.Context, podName string) (string
 	return string(data), err
 }
 
-// GetPodMetrics: Get Pod metrics (placeholder for metrics-server integration)
+// GetPodMetrics queries the metrics-server for pod resource usage (CPU, memory).
+// Returns empty map if metrics-server is unavailable (graceful degradation).
 func (kc *K8sClientImpl) GetPodMetrics(ctx context.Context, podName string) (map[string]interface{}, error) {
-	// TODO: Integrate with metrics-server
-	// For now, return empty metrics
-	return map[string]interface{}{}, nil
+	if kc.metricsClient == nil {
+		return map[string]interface{}{}, nil
+	}
+
+	podMetrics, err := kc.metricsClient.MetricsV1beta1().PodMetricses(kc.namespace).Get(ctx, podName, metav1.GetOptions{})
+	if err != nil {
+		return map[string]interface{}{}, fmt.Errorf("metrics-server query failed: %w", err)
+	}
+
+	result := map[string]interface{}{}
+	for _, container := range podMetrics.Containers {
+		cpuUsage := container.Usage.Cpu()
+		memUsage := container.Usage.Memory()
+		result[container.Name+"_cpu_millicores"] = cpuUsage.MilliValue()
+		result[container.Name+"_memory_bytes"] = memUsage.Value()
+	}
+
+	return result, nil
 }
 
 // WatchPod: Watch Pod for status changes
@@ -393,15 +414,3 @@ func convertK8sPodPhase(k8sPhase corev1.PodPhase) executor.PodPhase {
 	}
 }
 
-// envMapToEnvVars: Convert map[string]string to []corev1.EnvVar
-// Used when building Pod environment variables
-//func envMapToEnvVars(envMap map[string]string) []corev1.EnvVar {
-//	var envVars []corev1.EnvVar
-//	for key, value := range envMap {
-//		envVars = append(envVars, corev1.EnvVar{
-//			Name:  key,
-//			Value: value,
-//		})
-//	}
-//	return envVars
-//}

@@ -1,23 +1,30 @@
 // File: pkg/logger/logger.go
-// Logger: Simple structured logging wrapper
-// Implements: Sync() method for graceful logger shutdown
+// Logger: Structured logging wrapper backed by log/slog
+// Supports JSON and text output formats via ARES_LOG_FORMAT env var
+// Supports log level filtering via ARES_LOG_LEVEL env var
 
 package logger
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
 	"os"
-	"time"
+	"strings"
 )
 
 // ============================================================================
 // LOGGER INTERFACE & TYPES
 // ============================================================================
 
-// Logger: Simple structured logging interface
+// Logger wraps slog.Logger while preserving the existing Printf-style API
+// used by all packages. The slog backend provides structured JSON output
+// and proper level filtering.
 type Logger struct {
-	level LogLevel
-	name  string
+	level  LogLevel
+	name   string
+	slog   *slog.Logger
+	format LogFormat
 }
 
 // LogLevel: Log severity levels
@@ -30,12 +37,36 @@ const (
 	ErrorLevel
 )
 
-// levelNames: Map level to string
+// LogFormat: Output format
+type LogFormat int
+
+const (
+	TextFormat LogFormat = iota
+	JSONFormat
+)
+
+// levelNames: Map level to string (used for text format fallback)
 var levelNames = map[LogLevel]string{
 	DebugLevel: "DEBUG",
 	InfoLevel:  "INFO",
 	WarnLevel:  "WARN",
 	ErrorLevel: "ERROR",
+}
+
+// toSlogLevel converts our LogLevel to slog.Level
+func toSlogLevel(l LogLevel) slog.Level {
+	switch l {
+	case DebugLevel:
+		return slog.LevelDebug
+	case InfoLevel:
+		return slog.LevelInfo
+	case WarnLevel:
+		return slog.LevelWarn
+	case ErrorLevel:
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
+	}
 }
 
 // ============================================================================
@@ -45,10 +76,49 @@ var levelNames = map[LogLevel]string{
 var globalLogger *Logger
 
 func init() {
-	globalLogger = &Logger{
-		level: DebugLevel, // turn it on for entering into debugging mode
-		//level: InfoLevel, // turn it on for turn off debugging mode
-		name: "ares",
+	level := InfoLevel
+	if envLevel := os.Getenv("ARES_LOG_LEVEL"); envLevel != "" {
+		switch strings.ToLower(envLevel) {
+		case "debug":
+			level = DebugLevel
+		case "info":
+			level = InfoLevel
+		case "warn":
+			level = WarnLevel
+		case "error":
+			level = ErrorLevel
+		}
+	}
+
+	format := TextFormat
+	if envFormat := os.Getenv("ARES_LOG_FORMAT"); strings.ToLower(envFormat) == "json" {
+		format = JSONFormat
+	}
+
+	globalLogger = newLogger("ares", level, format)
+}
+
+// newLogger creates a Logger with the given name, level, and format
+func newLogger(name string, level LogLevel, format LogFormat) *Logger {
+	opts := &slog.HandlerOptions{
+		Level: toSlogLevel(level),
+	}
+
+	var handler slog.Handler
+	if format == JSONFormat {
+		handler = slog.NewJSONHandler(os.Stdout, opts)
+	} else {
+		handler = slog.NewTextHandler(os.Stdout, opts)
+	}
+
+	// Add component name as a default attribute
+	slogger := slog.New(handler).With("component", name)
+
+	return &Logger{
+		level:  level,
+		name:   name,
+		slog:   slogger,
+		format: format,
 	}
 }
 
@@ -58,55 +128,60 @@ func Get() *Logger {
 }
 
 // ============================================================================
-// LOGGING METHODS
+// LOGGING METHODS (Printf-style API preserved for backward compatibility)
 // ============================================================================
 
 // Debug: Log debug message
 func (l *Logger) Debug(format string, args ...interface{}) {
 	if l.level <= DebugLevel {
-		l.log(DebugLevel, format, args...)
+		l.slog.Log(context.Background(), slog.LevelDebug, fmt.Sprintf(format, args...))
 	}
 }
 
 // Info: Log info message
 func (l *Logger) Info(format string, args ...interface{}) {
 	if l.level <= InfoLevel {
-		l.log(InfoLevel, format, args...)
+		l.slog.Log(context.Background(), slog.LevelInfo, fmt.Sprintf(format, args...))
 	}
 }
 
 // Warn: Log warning message
 func (l *Logger) Warn(format string, args ...interface{}) {
 	if l.level <= WarnLevel {
-		l.log(WarnLevel, format, args...)
+		l.slog.Log(context.Background(), slog.LevelWarn, fmt.Sprintf(format, args...))
 	}
 }
 
 // Error: Log error message
 func (l *Logger) Error(format string, args ...interface{}) {
 	if l.level <= ErrorLevel {
-		l.log(ErrorLevel, format, args...)
+		l.slog.Log(context.Background(), slog.LevelError, fmt.Sprintf(format, args...))
 	}
 }
 
 // ============================================================================
-// INTERNAL LOGGING
+// STRUCTURED LOGGING METHODS (new slog-style API)
 // ============================================================================
 
-// log: Internal logging function
-func (l *Logger) log(level LogLevel, format string, args ...interface{}) {
-	timestamp := time.Now().Format("2006-01-02 15:04:05.000")
-	levelStr := levelNames[level]
-
-	message := fmt.Sprintf(format, args...)
-	output := fmt.Sprintf("[%s] [%s] %s: %s\n", timestamp, l.name, levelStr, message)
-
-	// Write to stdout/stderr based on level
-	if level >= ErrorLevel {
-		fmt.Fprint(os.Stderr, output)
-	} else {
-		fmt.Fprint(os.Stdout, output)
+// With returns a new Logger with additional structured attributes.
+// Example: log.With("job_id", jobID, "cluster", clusterID).Info("scheduled")
+func (l *Logger) With(args ...any) *Logger {
+	return &Logger{
+		level:  l.level,
+		name:   l.name,
+		slog:   l.slog.With(args...),
+		format: l.format,
 	}
+}
+
+// InfoCtx logs at Info level with context (enables trace propagation)
+func (l *Logger) InfoCtx(ctx context.Context, format string, args ...interface{}) {
+	l.slog.Log(ctx, slog.LevelInfo, fmt.Sprintf(format, args...))
+}
+
+// ErrorCtx logs at Error level with context
+func (l *Logger) ErrorCtx(ctx context.Context, format string, args ...interface{}) {
+	l.slog.Log(ctx, slog.LevelError, fmt.Sprintf(format, args...))
 }
 
 // ============================================================================
@@ -114,22 +189,13 @@ func (l *Logger) log(level LogLevel, format string, args ...interface{}) {
 // ============================================================================
 
 // Sync: Flush any pending logs and close resources
-// This method is called during graceful shutdown
-// Error is ignored (best effort) as per logging patterns
 func (l *Logger) Sync() error {
-	// For a simple logger, Sync flushes stdout/stderr
-	// This is safe to call and returns no error
-
 	if err := os.Stdout.Sync(); err != nil {
-		// Log sync failed, but we can't log it (would be recursive)
-		// Just return the error
 		return err
 	}
-
 	if err := os.Stderr.Sync(); err != nil {
 		return err
 	}
-
 	return nil
 }
 
@@ -144,7 +210,7 @@ func (l *Logger) SetLevel(level LogLevel) {
 
 // SetLevelStr: Set log level from string
 func (l *Logger) SetLevelStr(levelStr string) {
-	switch levelStr {
+	switch strings.ToLower(levelStr) {
 	case "debug":
 		l.level = DebugLevel
 	case "info":
@@ -166,4 +232,10 @@ func (l *Logger) GetLevel() LogLevel {
 // SetName: Set logger name
 func (l *Logger) SetName(name string) {
 	l.name = name
+	l.slog = l.slog.With("component", name)
+}
+
+// Slog returns the underlying slog.Logger for direct slog usage
+func (l *Logger) Slog() *slog.Logger {
+	return l.slog
 }

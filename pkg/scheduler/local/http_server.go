@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/BITS08SATHYA/ares-scheduler/pkg/executor"
-	"github.com/BITS08SATHYA/ares-scheduler/pkg/logger"
-	"github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler/common"
+	"net"
 	"net/http"
 	"strconv"
 	"time"
+
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/executor"
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/logger"
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler/common"
 )
 
 // ============================================================================
@@ -55,14 +57,18 @@ func (lss *LocalSchedulerServer) Start() error {
 
 	lss.log.Info("LocalScheduler HTTP server starting on %s", addr)
 
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("failed to listen on %s: %w", addr, err)
+	}
+
 	go func() {
-		if err := lss.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := lss.server.Serve(ln); err != nil && err != http.ErrServerClosed {
 			lss.log.Error("Server error: %v", err)
 		}
 	}()
 
-	time.Sleep(100 * time.Millisecond)
-	lss.log.Info("LocalScheduler HTTP server ready!")
+	lss.log.Info("LocalScheduler HTTP server ready on %s", addr)
 	return nil
 }
 

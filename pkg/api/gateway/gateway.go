@@ -30,6 +30,7 @@ import (
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/job"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/logger"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/storage/redis"
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/telemetry"
 )
 
 // ============================================================================
@@ -317,6 +318,9 @@ type APIGateway struct {
 	// CRDT: Eventual consistency (Feature 16)
 	crdtStore   *crdt.CRDTStateStore
 	syncManager *crdt.SyncManager
+
+	// Storage clients for shutdown cleanup
+	etcdClient *etcd.ETCDClient
 }
 
 // GatewayConfig: Configuration for API gateway
@@ -560,7 +564,7 @@ func NewAPIGatewayWithCoordinator(
 		metrics:         metrics,
 		crdtStore:       crdtStore,
 		syncManager:     syncManager,
-		//k8sClient:       mockK8sClient, //
+		etcdClient:      etcdClient,
 	}
 
 	gatewayWithCoordinator := &APIGatewayWithCoordinator{
@@ -1026,7 +1030,7 @@ func (ag *APIGateway) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
 	w.WriteHeader(http.StatusOK)
 
-	ag.log.Info("DEBUG METRICS: latency_sum=%d, scheduled_count=%d",
+	ag.log.Debug("Metrics export: latency_sum=%d, scheduled_count=%d",
 		atomic.LoadInt64(&ag.metrics.SchedulingLatencySum),
 		atomic.LoadUint64(&ag.metrics.TotalScheduled))
 
@@ -1339,9 +1343,13 @@ func (ag *APIGateway) generateRequestID() string {
 func (ag *APIGateway) Start() error {
 	mux := ag.RegisterRoutes()
 	addr := fmt.Sprintf(":%d", ag.config.Port)
+
+	// Wrap with OpenTelemetry tracing middleware
+	handler := telemetry.HTTPMiddleware(mux)
+
 	ag.server = &http.Server{
 		Addr:         addr,
-		Handler:      mux,
+		Handler:      handler,
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 15 * time.Second,
 		IdleTimeout:  60 * time.Second,
@@ -1377,7 +1385,15 @@ func (ag *APIGateway) Stop(timeout time.Duration) error {
 		return err
 	}
 
-	// Release all leases so jobs can be rescheduled immediately
+	// Ordered shutdown: Orchestrator → Lease Manager → Storage → Logger
+
+	// Step 2: Cancel all active job monitors
+	if ag.jobCoordinator != nil {
+		ag.jobCoordinator.Shutdown()
+		ag.log.Info("✓ Job coordinator shutdown — all monitors cancelled")
+	}
+
+	// Step 3: Release all leases so jobs can be rescheduled immediately
 	// Without this, leases expire via TTL (30s) during which jobs are orphaned
 	if ag.leaseManager != nil {
 		count := ag.leaseManager.Close()
@@ -1387,7 +1403,17 @@ func (ag *APIGateway) Stop(timeout time.Duration) error {
 		ag.log.Info("✓ Lease manager shutdown — %d heartbeats cancelled", count)
 	}
 
-	ag.log.Info("✓ API Gateway stopped")
+	// Step 4: Close storage connections
+	if ag.etcdClient != nil {
+		ag.etcdClient.Close()
+		ag.log.Info("✓ etcd connection closed")
+	}
+	if ag.redisClient != nil {
+		ag.redisClient.Close()
+		ag.log.Info("✓ Redis connection closed")
+	}
+
+	ag.log.Info("✓ API Gateway stopped (ordered shutdown complete)")
 	return nil
 }
 

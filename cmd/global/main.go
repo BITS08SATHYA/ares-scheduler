@@ -9,6 +9,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"os"
 	"os/signal"
@@ -20,6 +21,7 @@ import (
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/cluster"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/logger"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/storage/redis"
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/telemetry"
 )
 
 // ============================================================================
@@ -113,6 +115,14 @@ func main() {
 			_ = log.Sync()
 		}
 	}()
+
+	// Initialize OpenTelemetry tracing (no-op if ARES_OTEL_ENABLED!=true)
+	if err := telemetry.Init(context.Background()); err != nil {
+		log.Warn("OpenTelemetry init failed (tracing disabled): %v", err)
+	} else if telemetry.IsEnabled() {
+		log.Info("OpenTelemetry tracing enabled")
+		defer telemetry.Shutdown(context.Background())
+	}
 
 	log.Info("")
 	log.Info("╔════════════════════════════════════════════════════════╗")

@@ -143,7 +143,9 @@ func NewLocalScheduler(
 	}
 
 	// Restore GPU allocations from Redis on startup
-	if err := ls.loadAllGPUAllocations(context.Background()); err != nil {
+	initCtx, initCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer initCancel()
+	if err := ls.loadAllGPUAllocations(initCtx); err != nil {
 		ls.log.Warn("Failed to load GPU allocations from Redis (non-fatal): %v", err)
 	}
 
@@ -890,8 +892,9 @@ func (ls *LocalScheduler) GetDiscoveredGPUTypes() []string {
 		return nil
 	}
 
-	ctx := context.Background()
-	gpus, err := ls.gpuDiscovery.DiscoverGPUs(ctx)
+	discoverCtx, discoverCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer discoverCancel()
+	gpus, err := ls.gpuDiscovery.DiscoverGPUs(discoverCtx)
 	if err != nil || len(gpus) == 0 {
 		return nil
 	}
@@ -1064,9 +1067,10 @@ func (ls *LocalScheduler) ReleaseJobResources(jobID string) {
 	}
 	ls.nodesMu.Unlock()
 
-	ctx := context.Background()
-	ls.saveGPUAllocations(ctx, foundNodeID)
-	ls.UpdateNodeState(ctx, node)
+	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cleanupCancel()
+	ls.saveGPUAllocations(cleanupCtx, foundNodeID)
+	ls.UpdateNodeState(cleanupCtx, node)
 
 	ls.log.Info("ReleaseJobResources: freed %d GPUs on node %s for job %s", gpuCount, foundNodeID, jobID)
 }

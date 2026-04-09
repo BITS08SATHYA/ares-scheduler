@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/cluster"
@@ -14,6 +15,10 @@ import (
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/logger"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler/common"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler/global"
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/telemetry"
+
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // ============================================================================
@@ -41,6 +46,7 @@ type JobCoordinator struct {
 	globalScheduler *global.GlobalScheduler
 	log             *logger.Logger
 	metricsRecorder *MetricsRecorder
+	monitors        sync.Map // map[string]context.CancelFunc — per-job monitor cancellation
 }
 
 // Metrics Recorder
@@ -114,6 +120,18 @@ func (jc *JobCoordinator) ScheduleJob(
 		return nil, fmt.Errorf("invalid job spec: nil or empty request ID")
 	}
 
+	// Start tracing span for the scheduling pipeline
+	tracer := telemetry.Tracer("ares.orchestrator")
+	ctx, span := tracer.Start(ctx, "ScheduleJob",
+		trace.WithAttributes(
+			attribute.String("request_id", jobSpec.RequestID),
+			attribute.String("gpu_type", jobSpec.GPUType),
+			attribute.Int("gpu_count", jobSpec.GPUCount),
+			attribute.Int("priority", jobSpec.Priority),
+		),
+	)
+	defer span.End()
+
 	// ========================================================================
 	// STEP 1: Generate job ID and atomically reserve (idempotency)
 	// Job ID is generated BEFORE SetNX so the placeholder contains the real
@@ -121,6 +139,7 @@ func (jc *JobCoordinator) ScheduleJob(
 	// ========================================================================
 
 	jobID := fmt.Sprintf("job-%d-%s", time.Now().UnixNano(), jobSpec.RequestID)
+	span.SetAttributes(attribute.String("job_id", jobID))
 
 	cachedResult, isDuplicate, err := jc.idempotencyMgr.CheckAndReserve(ctx, jobSpec.RequestID, jobID)
 	if err != nil {
@@ -206,8 +225,10 @@ func (jc *JobCoordinator) ScheduleJob(
 	// ========================================================================
 	// STEP 4: Call global scheduler (cluster selection)
 	// ========================================================================
+	_, schedSpan := tracer.Start(ctx, "GlobalScheduler.ScheduleJob")
 	schedStart := time.Now()
 	globalDecision, err := jc.globalScheduler.ScheduleJob(ctx, jobRecord)
+	schedSpan.End()
 	if jc.metricsRecorder != nil && jc.metricsRecorder.OnSchedulingLatency != nil {
 		jc.metricsRecorder.OnSchedulingLatency(time.Since(schedStart))
 	}
@@ -231,6 +252,10 @@ func (jc *JobCoordinator) ScheduleJob(
 		}, nil
 	}
 
+	span.SetAttributes(
+		attribute.String("cluster_id", globalDecision.ClusterID),
+		attribute.Float64("cluster_score", globalDecision.ClusterScore),
+	)
 	jc.log.Debug("GlobalDecision json (body): %v", globalDecision)
 	jc.log.Info("Job %s scheduled to cluster %s", jobID, globalDecision.ClusterID)
 
@@ -241,10 +266,6 @@ func (jc *JobCoordinator) ScheduleJob(
 	jobRecord.Status = common.StatusScheduled
 	jobRecord.ClusterID = globalDecision.ClusterID
 	jobRecord.ScheduleTime = time.Now()
-
-	//if jc.metricsRecorder != nil && jc.metricsRecorder.OnJobDequeued != nil {
-	//	jc.metricsRecorder.OnJobDequeued()
-	//}
 
 	// Attached the executionToken (fencing Token) attached to the job record that goes to the pod (during execution)
 	jobRecord.ExecutionToken = fmt.Sprintf("ares-fence-%s-%d", jobID, leaseID)
@@ -283,12 +304,19 @@ func (jc *JobCoordinator) ScheduleJob(
 	// Critical step: LocalScheduler --> returns to Job Coordinator --> calls executor (real k8 client)
 	// ========================================================================
 
+	maxMonitorDuration := time.Duration(jobSpec.TimeoutSecs)*time.Second + 5*time.Minute
+	if jobSpec.TimeoutSecs == 0 {
+		maxMonitorDuration = 24 * time.Hour // default max monitor duration
+	}
+	monitorCtx, monitorCancel := context.WithTimeout(context.Background(), maxMonitorDuration)
+	jc.monitors.Store(jobID, monitorCancel)
 	go func() {
-		monitorCtx := context.Background()
+		defer jc.monitors.Delete(jobID)
 		err := jc.MonitorJob(monitorCtx, jobID, leaseID)
 		if err != nil {
 			jc.log.Error("Monitoring failed for job %s: %v", jobID, err)
 		}
+		monitorCancel()
 	}()
 
 	// ========================================================================
@@ -296,13 +324,12 @@ func (jc *JobCoordinator) ScheduleJob(
 	// ========================================================================
 
 	result := &SchedulingResult{
-		JobID:            jobID,
-		ClusterID:        globalDecision.ClusterID,
-		NodeID:           globalDecision.NodeID,
-		GPUIndices:       globalDecision.GPUIndices,
-		ClusterScore:     globalDecision.ClusterScore,
-		PlacementReasons: globalDecision.PlacementReasons,
-		//PodName:            createdPodName,
+		JobID:              jobID,
+		ClusterID:          globalDecision.ClusterID,
+		NodeID:             globalDecision.NodeID,
+		GPUIndices:         globalDecision.GPUIndices,
+		ClusterScore:       globalDecision.ClusterScore,
+		PlacementReasons:   globalDecision.PlacementReasons,
 		LocalSchedulerAddr: globalDecision.LocalSchedulerAddr,
 		LeaseID:            leaseID,
 		CreatedAt:          time.Now(),
@@ -310,8 +337,6 @@ func (jc *JobCoordinator) ScheduleJob(
 	}
 
 	jc.log.Debug("The final Result (json payload): %v", result)
-
-	//jc.log.Info("Job %s fully scheduled (Pod=%s, leaseID=%d)", jobID, createdPodName, leaseID)
 
 	return result, nil
 
@@ -418,8 +443,8 @@ func (jc *JobCoordinator) MonitorJob(ctx context.Context, jobID string, leaseID 
 						jobID, jobRecord.Attempts+1, jobRecord.Spec.MaxRetries)
 					go func() {
 						retryCtx, retryCancel := contextWithCleanupTimeout()
-					defer retryCancel()
-					retryErr := jc.RetryJob(retryCtx, jobID, leaseID)
+						defer retryCancel()
+						retryErr := jc.RetryJob(retryCtx, jobID, leaseID)
 						if retryErr != nil {
 							jc.log.Error("Auto-retry failed for job %s: %v", jobID, retryErr)
 						}
@@ -851,14 +876,35 @@ func (jc *JobCoordinator) reconcileQueuedJobs(ctx context.Context) {
 			}
 		}
 
-		// Start monitoring
-		go func(jID string, lID int64) {
-			monitorCtx := context.Background()
-			jc.MonitorJob(monitorCtx, jID, lID)
-		}(jobRecord.ID, leaseID)
+		// Start monitoring with cancellable context
+		go func(jID string, lID int64, timeoutSecs int) {
+			maxDuration := time.Duration(timeoutSecs)*time.Second + 5*time.Minute
+			if timeoutSecs == 0 {
+				maxDuration = 24 * time.Hour
+			}
+			mCtx, mCancel := context.WithTimeout(context.Background(), maxDuration)
+			jc.monitors.Store(jID, mCancel)
+			defer func() {
+				jc.monitors.Delete(jID)
+				mCancel()
+			}()
+			jc.MonitorJob(mCtx, jID, lID)
+		}(jobRecord.ID, leaseID, jobRecord.Spec.TimeoutSecs)
 
 		jc.log.Info("RECONCILER: ★ Job %s scheduled to cluster %s (was queued)",
 			jobRecord.ID, globalDecision.ClusterID)
 		scheduled++
 	}
+}
+
+// Shutdown cancels all active monitor goroutines for graceful shutdown
+func (jc *JobCoordinator) Shutdown() {
+	jc.log.Info("JobCoordinator shutting down: cancelling all active monitors")
+	jc.monitors.Range(func(key, value interface{}) bool {
+		if cancelFn, ok := value.(context.CancelFunc); ok {
+			cancelFn()
+		}
+		jc.monitors.Delete(key)
+		return true
+	})
 }

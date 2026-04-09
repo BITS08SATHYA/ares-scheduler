@@ -216,6 +216,9 @@ func StartHeartbeat(ctx context.Context, config *HeartbeatConfig) {
 			runningJobs := safeGetInt(load, "running_jobs", 0)
 			pendingJobs := safeGetInt(load, "pending_jobs", 0)
 
+			// Determine health status from load data
+			healthStatus := determineHealthStatus(load, failureCount)
+
 			// Build heartbeat request
 			hbReq := &ClusterHeartbeatRequest{
 				ClusterID:   config.ClusterID,
@@ -224,7 +227,7 @@ func StartHeartbeat(ctx context.Context, config *HeartbeatConfig) {
 				CPUsInUse:   cpusInUse,
 				RunningJobs: runningJobs,
 				PendingJobs: pendingJobs,
-				Status:      "healthy", // TODO: Check actual health
+				Status:      healthStatus,
 				GPUTypes:    safeGetStringSlice(load, "gpu_types"),
 			}
 
@@ -278,6 +281,40 @@ func sendHeartbeatRequest(ctx context.Context, controlPlaneURL string, req *Clus
 	}
 
 	return nil
+}
+
+// ============================================================================
+// HEALTH STATUS DETERMINATION
+// ============================================================================
+
+// determineHealthStatus checks actual cluster health based on load data and
+// recent heartbeat failure count. Returns "healthy", "degraded", or "unhealthy".
+func determineHealthStatus(load map[string]interface{}, consecutiveFailures int) string {
+	// If we've had recent heartbeat failures, report degraded
+	if consecutiveFailures >= 3 {
+		return "unhealthy"
+	}
+	if consecutiveFailures >= 1 {
+		return "degraded"
+	}
+
+	// Check if load data reports any error indicators
+	if errVal, ok := load["error"]; ok && errVal != nil {
+		return "degraded"
+	}
+
+	// Check GPU availability — if no GPUs are reported and we expect them, degraded
+	totalGPUs := safeGetInt(load, "total_gpus", -1)
+	availableGPUs := safeGetInt(load, "available_gpus", -1)
+	if totalGPUs > 0 && availableGPUs == 0 {
+		// All GPUs in use is not unhealthy, just fully loaded
+		return "healthy"
+	}
+	if totalGPUs == 0 {
+		return "degraded"
+	}
+
+	return "healthy"
 }
 
 // ============================================================================
