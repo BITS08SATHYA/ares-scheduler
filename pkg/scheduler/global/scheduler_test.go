@@ -467,7 +467,7 @@ func TestScheduleJob_InvalidGPUCount(t *testing.T) {
 	job := &common.Job{ID: "j1", Spec: &common.JobSpec{Name: "test", GPUCount: 300}}
 	_, err := gs.ScheduleJob(context.Background(), job)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "Invalid GPU count")
+	assert.Contains(t, err.Error(), "invalid GPU count")
 }
 
 // ============================================================================
