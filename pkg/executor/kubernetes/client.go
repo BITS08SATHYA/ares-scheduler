@@ -14,7 +14,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8sClient "k8s.io/client-go/kubernetes"
-	k8sCoreClient "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	metricsv1beta1 "k8s.io/metrics/pkg/client/clientset/versioned"
@@ -31,7 +30,7 @@ import (
 // ============================================================================
 
 type K8sClientImpl struct {
-	clientset     k8sCoreClient.Interface
+	clientset     k8sClient.Interface
 	namespace     string
 	metricsClient metricsv1beta1.Interface
 }

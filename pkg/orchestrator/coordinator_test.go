@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"context"
 	"testing"
 
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/cluster"
@@ -103,14 +104,14 @@ func TestNewJobCoordinator(t *testing.T) {
 
 func TestScheduleJob_NilSpec(t *testing.T) {
 	jc := NewJobCoordinator(nil, nil, nil, nil, nil)
-	_, err := jc.ScheduleJob(nil, nil)
+	_, err := jc.ScheduleJob(context.TODO(), nil)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid job spec")
 }
 
 func TestScheduleJob_EmptyRequestID(t *testing.T) {
 	jc := NewJobCoordinator(nil, nil, nil, nil, nil)
-	_, err := jc.ScheduleJob(nil, &common.JobSpec{RequestID: ""})
+	_, err := jc.ScheduleJob(context.TODO(), &common.JobSpec{RequestID: ""})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "empty request ID")
 }
