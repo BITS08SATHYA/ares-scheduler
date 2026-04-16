@@ -121,7 +121,8 @@ func main() {
 		fmt.Println("ERROR: Cannot reach control plane at", *controlPlane)
 		os.Exit(1)
 	}
-	fmt.Println("✓ Control plane reachable\n")
+	fmt.Println("✓ Control plane reachable")
+	fmt.Println()
 
 	results := make([]BenchmarkResult, 0)
 
@@ -221,7 +222,8 @@ func cleanupBetweenSuites(etcdEndpoint string, redisAddr string, localSchedulerA
 	// Wait for reconciler to settle and cluster to report clean state
 	fmt.Println("  ✓ Waiting 30s for cluster to stabilize...")
 	time.Sleep(30 * time.Second)
-	fmt.Println("  ✓ Cleanup complete\n")
+	fmt.Println("  ✓ Cleanup complete")
+	fmt.Println()
 }
 
 // resetLocalSchedulerGPUs calls the local scheduler's /reset-gpus endpoint
