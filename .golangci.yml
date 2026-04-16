@@ -16,6 +16,11 @@ linters:
     - misspell
     - revive
   settings:
+    errcheck:
+      exclude-functions:
+        # HTTP response encoding — client already has the status code,
+        # nothing useful we can do if the write fails.
+        - (*encoding/json.Encoder).Encode
     revive:
       rules:
         - name: exported

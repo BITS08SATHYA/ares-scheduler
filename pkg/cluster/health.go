@@ -114,17 +114,19 @@ func (hm *HealthMonitor) ReceivedHeartbeat(ctx context.Context, heartbeat *Heart
 
 	// Update cluster capacity (triggers JOINING → READY on first heartbeat)
 	if heartbeat.GPUCount > 0 || heartbeat.MemoryGB > 0 {
-		hm.clusterManager.UpdateClusterCapacity(
+		if err := hm.clusterManager.UpdateClusterCapacity(
 			ctx,
 			heartbeat.ClusterID,
 			heartbeat.GPUCount,
 			0, // CPUs not in heartbeat yet
 			heartbeat.MemoryGB,
-		)
+		); err != nil {
+			hm.log.Warn("UpdateClusterCapacity failed for %s: %v", heartbeat.ClusterID, err)
+		}
 	}
 
 	// Update cluster manager with new load
-	hm.clusterManager.UpdateClusterLoad(
+	if err := hm.clusterManager.UpdateClusterLoad(
 		ctx,
 		heartbeat.ClusterID,
 		heartbeat.GPUsInUse,
@@ -132,7 +134,9 @@ func (hm *HealthMonitor) ReceivedHeartbeat(ctx context.Context, heartbeat *Heart
 		heartbeat.MemGBInUse,
 		heartbeat.RunningJobs,
 		heartbeat.PendingJobs,
-	)
+	); err != nil {
+		hm.log.Warn("UpdateClusterLoad failed for %s: %v", heartbeat.ClusterID, err)
+	}
 
 	hm.log.Debug("Received heartbeat from %s: health=%v, jobs=%d, gpus=%d/%d",
 		heartbeat.ClusterID, health.IsHealthy, heartbeat.RunningJobs,
@@ -187,7 +191,9 @@ func (hm *HealthMonitor) CheckClusterHealth(ctx context.Context) int {
 					unHealthyCount++
 
 					// Update cluster manager
-					hm.clusterManager.UpdateClusterState(ctx, clusterID, StateUnhealthy)
+					if err := hm.clusterManager.UpdateClusterState(ctx, clusterID, StateUnhealthy); err != nil {
+						hm.log.Warn("UpdateClusterState failed for %s: %v", clusterID, err)
+					}
 
 					// Notify listeners
 					hm.notifyUnhealthy(ctx, clusterID, "no heartbeat")

@@ -121,7 +121,7 @@ func main() {
 		log.Warn("OpenTelemetry init failed (tracing disabled): %v", err)
 	} else if telemetry.IsEnabled() {
 		log.Info("OpenTelemetry tracing enabled")
-		defer telemetry.Shutdown(context.Background())
+		defer func() { _ = telemetry.Shutdown(context.Background()) }()
 	}
 
 	log.Info("")

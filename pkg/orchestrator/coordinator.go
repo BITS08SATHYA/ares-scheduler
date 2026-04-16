@@ -240,7 +240,9 @@ func (jc *JobCoordinator) ScheduleJob(
 			jc.metricsRecorder.OnJobQueued()
 		}
 		cleanupCtx, cleanupCancel := contextWithCleanupTimeout()
-		jc.jobStore.SaveJob(cleanupCtx, jobRecord, leaseID)
+		if err := jc.jobStore.SaveJob(cleanupCtx, jobRecord, leaseID); err != nil {
+			jc.log.Warn("Failed to persist queued job %s (will still be accepted): %v", jobID, err)
+		}
 		cleanupCancel()
 
 		// Return success to the user — job is accepted but queued
@@ -432,7 +434,9 @@ func (jc *JobCoordinator) MonitorJob(ctx context.Context, jobID string, leaseID 
 				func() {
 					ctx, cancel := contextWithCleanupTimeout()
 					defer cancel()
-					jc.leaseManager.ReleaseLeaseForJob(ctx, jobID)
+					if err := jc.leaseManager.ReleaseLeaseForJob(ctx, jobID); err != nil {
+						jc.log.Warn("ReleaseLeaseForJob failed for completed job %s: %v", jobID, err)
+					}
 				}()
 				return nil
 			}
@@ -459,7 +463,9 @@ func (jc *JobCoordinator) MonitorJob(ctx context.Context, jobID string, leaseID 
 				func() {
 					ctx, cancel := contextWithCleanupTimeout()
 					defer cancel()
-					jc.leaseManager.ReleaseLeaseForJob(ctx, jobID)
+					if err := jc.leaseManager.ReleaseLeaseForJob(ctx, jobID); err != nil {
+						jc.log.Warn("ReleaseLeaseForJob failed for failed job %s: %v", jobID, err)
+					}
 				}()
 				return nil
 			}
@@ -482,7 +488,9 @@ func (jc *JobCoordinator) MonitorJob(ctx context.Context, jobID string, leaseID 
 				func() {
 					ctx, cancel := contextWithCleanupTimeout()
 					defer cancel()
-					jc.leaseManager.ReleaseLeaseForJob(ctx, jobID)
+					if err := jc.leaseManager.ReleaseLeaseForJob(ctx, jobID); err != nil {
+						jc.log.Warn("ReleaseLeaseForJob failed on timeout for job %s: %v", jobID, err)
+					}
 				}()
 				return fmt.Errorf("job timeout")
 			}
@@ -612,7 +620,9 @@ func (jc *JobCoordinator) CompleteJob(
 	}
 
 	// Release lease when job completes
-	jc.leaseManager.ReleaseLeaseForJob(ctx, jobID)
+	if err := jc.leaseManager.ReleaseLeaseForJob(ctx, jobID); err != nil {
+		jc.log.Warn("ReleaseLeaseForJob failed after fenced completion of %s: %v", jobID, err)
+	}
 
 	jc.log.Info("✓ Job %s completed with status %s (fenced, modRevision=%d)", jobID, finalStatus, modRevision)
 	return nil
@@ -900,7 +910,9 @@ func (jc *JobCoordinator) reconcileQueuedJobs(ctx context.Context) {
 				jc.monitors.Delete(jID)
 				mCancel()
 			}()
-			jc.MonitorJob(mCtx, jID, lID)
+			if err := jc.MonitorJob(mCtx, jID, lID); err != nil {
+				jc.log.Warn("RECONCILER: MonitorJob for %s exited with error: %v", jID, err)
+			}
 		}(jobRecord.ID, leaseID, jobRecord.Spec.TimeoutSecs)
 
 		jc.log.Info("RECONCILER: ★ Job %s scheduled to cluster %s (was queued)",

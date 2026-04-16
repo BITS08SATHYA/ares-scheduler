@@ -310,7 +310,10 @@ func (gtm *GPUTopologyManager) queryGPUNUMAMapping(ctx context.Context) (map[int
 		}
 
 		var gpuIndex int
-		fmt.Sscanf(line, "GPU %d:", &gpuIndex)
+		if _, err := fmt.Sscanf(line, "GPU %d:", &gpuIndex); err != nil {
+			gtm.log.Debug("Skipping unparseable GPU line %q: %v", line, err)
+			continue
+		}
 
 		numaNode, err := gtm.queryGPUNUMANode(ctx, gpuIndex)
 		if err != nil {

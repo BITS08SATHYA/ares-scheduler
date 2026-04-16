@@ -137,7 +137,7 @@ func main() {
 
 	// Initialize logger
 	log := initializeLogger(*logLevel)
-	defer log.Sync()
+	defer func() { _ = log.Sync() }()
 
 	log.Info("╔═══════════════════════════════════════════════════════╗")
 	log.Info("║   Ares Local Scheduler - Worker Cluster               ║")
@@ -180,7 +180,7 @@ func main() {
 		log.Error("Failed to connect to Redis: %v", err)
 		os.Exit(1)
 	}
-	defer redisClient.Close()
+	defer func() { _ = redisClient.Close() }()
 	log.Info("Connected to Redis")
 
 	// ========================================================================
@@ -195,7 +195,7 @@ func main() {
 		log.Error("Failed to connect to etcd: %v", err)
 		os.Exit(1)
 	}
-	defer etcdClient.Close()
+	defer func() { _ = etcdClient.Close() }()
 	log.Info("Connected to etcd")
 
 	// ========================================================================
@@ -590,7 +590,7 @@ func getHostIP() string {
 	if err != nil {
 		return ""
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	localAddr := conn.LocalAddr().(*net.UDPAddr)
 	return localAddr.IP.String()

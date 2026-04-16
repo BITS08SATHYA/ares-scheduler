@@ -999,7 +999,10 @@ func (gm *GangManager) handleDeadlock(cycle []string) {
 	if lowestGang != nil {
 		gm.log.Warn("GANG: Resolving deadlock by canceling %s (priority=%d)",
 			lowestGang.Spec.GangID, lowestGang.Spec.Priority)
-		gm.CancelGang(lowestGang.Spec.GangID)
+		if err := gm.CancelGang(lowestGang.Spec.GangID); err != nil {
+			gm.log.Warn("GANG: CancelGang during deadlock resolution failed for %s: %v",
+				lowestGang.Spec.GangID, err)
+		}
 		gm.deadlockDetector.RemoveGang(lowestGang.Spec.GangID)
 	}
 }

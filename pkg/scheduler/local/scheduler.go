@@ -1071,7 +1071,9 @@ func (ls *LocalScheduler) ReleaseJobResources(jobID string) {
 	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cleanupCancel()
 	ls.saveGPUAllocations(cleanupCtx, foundNodeID)
-	ls.UpdateNodeState(cleanupCtx, node)
+	if err := ls.UpdateNodeState(cleanupCtx, node); err != nil {
+		ls.log.Warn("UpdateNodeState failed after releasing job %s: %v", jobID, err)
+	}
 
 	ls.log.Info("ReleaseJobResources: freed %d GPUs on node %s for job %s", gpuCount, foundNodeID, jobID)
 }

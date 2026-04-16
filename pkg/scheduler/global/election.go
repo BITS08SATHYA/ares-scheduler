@@ -90,7 +90,7 @@ func (le *LeaderElector) campaignAndLead(ctx context.Context, leaderFunc func(ct
 	if err != nil {
 		return fmt.Errorf("create session failed: %w", err)
 	}
-	defer session.Close()
+	defer func() { _ = session.Close() }()
 
 	election := concurrency.NewElection(session, le.prefix)
 

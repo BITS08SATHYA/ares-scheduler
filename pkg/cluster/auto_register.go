@@ -145,7 +145,7 @@ func sendRegistrationRequest(ctx context.Context, controlPlaneURL string, req *C
 	if err != nil {
 		return fmt.Errorf("http request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(resp.Body)
@@ -274,7 +274,7 @@ func sendHeartbeatRequest(ctx context.Context, controlPlaneURL string, req *Clus
 	if err != nil {
 		return fmt.Errorf("http request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("heartbeat failed: status=%d", resp.StatusCode)
@@ -422,7 +422,7 @@ func DeregisterCluster(ctx context.Context, controlPlaneURL string, clusterID st
 	if err != nil {
 		return fmt.Errorf("deregister request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("deregister failed: status %d", resp.StatusCode)

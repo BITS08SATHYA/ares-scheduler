@@ -140,7 +140,7 @@ func (c *LocalSchedulerClient) ScheduleJob(
 		c.log.Error("HTTP request failed: %v", err)
 		return nil, fmt.Errorf("http request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// Parse response
 	body, err := io.ReadAll(resp.Body)
@@ -189,7 +189,7 @@ func (c *LocalSchedulerClient) GetClusterHealth(
 	if err != nil {
 		return nil, fmt.Errorf("http request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var health map[string]interface{}
 	err = json.NewDecoder(resp.Body).Decode(&health)
@@ -232,7 +232,7 @@ func (c *LocalSchedulerClient) CancelJob(
 	if err != nil {
 		return fmt.Errorf("http request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)

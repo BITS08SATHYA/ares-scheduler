@@ -325,7 +325,7 @@ func (kc *K8sClientImpl) GetPodLogs(ctx context.Context, podName string) (string
 	if err != nil {
 		return "", fmt.Errorf("failed to get logs: %w", err)
 	}
-	defer logs.Close()
+	defer func() { _ = logs.Close() }()
 
 	data, err := io.ReadAll(logs)
 	return string(data), err

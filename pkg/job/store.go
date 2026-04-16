@@ -442,7 +442,9 @@ func (store *ETCDJobStore) CleanupOldJobs(ctx context.Context, olderThan time.Du
 	for _, job := range jobs {
 		if job.Status == common.StatusSucceeded || job.Status == common.StatusFailed {
 			if job.EndTime.Before(cutoff) {
-				store.DeleteJob(ctx, job.ID)
+				if err := store.DeleteJob(ctx, job.ID); err != nil {
+					store.log.Warn("Failed to delete old job %s during cleanup: %v", job.ID, err)
+				}
 			}
 		}
 	}

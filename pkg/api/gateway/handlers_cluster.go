@@ -33,7 +33,7 @@ func (ag *APIGateway) handleRegisterCluster(w http.ResponseWriter, r *http.Reque
 	// Parse request using canonical type from pkg/cluster
 	var regReq cluster.ClusterRegistrationRequest
 	decoder := json.NewDecoder(r.Body)
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 
 	if err := decoder.Decode(&regReq); err != nil {
 		ag.respondError(w, http.StatusBadRequest, "INVALID_JSON",
@@ -138,7 +138,9 @@ func (ag *APIGateway) handleRegisterCluster(w http.ResponseWriter, r *http.Reque
 	}
 
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(response)
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		ag.log.Warn("failed to encode cluster register response: %v", err)
+	}
 
 	ag.metrics.RecordClusterJoin()
 
@@ -161,7 +163,7 @@ func (ag *APIGateway) handleDeregisterCluster(w http.ResponseWriter, r *http.Req
 			fmt.Sprintf("invalid JSON: %v", err))
 		return
 	}
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 
 	deregReq.ClusterID = strings.TrimSpace(deregReq.ClusterID)
 	if deregReq.ClusterID == "" {
@@ -189,7 +191,9 @@ func (ag *APIGateway) handleDeregisterCluster(w http.ResponseWriter, r *http.Req
 	}
 
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(response)
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		ag.log.Warn("failed to encode cluster deregister response: %v", err)
+	}
 
 	ag.metrics.RecordClusterLeave()
 
@@ -215,7 +219,7 @@ func (ag *APIGateway) handleClusterHeartbeat(w http.ResponseWriter, r *http.Requ
 			fmt.Sprintf("invalid JSON: %v", err))
 		return
 	}
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 
 	hbReq.ClusterID = strings.TrimSpace(hbReq.ClusterID)
 	if hbReq.ClusterID == "" {
