@@ -273,7 +273,7 @@ func (sm *SyncManager) pushState(ctx context.Context, peer PeerInfo) {
 		sm.failedSyncs++
 		return
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	sm.totalBytesSent += uint64(len(data))
 	sm.markPeerHealthy(peer.NodeID)
@@ -299,7 +299,7 @@ func (sm *SyncManager) pullState(ctx context.Context, peer PeerInfo) {
 		sm.failedSyncs++
 		return
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -349,7 +349,7 @@ func (sm *SyncManager) pushPullState(ctx context.Context, peer PeerInfo) {
 		sm.failedSyncs++
 		return
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	sm.totalBytesSent += uint64(len(data))
 
@@ -395,12 +395,14 @@ func (sm *SyncManager) HandleSyncPush(w http.ResponseWriter, r *http.Request) {
 	result := sm.store.MergeRemoteState(remoteStore)
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	if err := json.NewEncoder(w).Encode(map[string]interface{}{
 		"merged":             result.Success,
 		"clusters_updated":   result.ClustersUpdated,
 		"jobs_updated":       result.JobsUpdated,
 		"conflicts_resolved": result.ConflictsResolved,
-	})
+	}); err != nil {
+		sm.log.Warn("CRDT SYNC: Failed to encode push response: %v", err)
+	}
 }
 
 // HandleStateRequest: Handle state pull request from a peer
@@ -413,7 +415,9 @@ func (sm *SyncManager) HandleStateRequest(w http.ResponseWriter, r *http.Request
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	w.Write(data)
+	if _, err := w.Write(data); err != nil {
+		sm.log.Warn("CRDT SYNC: Failed to write state response: %v", err)
+	}
 }
 
 // HandleSyncExchange: Handle push-pull exchange from a peer
@@ -445,7 +449,9 @@ func (sm *SyncManager) HandleSyncExchange(w http.ResponseWriter, r *http.Request
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	w.Write(data)
+	if _, err := w.Write(data); err != nil {
+		sm.log.Warn("CRDT SYNC: Failed to write exchange response: %v", err)
+	}
 }
 
 // ============================================================================
