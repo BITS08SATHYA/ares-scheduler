@@ -1,3 +1,5 @@
+//go:build integration
+
 package gpu_test
 
 import (

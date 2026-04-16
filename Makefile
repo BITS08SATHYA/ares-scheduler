@@ -56,6 +56,14 @@ build-benchmark: ## Build benchmark tool
 test: ## Run unit tests
 	go test ./tests/unit/...
 
+.PHONY: test-integration
+test-integration: ## Run integration tests (requires etcd + live cluster)
+	go test -tags=integration ./tests/integration/...
+
+.PHONY: lint
+lint: ## Run golangci-lint
+	golangci-lint run
+
 .PHONY: fmt
 fmt: ## Format Go source files
 	gofmt -w .
