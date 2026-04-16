@@ -45,14 +45,6 @@ const (
 	JSONFormat
 )
 
-// levelNames: Map level to string (used for text format fallback)
-var levelNames = map[LogLevel]string{
-	DebugLevel: "DEBUG",
-	InfoLevel:  "INFO",
-	WarnLevel:  "WARN",
-	ErrorLevel: "ERROR",
-}
-
 // toSlogLevel converts our LogLevel to slog.Level
 func toSlogLevel(l LogLevel) slog.Level {
 	switch l {

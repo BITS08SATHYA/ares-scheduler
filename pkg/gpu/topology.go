@@ -11,7 +11,6 @@ import (
 	"math/rand"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -1068,80 +1067,4 @@ func (gtm *GPUTopologyManager) FindNvidiaSMI() string {
 
 	log.Warn("opt helper location was used .. nvidia-smi not found in any standard location")
 	return ""
-}
-
-// ============================================================================
-// GPU DISCOVERY HELPERS (For Fallback)
-// ============================================================================
-
-func detectGPUsFromKubernetesNode(nodeName string) ([]*common.GPUDevice, error) {
-	log := logger.Get()
-
-	cmd := exec.Command("kubectl", "get", "node", nodeName, "-o", "json")
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return nil, fmt.Errorf("kubectl failed: %w", err)
-	}
-
-	outputStr := string(output)
-	gpus := make([]*common.GPUDevice, 0)
-
-	if strings.Contains(outputStr, "cloud.google.com/gke-accelerator") {
-		gpuType := "UNKNOWN"
-		if strings.Contains(outputStr, "nvidia-tesla-t4") {
-			gpuType = "Tesla T4"
-		} else if strings.Contains(outputStr, "nvidia-tesla-v100") {
-			gpuType = "Tesla V100"
-		} else if strings.Contains(outputStr, "nvidia-tesla-a100") {
-			gpuType = "Tesla A100"
-		}
-
-		gpuCount := 1
-
-		for i := 0; i < gpuCount; i++ {
-			gpus = append(gpus, &common.GPUDevice{
-				Index:    i,
-				UUID:     fmt.Sprintf("GPU-%d", i),
-				Type:     gpuType,
-				MemoryGB: 16.0,
-			})
-		}
-
-		log.Info("✓ Detected %d GPU(s) via Kubernetes labels: %s", gpuCount, gpuType)
-	}
-
-	return gpus, nil
-}
-
-func detectGPUsFromProc() ([]*common.GPUDevice, error) {
-	log := logger.Get()
-
-	versionPath := "/proc/driver/nvidia/version"
-	if _, err := exec.Command("test", "-f", versionPath).CombinedOutput(); err != nil {
-		return nil, fmt.Errorf("NVIDIA driver not loaded (no %s)", versionPath)
-	}
-
-	gpuDevices, err := filepath.Glob("/proc/driver/nvidia/gpus/*/information")
-	if err != nil {
-		return nil, err
-	}
-
-	gpuCount := len(gpuDevices)
-	if gpuCount == 0 {
-		return nil, fmt.Errorf("no GPU devices found in /proc/driver/nvidia/gpus")
-	}
-
-	log.Info("✓ Detected %d GPU(s) via /proc filesystem", gpuCount)
-
-	gpus := make([]*common.GPUDevice, gpuCount)
-	for i := 0; i < gpuCount; i++ {
-		gpus[i] = &common.GPUDevice{
-			Index:    i,
-			UUID:     fmt.Sprintf("GPU-%d", i),
-			Type:     "NVIDIA GPU",
-			MemoryGB: 16.0,
-		}
-	}
-
-	return gpus, nil
 }

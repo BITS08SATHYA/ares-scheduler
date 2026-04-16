@@ -21,7 +21,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -296,13 +295,11 @@ type APIGateway struct {
 	idempotencyMgr *idempotency.IdempotencyManager
 	leaseManager   *lease.LeaseManager
 	clusterManager *cluster.ClusterManager // secluded cluster manager from API Gateway for management
-	globalMetrics  *cluster.GlobalMetrics
 
 	// Jobs
 	activeJobs    map[string]*executor.ExecutionContext
 	completedJobs map[string]*executor.ExecutionResult
 	podRegistry   map[string]*executor.PodInfo
-	k8sClient     executor.K8sClient
 
 	totalRequests   uint64
 	totalErrors     uint64
@@ -311,9 +308,6 @@ type APIGateway struct {
 
 	// Server
 	server *http.Server
-
-	// Handler mutex
-	handlerMu sync.RWMutex
 
 	metrics *Metrics // Prometheus metrics
 
@@ -396,7 +390,6 @@ type APIGatewayWithCoordinator struct {
 
 	// Layer 10: Job Coordinator (orchestrates all layers)
 	jobCoordinator *orchestrator.JobCoordinator
-	clusterManager *cluster.ClusterManager
 	log            *logger.Logger
 }
 

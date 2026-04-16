@@ -41,7 +41,6 @@ type HeartbeatAgent struct {
 	heartbeatsSent      int64
 	heartbeatsFailed    int64
 	consecutiveFailures int
-	totalDuration       time.Duration
 
 	// Event listeners
 	heartbeatListeners []HeartbeatListener

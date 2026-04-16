@@ -617,23 +617,6 @@ func safeGetInt(m map[string]interface{}, key string, defaultVal int) int {
 	return defaultVal
 }
 
-func safeGetFloat64(m map[string]interface{}, key string, defaultVal float64) float64 {
-	if m == nil {
-		return defaultVal
-	}
-	val, exists := m[key]
-	if !exists {
-		return defaultVal
-	}
-	if floatVal, ok := val.(float64); ok {
-		return floatVal
-	}
-	if intVal, ok := val.(int); ok {
-		return float64(intVal)
-	}
-	return defaultVal
-}
-
 // ============================================================================
 // ENVIRONMENT VARIABLE HELPERS
 // ============================================================================
@@ -658,15 +641,6 @@ func getEnvFloat64(key string, defaultValue float64) float64 {
 	if value := os.Getenv(key); value != "" {
 		if floatValue, err := strconv.ParseFloat(value, 64); err == nil {
 			return floatValue
-		}
-	}
-	return defaultValue
-}
-
-func getEnvBool(key string, defaultValue bool) bool {
-	if value := os.Getenv(key); value != "" {
-		if boolValue, err := strconv.ParseBool(value); err == nil {
-			return boolValue
 		}
 	}
 	return defaultValue
