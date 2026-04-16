@@ -64,8 +64,8 @@ func TestCheckFairness_NewTenantAllowed(t *testing.T) {
 
 	decision := dm.CheckFairness(context.Background(), "tenant-a", 10, 100, 100.0)
 	assert.True(t, decision.Allowed)
-	assert.Equal(t, 0.1, decision.GPUShare)  // 10/100
-	assert.Equal(t, 0.1, decision.CPUShare)  // 100/1000
+	assert.Equal(t, 0.1, decision.GPUShare)    // 10/100
+	assert.Equal(t, 0.1, decision.CPUShare)    // 100/1000
 	assert.Equal(t, 0.1, decision.MemoryShare) // 100/1000
 	assert.Equal(t, "GPU", decision.DominantType)
 }
@@ -295,7 +295,7 @@ func TestGetFairnessReport_PerfectFairness(t *testing.T) {
 
 	// Both tenants at exactly 50% dominant share
 	dm.OnJobScheduled("tenant-a", 50, 100, 200.0) // GPU dominant: 50%
-	dm.OnJobScheduled("tenant-b", 10, 500, 100.0)  // CPU dominant: 50%
+	dm.OnJobScheduled("tenant-b", 10, 500, 100.0) // CPU dominant: 50%
 
 	report := dm.GetFairnessReport()
 	assert.Equal(t, 2, report["tenant_count"])

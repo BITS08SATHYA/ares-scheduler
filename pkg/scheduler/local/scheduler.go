@@ -11,14 +11,15 @@ import (
 	"fmt"
 
 	//"github.com/BITS08SATHYA/ares-scheduler/pkg/executor"
-	"github.com/BITS08SATHYA/ares-scheduler/pkg/gpu"
-	"github.com/BITS08SATHYA/ares-scheduler/pkg/logger"
-	"github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler/common"
-	"github.com/BITS08SATHYA/ares-scheduler/pkg/storage/redis"
 	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/gpu"
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/logger"
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler/common"
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/storage/redis"
 )
 
 // ============================================================================

@@ -8,9 +8,10 @@ package cluster
 import (
 	"context"
 	"fmt"
-	"github.com/BITS08SATHYA/ares-scheduler/pkg/logger"
 	"sync"
 	"time"
+
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/logger"
 )
 
 // ============================================================================

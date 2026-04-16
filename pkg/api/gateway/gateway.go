@@ -8,6 +8,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
+
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/cluster"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/crdt"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/executor"
@@ -15,16 +17,16 @@ import (
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/lease"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/orchestrator"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/storage/etcd"
-	"strconv"
 
-	"github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler/common"
-	"github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler/global"
 	"io"
 	"net/http"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler/common"
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler/global"
 
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/gpu"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/job"
@@ -1178,7 +1180,7 @@ func (ag *APIGateway) handleCancelJob(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"success":   true,
 		"job_id":    jobID,
-		"message":   fmt.Sprintf("Job %s cancelled", jobID),
+		"message":   fmt.Sprintf("Job %s canceled", jobID),
 		"timestamp": time.Now().Format(time.RFC3339),
 	})
 }
@@ -1390,7 +1392,7 @@ func (ag *APIGateway) Stop(timeout time.Duration) error {
 	// Step 2: Cancel all active job monitors
 	if ag.jobCoordinator != nil {
 		ag.jobCoordinator.Shutdown()
-		ag.log.Info("✓ Job coordinator shutdown — all monitors cancelled")
+		ag.log.Info("✓ Job coordinator shutdown — all monitors canceled")
 	}
 
 	// Step 3: Release all leases so jobs can be rescheduled immediately
@@ -1400,7 +1402,7 @@ func (ag *APIGateway) Stop(timeout time.Duration) error {
 		if ag.metrics != nil {
 			ag.metrics.RecordLeaseShutdown(count)
 		}
-		ag.log.Info("✓ Lease manager shutdown — %d heartbeats cancelled", count)
+		ag.log.Info("✓ Lease manager shutdown — %d heartbeats canceled", count)
 	}
 
 	// Step 4: Close storage connections

@@ -14,7 +14,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"github.com/BITS08SATHYA/ares-scheduler/pkg/executor"
 	"net"
 	"os"
 	"os/signal"
@@ -22,6 +21,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/executor"
 
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/cluster"
 	executorK8s "github.com/BITS08SATHYA/ares-scheduler/pkg/executor/kubernetes"
@@ -529,7 +530,7 @@ func main() {
 	time.Sleep(200 * time.Millisecond)
 	log.Info("✓ Heartbeat stopped")
 
-	// Now deregister with a fresh context (the old one is cancelled)
+	// Now deregister with a fresh context (the old one is canceled)
 	deregCtx, deregCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer deregCancel()
 

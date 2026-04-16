@@ -27,8 +27,8 @@ import (
 // LeaderElector manages leader election via etcd
 type LeaderElector struct {
 	client     *clientv3.Client
-	prefix     string     // etcd key prefix for election (e.g., "/ares/leader")
-	instanceID string     // unique identifier for this instance
+	prefix     string // etcd key prefix for election (e.g., "/ares/leader")
+	instanceID string // unique identifier for this instance
 	log        *logger.Logger
 	isLeader   atomic.Bool
 	sessionTTL int // seconds
@@ -51,8 +51,8 @@ func (le *LeaderElector) IsLeader() bool {
 }
 
 // RunAsLeader blocks until this instance becomes leader, then calls leaderFunc.
-// If leadership is lost, leaderFunc's context is cancelled and the election restarts.
-// This method only returns when ctx is cancelled.
+// If leadership is lost, leaderFunc's context is canceled and the election restarts.
+// This method only returns when ctx is canceled.
 func (le *LeaderElector) RunAsLeader(ctx context.Context, leaderFunc func(ctx context.Context)) error {
 	for {
 		select {
@@ -94,7 +94,7 @@ func (le *LeaderElector) campaignAndLead(ctx context.Context, leaderFunc func(ct
 
 	election := concurrency.NewElection(session, le.prefix)
 
-	// Campaign blocks until we win or ctx is cancelled
+	// Campaign blocks until we win or ctx is canceled
 	le.log.Info("ELECTION: Instance %s campaigning...", le.instanceID)
 	if err := election.Campaign(ctx, le.instanceID); err != nil {
 		return fmt.Errorf("campaign failed: %w", err)
@@ -104,7 +104,7 @@ func (le *LeaderElector) campaignAndLead(ctx context.Context, leaderFunc func(ct
 	le.log.Info("ELECTION: Instance %s is now LEADER", le.instanceID)
 
 	// Run the leader function with a cancellable context.
-	// Cancel when either: parent ctx cancelled, or session expires (lost leadership).
+	// Cancel when either: parent ctx canceled, or session expires (lost leadership).
 	leaderCtx, leaderCancel := context.WithCancel(ctx)
 	defer leaderCancel()
 

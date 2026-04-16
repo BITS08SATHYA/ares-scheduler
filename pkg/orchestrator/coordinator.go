@@ -27,7 +27,7 @@ import (
 
 // contextWithCleanupTimeout: Creates a bounded context for cleanup operations.
 // Cleanup (lease release, job save on error) must not use the parent context
-// because the parent may already be cancelled. But context.Background() with no
+// because the parent may already be canceled. But context.Background() with no
 // timeout can hang forever if etcd is unreachable. This gives cleanup 5 seconds.
 func contextWithCleanupTimeout() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), 5*time.Second)
@@ -429,7 +429,11 @@ func (jc *JobCoordinator) MonitorJob(ctx context.Context, jobID string, leaseID 
 				if jc.metricsRecorder != nil && jc.metricsRecorder.OnJobE2ELatency != nil {
 					jc.metricsRecorder.OnJobE2ELatency(time.Since(jobRecord.SubmitTime))
 				}
-				func() { ctx, cancel := contextWithCleanupTimeout(); defer cancel(); jc.leaseManager.ReleaseLeaseForJob(ctx, jobID) }()
+				func() {
+					ctx, cancel := contextWithCleanupTimeout()
+					defer cancel()
+					jc.leaseManager.ReleaseLeaseForJob(ctx, jobID)
+				}()
 				return nil
 			}
 
@@ -452,7 +456,11 @@ func (jc *JobCoordinator) MonitorJob(ctx context.Context, jobID string, leaseID 
 					return nil // Stop monitoring this instance, retry creates new monitor
 				}
 				jc.log.Info("Job %s failed (no retries left)", jobID)
-				func() { ctx, cancel := contextWithCleanupTimeout(); defer cancel(); jc.leaseManager.ReleaseLeaseForJob(ctx, jobID) }()
+				func() {
+					ctx, cancel := contextWithCleanupTimeout()
+					defer cancel()
+					jc.leaseManager.ReleaseLeaseForJob(ctx, jobID)
+				}()
 				return nil
 			}
 
@@ -471,7 +479,11 @@ func (jc *JobCoordinator) MonitorJob(ctx context.Context, jobID string, leaseID 
 				if jc.metricsRecorder != nil && jc.metricsRecorder.OnJobCompleted != nil {
 					jc.metricsRecorder.OnJobCompleted(false)
 				}
-				func() { ctx, cancel := contextWithCleanupTimeout(); defer cancel(); jc.leaseManager.ReleaseLeaseForJob(ctx, jobID) }()
+				func() {
+					ctx, cancel := contextWithCleanupTimeout()
+					defer cancel()
+					jc.leaseManager.ReleaseLeaseForJob(ctx, jobID)
+				}()
 				return fmt.Errorf("job timeout")
 			}
 		}
@@ -717,7 +729,7 @@ func (jc *JobCoordinator) CancelJob(ctx context.Context, jobID string, leaseID i
 
 	// Update status
 	jobRecord.Status = common.StatusFailed
-	jobRecord.ErrorMsg = "cancelled by user"
+	jobRecord.ErrorMsg = "canceled by user"
 	jobRecord.EndTime = time.Now()
 
 	// Atomic fenced write
@@ -729,7 +741,7 @@ func (jc *JobCoordinator) CancelJob(ctx context.Context, jobID string, leaseID i
 		return fmt.Errorf("fenced save failed: %w", err)
 	}
 
-	jc.log.Info("Job %s cancelled (fenced, modRevision=%d)", jobID, modRevision)
+	jc.log.Info("Job %s canceled (fenced, modRevision=%d)", jobID, modRevision)
 	return nil
 }
 
@@ -899,7 +911,7 @@ func (jc *JobCoordinator) reconcileQueuedJobs(ctx context.Context) {
 
 // Shutdown cancels all active monitor goroutines for graceful shutdown
 func (jc *JobCoordinator) Shutdown() {
-	jc.log.Info("JobCoordinator shutting down: cancelling all active monitors")
+	jc.log.Info("JobCoordinator shutting down: canceling all active monitors")
 	jc.monitors.Range(func(key, value interface{}) bool {
 		if cancelFn, ok := value.(context.CancelFunc); ok {
 			cancelFn()

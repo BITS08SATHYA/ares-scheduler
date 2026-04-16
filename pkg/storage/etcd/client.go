@@ -3,12 +3,13 @@ package etcd
 import (
 	"context"
 	"fmt"
-	"github.com/BITS08SATHYA/ares-scheduler/pkg/logger"
-	clientv3 "go.etcd.io/etcd/client/v3"
-	"go.etcd.io/etcd/client/v3/concurrency"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/logger"
+	clientv3 "go.etcd.io/etcd/client/v3"
+	"go.etcd.io/etcd/client/v3/concurrency"
 )
 
 // Layer 2: etcd client wrapper (depends on types, config, logger)

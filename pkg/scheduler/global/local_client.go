@@ -239,7 +239,7 @@ func (c *LocalSchedulerClient) CancelJob(
 		return fmt.Errorf("cancel failed (status %d): %s", resp.StatusCode, string(body))
 	}
 
-	c.log.Info("PREEMPTION: Job %s cancelled on %s", jobID, localSchedulerAddr)
+	c.log.Info("PREEMPTION: Job %s canceled on %s", jobID, localSchedulerAddr)
 	return nil
 }
 

@@ -45,11 +45,11 @@ func TestResolveActualGPUType_EmptyFallback(t *testing.T) {
 
 func TestSchedulingResult_Fields(t *testing.T) {
 	r := &SchedulingResult{
-		JobID:     "job-1",
-		ClusterID: "cluster-a",
-		NodeID:    "node-1",
+		JobID:      "job-1",
+		ClusterID:  "cluster-a",
+		NodeID:     "node-1",
 		GPUIndices: []int{0, 1, 2, 3},
-		LeaseID:   12345,
+		LeaseID:    12345,
 	}
 	assert.Equal(t, "job-1", r.JobID)
 	assert.Equal(t, "cluster-a", r.ClusterID)
@@ -70,7 +70,11 @@ func TestMetricsRecorder_Callbacks(t *testing.T) {
 	mr := &MetricsRecorder{
 		OnDuplicateBlocked: func() { duplicateCount++ },
 		OnLeaseAcquired:    func() { leaseCount++ },
-		OnJobCompleted:     func(success bool) { if success { completedSuccess++ } },
+		OnJobCompleted: func(success bool) {
+			if success {
+				completedSuccess++
+			}
+		},
 	}
 
 	mr.OnDuplicateBlocked()

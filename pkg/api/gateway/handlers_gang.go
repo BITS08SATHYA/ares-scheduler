@@ -308,7 +308,7 @@ func (ag *APIGateway) handleCancelGang(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"success":   true,
 		"gang_id":   gangID,
-		"message":   fmt.Sprintf("Gang %s cancelled", gangID),
+		"message":   fmt.Sprintf("Gang %s canceled", gangID),
 		"timestamp": time.Now().Format(time.RFC3339),
 	})
 }

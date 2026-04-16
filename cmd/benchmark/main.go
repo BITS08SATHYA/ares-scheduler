@@ -1247,7 +1247,7 @@ func pollGangStatus(baseURL string, gangID string, timeout time.Duration) *GangS
 
 		// Terminal states — stop polling
 		switch status.Phase {
-		case "RUNNING", "SUCCEEDED", "FAILED", "CANCELLED", "TIMEOUT":
+		case "RUNNING", "SUCCEEDED", "FAILED", "CANCELED", "TIMEOUT":
 			return status
 		}
 
@@ -1622,14 +1622,14 @@ func runPriorityPreemptionTest(baseURL string) BenchmarkResult {
 
 	for _, jobID := range lowPriorityIDs {
 		status := getJobStatus(baseURL, jobID)
-		switch {
-		case status == "PREEMPTED" || status == "preempted":
+		switch status {
+		case "PREEMPTED", "preempted":
 			preempted++
-		case status == "FAILED" || status == "failed":
+		case "FAILED", "failed":
 			failed++
-		case status == "RUNNING" || status == "running":
+		case "RUNNING", "running":
 			running++
-		case status == "SUCCEEDED" || status == "succeeded":
+		case "SUCCEEDED", "succeeded":
 			completed++
 		default:
 			other++

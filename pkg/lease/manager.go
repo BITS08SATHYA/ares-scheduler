@@ -12,9 +12,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/BITS08SATHYA/ares-scheduler/pkg/storage/etcd"
 	"sync"
 	"time"
+
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/storage/etcd"
 )
 
 // ============================================================================
@@ -30,7 +31,7 @@ const (
 	JobStateRunning   JobState = "RUNNING"
 	JobStateSucceeded JobState = "SUCCEEDED"
 	JobStateFailed    JobState = "FAILED"
-	JobStateCancelled JobState = "CANCELLED"
+	JobStateCancelled JobState = "CANCELED"
 )
 
 type JobRecord struct {
@@ -112,11 +113,11 @@ func (lm *LeaseManager) Close() int {
 	defer lm.mu.Unlock()
 
 	count := len(lm.heartbeatContexts)
-	lm.log.Infof("LeaseManager shutting down: cancelling %d active heartbeats", count)
+	lm.log.Infof("LeaseManager shutting down: canceling %d active heartbeats", count)
 
 	for jobID, cancel := range lm.heartbeatContexts {
 		cancel()
-		lm.log.Infof("Cancelled heartbeat for job %s", jobID)
+		lm.log.Infof("Canceled heartbeat for job %s", jobID)
 	}
 
 	// Clear maps so no goroutine can reference stale state
@@ -221,7 +222,7 @@ func (lm *LeaseManager) AcquireLeaseForJob(ctx context.Context, jobID string) (b
 // 1. Call KeepAliveOnce to renew lease
 // 2. Track renewal successes/failures
 // 3. Log warnings if renewal fails
-// 4. Stop when context cancelled or lease revoked
+// 4. Stop when context canceled or lease revoked
 func (lm *LeaseManager) runHeartbeat(
 	ctx context.Context,
 	jobID string,
@@ -239,9 +240,9 @@ func (lm *LeaseManager) runHeartbeat(
 	for {
 		select {
 		case <-ctx.Done():
-			// Context cancelled (from ReleaseLeaseForJob or shutdown).
-			// Use a fresh context for cleanup since ctx is already cancelled.
-			lm.log.Infof("heartbeat stopping for job %s (context cancelled)", jobID)
+			// Context canceled (from ReleaseLeaseForJob or shutdown).
+			// Use a fresh context for cleanup since ctx is already canceled.
+			lm.log.Infof("heartbeat stopping for job %s (context canceled)", jobID)
 			lm.mu.RLock()
 			once, ok := lm.releaseOnces[jobID]
 			lm.mu.RUnlock()

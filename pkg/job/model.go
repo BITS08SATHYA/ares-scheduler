@@ -372,7 +372,7 @@ func CanJobBeExecuted(job *common.Job) bool {
 	return job.Status == common.StatusScheduled
 }
 
-// CanJobBeCancelled: Check if job can be cancelled
+// CanJobBeCancelled: Check if job can be canceled
 func CanJobBeCancelled(job *common.Job) bool {
 	if job == nil {
 		return false

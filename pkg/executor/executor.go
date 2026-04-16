@@ -3,16 +3,17 @@ package executor
 import (
 	"context"
 	"fmt"
-	"github.com/BITS08SATHYA/ares-scheduler/pkg/job"
-	"github.com/BITS08SATHYA/ares-scheduler/pkg/lease"
-	"github.com/BITS08SATHYA/ares-scheduler/pkg/logger"
-	"github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler/common"
-	_ "k8s.io/client-go/kubernetes"
 	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/job"
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/lease"
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/logger"
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler/common"
+	_ "k8s.io/client-go/kubernetes"
 )
 
 // Scope: Single cluster (runs on each cluster's control plane)
@@ -124,7 +125,7 @@ const (
 	StatusRunning    JobStatus = "Running"
 	StatusSuccessful JobStatus = "Successful"
 	StatusFailed     JobStatus = "Failed"
-	StatusCancelled  JobStatus = "Cancelled"
+	StatusCancelled  JobStatus = "Canceled"
 	StatusUnknown    JobStatus = "Unknown"
 )
 
@@ -584,7 +585,7 @@ func (e *Executor) monitorAndUpdateJob(
 
 		select {
 		case <-ctx.Done():
-			e.Log.Info("❌ Context cancelled for job %s (reason: %v)", jobID, ctx.Err())
+			e.Log.Info("❌ Context canceled for job %s (reason: %v)", jobID, ctx.Err())
 			return ctx.Err()
 
 		case tickTime := <-ticker.C:
@@ -991,14 +992,14 @@ func (ex *Executor) handleJobTimeout(execCtx *ExecutionContext) {
 
 // handleJobCancellation: Handle job cancellation
 func (ex *Executor) handleJobCancellation(execCtx *ExecutionContext) {
-	ex.Log.Info("Cancelling job %s", execCtx.JobID)
+	ex.Log.Info("Canceling job %s", execCtx.JobID)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	err := ex.K8sClient.DeletePod(ctx, execCtx.PodName)
 	if err != nil {
-		ex.Log.Error("Failed to delete cancelled Pod %s: %v", execCtx.PodName, err)
+		ex.Log.Error("Failed to delete canceled Pod %s: %v", execCtx.PodName, err)
 	}
 
 	result := &ExecutionResult{
@@ -1055,9 +1056,10 @@ func completeJob(ex *Executor, execCtx *ExecutionContext,
 	ex.JobsMu.Unlock()
 
 	atomic.AddInt64(&ex.TotalDuration, duration.Nanoseconds())
-	if status == StatusSuccessful {
+	switch status {
+	case StatusSuccessful:
 		atomic.AddUint64(&ex.TotalSuccessful, 1)
-	} else if status == StatusFailed {
+	case StatusFailed:
 		atomic.AddUint64(&ex.TotalFailed, 1)
 	}
 
@@ -1151,7 +1153,7 @@ func (ex *Executor) CancelJob(jobID string) error {
 		return fmt.Errorf("failed to cancel job: %w", err)
 	}
 
-	ex.Log.Info("Job %s cancelled", jobID)
+	ex.Log.Info("Job %s canceled", jobID)
 	return nil
 }
 
@@ -1189,7 +1191,7 @@ func (ex *Executor) GetStats() map[string]interface{} {
 		"total_jobs":       totalJobs,
 		"total_successful": totalSuccessful,
 		"total_failed":     totalFailed,
-		"total_cancelled":  totalCancelled,
+		"total_canceled":   totalCancelled,
 		"success_rate":     successRate,
 		"avg_duration_sec": avgDuration,
 		"max_concurrent":   ex.Config.MaxConcurrentJobs,

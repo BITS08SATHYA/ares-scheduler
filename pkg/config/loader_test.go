@@ -89,11 +89,11 @@ func TestValidateConfig_Valid(t *testing.T) {
 
 func TestValidateConfig_EmptyEtcdEndpoints(t *testing.T) {
 	cfg := &common.Config{
-		EtcdEndpoints:       []string{},
-		RedisAddr:           "localhost:6379",
-		GlobalSchedulerPort: 8080,
-		LocalSchedulerPort:  8081,
-		JobTimeout:          time.Minute,
+		EtcdEndpoints:        []string{},
+		RedisAddr:            "localhost:6379",
+		GlobalSchedulerPort:  8080,
+		LocalSchedulerPort:   8081,
+		JobTimeout:           time.Minute,
 		LeaseRenewalInterval: time.Second,
 	}
 	err := ValidateConfig(cfg)
@@ -103,11 +103,11 @@ func TestValidateConfig_EmptyEtcdEndpoints(t *testing.T) {
 
 func TestValidateConfig_EmptyRedisAddr(t *testing.T) {
 	cfg := &common.Config{
-		EtcdEndpoints:       []string{"localhost:2379"},
-		RedisAddr:           "",
-		GlobalSchedulerPort: 8080,
-		LocalSchedulerPort:  8081,
-		JobTimeout:          time.Minute,
+		EtcdEndpoints:        []string{"localhost:2379"},
+		RedisAddr:            "",
+		GlobalSchedulerPort:  8080,
+		LocalSchedulerPort:   8081,
+		JobTimeout:           time.Minute,
 		LeaseRenewalInterval: time.Second,
 	}
 	err := ValidateConfig(cfg)
@@ -117,11 +117,11 @@ func TestValidateConfig_EmptyRedisAddr(t *testing.T) {
 
 func TestValidateConfig_InvalidPort_Zero(t *testing.T) {
 	cfg := &common.Config{
-		EtcdEndpoints:       []string{"localhost:2379"},
-		RedisAddr:           "localhost:6379",
-		GlobalSchedulerPort: 0,
-		LocalSchedulerPort:  8081,
-		JobTimeout:          time.Minute,
+		EtcdEndpoints:        []string{"localhost:2379"},
+		RedisAddr:            "localhost:6379",
+		GlobalSchedulerPort:  0,
+		LocalSchedulerPort:   8081,
+		JobTimeout:           time.Minute,
 		LeaseRenewalInterval: time.Second,
 	}
 	err := ValidateConfig(cfg)
@@ -131,11 +131,11 @@ func TestValidateConfig_InvalidPort_Zero(t *testing.T) {
 
 func TestValidateConfig_InvalidPort_TooHigh(t *testing.T) {
 	cfg := &common.Config{
-		EtcdEndpoints:       []string{"localhost:2379"},
-		RedisAddr:           "localhost:6379",
-		GlobalSchedulerPort: 8080,
-		LocalSchedulerPort:  99999,
-		JobTimeout:          time.Minute,
+		EtcdEndpoints:        []string{"localhost:2379"},
+		RedisAddr:            "localhost:6379",
+		GlobalSchedulerPort:  8080,
+		LocalSchedulerPort:   99999,
+		JobTimeout:           time.Minute,
 		LeaseRenewalInterval: time.Second,
 	}
 	err := ValidateConfig(cfg)
@@ -145,11 +145,11 @@ func TestValidateConfig_InvalidPort_TooHigh(t *testing.T) {
 
 func TestValidateConfig_NegativeJobTimeout(t *testing.T) {
 	cfg := &common.Config{
-		EtcdEndpoints:       []string{"localhost:2379"},
-		RedisAddr:           "localhost:6379",
-		GlobalSchedulerPort: 8080,
-		LocalSchedulerPort:  8081,
-		JobTimeout:          -1 * time.Second,
+		EtcdEndpoints:        []string{"localhost:2379"},
+		RedisAddr:            "localhost:6379",
+		GlobalSchedulerPort:  8080,
+		LocalSchedulerPort:   8081,
+		JobTimeout:           -1 * time.Second,
 		LeaseRenewalInterval: time.Second,
 	}
 	err := ValidateConfig(cfg)
@@ -159,11 +159,11 @@ func TestValidateConfig_NegativeJobTimeout(t *testing.T) {
 
 func TestValidateConfig_NegativeLeaseRenewal(t *testing.T) {
 	cfg := &common.Config{
-		EtcdEndpoints:       []string{"localhost:2379"},
-		RedisAddr:           "localhost:6379",
-		GlobalSchedulerPort: 8080,
-		LocalSchedulerPort:  8081,
-		JobTimeout:          time.Minute,
+		EtcdEndpoints:        []string{"localhost:2379"},
+		RedisAddr:            "localhost:6379",
+		GlobalSchedulerPort:  8080,
+		LocalSchedulerPort:   8081,
+		JobTimeout:           time.Minute,
 		LeaseRenewalInterval: -1 * time.Second,
 	}
 	err := ValidateConfig(cfg)

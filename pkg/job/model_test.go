@@ -15,15 +15,15 @@ import (
 
 func validSpec() *common.JobSpec {
 	return &common.JobSpec{
-		RequestID:      "req-123",
-		Name:           "test-job",
-		Image:          "nvidia/cuda:12.0",
-		GPUCount:       4,
-		Priority:       50,
-		TimeoutSecs:    600,
-		MaxRetries:     3,
+		RequestID:       "req-123",
+		Name:            "test-job",
+		Image:           "nvidia/cuda:12.0",
+		GPUCount:        4,
+		Priority:        50,
+		TimeoutSecs:     600,
+		MaxRetries:      3,
 		TargetLatencyMs: 1000,
-		TenantID:       "tenant-a",
+		TenantID:        "tenant-a",
 	}
 }
 

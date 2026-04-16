@@ -325,7 +325,7 @@ func (lss *LocalSchedulerServer) handleCancel(w http.ResponseWriter, r *http.Req
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"success": true,
 		"job_id":  req.JobID,
-		"message": "job cancelled",
+		"message": "job canceled",
 	})
 }
 

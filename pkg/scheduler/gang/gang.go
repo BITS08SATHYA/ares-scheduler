@@ -79,7 +79,7 @@ const (
 	GangRunning    GangPhase = "RUNNING"    // All members running, barrier released
 	GangSucceeded  GangPhase = "SUCCEEDED"  // All members completed successfully
 	GangFailed     GangPhase = "FAILED"     // One or more members failed
-	GangCancelled  GangPhase = "CANCELLED"  // User cancelled the gang
+	GangCancelled  GangPhase = "CANCELED"   // User canceled the gang
 	GangTimeout    GangPhase = "TIMEOUT"    // Scheduling or barrier timed out
 )
 
@@ -687,7 +687,7 @@ func (gm *GangManager) ReportMemberFailed(gangID string, memberIndex int, err st
 	gang.EndTime = time.Now()
 	gang.LastError = fmt.Sprintf("member %d failed: %s", memberIndex, err)
 
-	gm.log.Warn("GANG: %s FAILED — member %d error: %s (cancelling all members)",
+	gm.log.Warn("GANG: %s FAILED — member %d error: %s (canceling all members)",
 		gangID, memberIndex, err)
 
 	// Remove from wait queue
@@ -784,9 +784,9 @@ func (gm *GangManager) CancelGang(gangID string) error {
 	gang.Phase = GangCancelled
 	gang.PhaseTime = time.Now()
 	gang.EndTime = time.Now()
-	gang.LastError = "cancelled by user"
+	gang.LastError = "canceled by user"
 
-	gm.log.Info("GANG: %s cancelled", gangID)
+	gm.log.Info("GANG: %s canceled", gangID)
 	return nil
 }
 
@@ -979,7 +979,7 @@ func (gm *GangManager) removeFromWaitQueue(gangID string) {
 	}
 }
 
-// handleDeadlock: Resolve a detected deadlock by cancelling lowest-priority gang
+// handleDeadlock: Resolve a detected deadlock by canceling lowest-priority gang
 func (gm *GangManager) handleDeadlock(cycle []string) {
 	gm.log.Warn("GANG: ⚠ DEADLOCK DETECTED in cycle: %v", cycle)
 	gm.totalDeadlocks++
@@ -997,7 +997,7 @@ func (gm *GangManager) handleDeadlock(cycle []string) {
 	}
 
 	if lowestGang != nil {
-		gm.log.Warn("GANG: Resolving deadlock by cancelling %s (priority=%d)",
+		gm.log.Warn("GANG: Resolving deadlock by canceling %s (priority=%d)",
 			lowestGang.Spec.GangID, lowestGang.Spec.Priority)
 		gm.CancelGang(lowestGang.Spec.GangID)
 		gm.deadlockDetector.RemoveGang(lowestGang.Spec.GangID)

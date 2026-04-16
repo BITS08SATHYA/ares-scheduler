@@ -32,11 +32,11 @@ type CRDTClusterState struct {
 	Zone      string `json:"zone"`
 
 	// Mutable state (LWW registers)
-	IsHealthy      *LWWRegister `json:"is_healthy"`
-	GPUsInUse      *LWWRegister `json:"gpus_in_use"`
-	TotalGPUs      *LWWRegister `json:"total_gpus"`
-	MemGBInUse     *LWWRegister `json:"mem_gb_in_use"`
-	TotalMemGB     *LWWRegister `json:"total_mem_gb"`
+	IsHealthy       *LWWRegister `json:"is_healthy"`
+	GPUsInUse       *LWWRegister `json:"gpus_in_use"`
+	TotalGPUs       *LWWRegister `json:"total_gpus"`
+	MemGBInUse      *LWWRegister `json:"mem_gb_in_use"`
+	TotalMemGB      *LWWRegister `json:"total_mem_gb"`
 	RunningJobCount *LWWRegister `json:"running_job_count"`
 	LastHeartbeat   *LWWRegister `json:"last_heartbeat"`
 	SchedulerAddr   *LWWRegister `json:"scheduler_addr"`
@@ -52,11 +52,11 @@ func NewCRDTClusterState(nodeID string, clusterID string, region string, zone st
 		ClusterID:       clusterID,
 		Region:          region,
 		Zone:            zone,
-		IsHealthy:      NewLWWRegister(nodeID, true),
-		GPUsInUse:      NewLWWRegister(nodeID, 0),
-		TotalGPUs:      NewLWWRegister(nodeID, 0),
-		MemGBInUse:     NewLWWRegister(nodeID, 0.0),
-		TotalMemGB:     NewLWWRegister(nodeID, 0.0),
+		IsHealthy:       NewLWWRegister(nodeID, true),
+		GPUsInUse:       NewLWWRegister(nodeID, 0),
+		TotalGPUs:       NewLWWRegister(nodeID, 0),
+		MemGBInUse:      NewLWWRegister(nodeID, 0.0),
+		TotalMemGB:      NewLWWRegister(nodeID, 0.0),
 		RunningJobCount: NewLWWRegister(nodeID, 0),
 		LastHeartbeat:   NewLWWRegister(nodeID, time.Now()),
 		SchedulerAddr:   NewLWWRegister(nodeID, ""),

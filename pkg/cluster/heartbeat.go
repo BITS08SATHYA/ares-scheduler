@@ -9,9 +9,10 @@ package cluster
 import (
 	"context"
 	"fmt"
-	"github.com/BITS08SATHYA/ares-scheduler/pkg/logger"
 	"sync"
 	"time"
+
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/logger"
 )
 
 // ============================================================================
@@ -134,7 +135,7 @@ func (ha *HeartbeatAgent) heartbeatLoop(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			ha.log.Info("Heartbeat loop cancelled")
+			ha.log.Info("Heartbeat loop canceled")
 			return
 
 		case <-ha.done:
@@ -317,4 +318,3 @@ func (ha *HeartbeatAgent) GetHeartbeatStats() map[string]interface{} {
 		"interval":               ha.config.AutoHeartbeatInterval,
 	}
 }
-

@@ -8,10 +8,11 @@ package cluster
 import (
 	"context"
 	"fmt"
-	"github.com/BITS08SATHYA/ares-scheduler/pkg/logger"
-	"github.com/BITS08SATHYA/ares-scheduler/pkg/storage/redis"
 	"sync"
 	"time"
+
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/logger"
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/storage/redis"
 )
 
 // ============================================================================

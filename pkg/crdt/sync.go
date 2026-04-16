@@ -171,7 +171,7 @@ func (sm *SyncManager) GetPeers() []PeerInfo {
 // ============================================================================
 
 // StartSyncLoop: Begin periodic synchronization with peers
-// Runs in background goroutine until context is cancelled
+// Runs in background goroutine until context is canceled
 func (sm *SyncManager) StartSyncLoop(ctx context.Context) {
 	sm.log.Info("CRDT SYNC: Starting sync loop (interval=%s, mode=%s, fanout=%d)",
 		sm.config.SyncInterval, sm.config.SyncMode, sm.config.FanOut)

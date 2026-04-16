@@ -2,11 +2,12 @@
 package config
 
 import (
-	"github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler/common"
 	"os"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler/common"
 )
 
 // LoadConfig loads configuration from environment variables and defaults

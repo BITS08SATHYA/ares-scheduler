@@ -413,4 +413,3 @@ func convertK8sPodPhase(k8sPhase corev1.PodPhase) executor.PodPhase {
 		return executor.PhaseUnknown
 	}
 }
-
