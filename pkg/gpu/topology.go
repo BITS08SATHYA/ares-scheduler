@@ -580,7 +580,7 @@ func (gtm *GPUTopologyManager) ScoreGPUSet(
 	// For all-reduce, the bottleneck is the WORST link in the communication ring.
 	// If all GPUs are in one NVSwitch domain, the worst link is NV12 (~600 GB/s).
 	// If GPUs span domains, the worst link drops to NV6 (~300 GB/s) — 2x slower.
-	if topology.NVSwitchDomains != nil && len(topology.NVSwitchDomains) > 0 {
+	if len(topology.NVSwitchDomains) > 0 {
 		domainScore := gtm.scoreNVSwitchDomainLocality(gpuIndices, topology.NVSwitchDomains)
 		avgScore += domainScore
 	}

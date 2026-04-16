@@ -436,7 +436,7 @@ func (gs *GlobalScheduler) ScheduleJob(
 	}
 
 	if jobRecord.Spec.GPUCount < 0 || jobRecord.Spec.GPUCount > 256 {
-		return nil, fmt.Errorf("Invalid GPU count: %d", jobRecord.Spec.GPUCount)
+		return nil, fmt.Errorf("invalid GPU count: %d", jobRecord.Spec.GPUCount)
 	}
 
 	// ★ GANG SCHEDULING: If this is a gang job, route to gang manager

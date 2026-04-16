@@ -268,7 +268,7 @@ func NewExecutor(
 	}
 
 	if jobStore == nil {
-		return nil, fmt.Errorf("Job Store cannot be nil")
+		return nil, fmt.Errorf("job store cannot be nil")
 	}
 
 	executor := &Executor{

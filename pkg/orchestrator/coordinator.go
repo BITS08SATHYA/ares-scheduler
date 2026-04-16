@@ -728,14 +728,9 @@ func (jc *JobCoordinator) CancelJob(ctx context.Context, jobID string, leaseID i
 		jc.log.Warn("Failed to release lease: %v", err)
 	}
 
-	// Delete pod if running
-	if jobRecord.PodName != "" {
-		// I have to implement this
-		//err = jc.executor.CancelJob(jobID)
-		//if err != nil {
-		//	jc.log.Warn("Failed to cancel executor: %v", err)
-		//}
-	}
+	// TODO: pod cancellation via executor not yet wired up. When a job
+	// is canceled mid-flight we currently rely on lease release + pod
+	// TTL instead of actively deleting the pod.
 
 	// Update status
 	jobRecord.Status = common.StatusFailed

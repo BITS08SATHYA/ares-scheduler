@@ -249,10 +249,10 @@ func (im *IdempotencyManager) ValidateRequestID(requestID string) error {
 
 	// Request ID should only contain alphanumeric, hyphen, colon, underscore
 	for _, ch := range requestID {
-		if !((ch >= 'a' && ch <= 'z') ||
-			(ch >= 'A' && ch <= 'Z') ||
-			(ch >= '0' && ch <= '9') ||
-			ch == '-' || ch == '_' || ch == ':') {
+		if (ch < 'a' || ch > 'z') &&
+			(ch < 'A' || ch > 'Z') &&
+			(ch < '0' || ch > '9') &&
+			ch != '-' && ch != '_' && ch != ':' {
 			return fmt.Errorf("request ID contains invalid character: %c", ch)
 		}
 	}

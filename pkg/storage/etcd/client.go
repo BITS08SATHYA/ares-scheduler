@@ -188,7 +188,7 @@ func (ec *ETCDClient) PutWithoutLease(ctx context.Context, key, value string) er
 
 	_, err := ec.cli.Put(putctx, key, value)
 	if err != nil {
-		return fmt.Errorf("Failed to put key %s: %w", key, err)
+		return fmt.Errorf("failed to put key %s: %w", key, err)
 	}
 
 	ec.log.Info("[etcd] Saved (Job) key permanently (no lease): %s", key)

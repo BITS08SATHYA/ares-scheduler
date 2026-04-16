@@ -342,7 +342,7 @@ func TestConcurrentFairnessChecks(t *testing.T) {
 		wg.Add(1)
 		go func(n int) {
 			defer wg.Done()
-			tenantID := "tenant"
+			var tenantID string
 			if n%2 == 0 {
 				tenantID = "tenant-a"
 			} else {
