@@ -12,9 +12,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/BITS08SATHYA/ares-scheduler/pkg/storage/etcd"
 	"sync"
 	"time"
+
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/storage/etcd"
 )
 
 // ============================================================================
@@ -30,7 +31,7 @@ const (
 	JobStateRunning   JobState = "RUNNING"
 	JobStateSucceeded JobState = "SUCCEEDED"
 	JobStateFailed    JobState = "FAILED"
-	JobStateCancelled JobState = "CANCELLED"
+	JobStateCancelled JobState = "CANCELED"
 )
 
 type JobRecord struct {
@@ -112,11 +113,11 @@ func (lm *LeaseManager) Close() int {
 	defer lm.mu.Unlock()
 
 	count := len(lm.heartbeatContexts)
-	lm.log.Infof("LeaseManager shutting down: cancelling %d active heartbeats", count)
+	lm.log.Infof("LeaseManager shutting down: canceling %d active heartbeats", count)
 
 	for jobID, cancel := range lm.heartbeatContexts {
 		cancel()
-		lm.log.Infof("Cancelled heartbeat for job %s", jobID)
+		lm.log.Infof("Canceled heartbeat for job %s", jobID)
 	}
 
 	// Clear maps so no goroutine can reference stale state
@@ -169,14 +170,18 @@ func (lm *LeaseManager) AcquireLeaseForJob(ctx context.Context, jobID string) (b
 	txnResponse, err := lm.etcdClient.LeaseCAS(ctx, leaseKey, string(leaseValue), leaseID)
 	if err != nil {
 		lm.log.Errorf("txn failed for lease: %v", err)
-		lm.etcdClient.RevokeLease(context.Background(), leaseID)
+		if revokeErr := lm.etcdClient.RevokeLease(context.Background(), leaseID); revokeErr != nil {
+			lm.log.Warnf("failed to revoke lease %d after txn error (will TTL-expire): %v", leaseID, revokeErr)
+		}
 		return false, 0, fmt.Errorf("txn failed: %w", err)
 	}
 
 	if !txnResponse {
 		// Another scheduler holds the lease
 		lm.log.Warnf("lease already held for job %s (by another scheduler)", jobID)
-		lm.etcdClient.RevokeLease(context.Background(), leaseID)
+		if revokeErr := lm.etcdClient.RevokeLease(context.Background(), leaseID); revokeErr != nil {
+			lm.log.Warnf("failed to revoke lease %d after CAS loss (will TTL-expire): %v", leaseID, revokeErr)
+		}
 		return false, 0, nil
 	}
 
@@ -221,7 +226,7 @@ func (lm *LeaseManager) AcquireLeaseForJob(ctx context.Context, jobID string) (b
 // 1. Call KeepAliveOnce to renew lease
 // 2. Track renewal successes/failures
 // 3. Log warnings if renewal fails
-// 4. Stop when context cancelled or lease revoked
+// 4. Stop when context canceled or lease revoked
 func (lm *LeaseManager) runHeartbeat(
 	ctx context.Context,
 	jobID string,
@@ -239,16 +244,18 @@ func (lm *LeaseManager) runHeartbeat(
 	for {
 		select {
 		case <-ctx.Done():
-			// Context cancelled (from ReleaseLeaseForJob or shutdown).
-			// Use a fresh context for cleanup since ctx is already cancelled.
-			lm.log.Infof("heartbeat stopping for job %s (context cancelled)", jobID)
+			// Context canceled (from ReleaseLeaseForJob or shutdown).
+			// Use a fresh context for cleanup since ctx is already canceled.
+			lm.log.Infof("heartbeat stopping for job %s (context canceled)", jobID)
 			lm.mu.RLock()
 			once, ok := lm.releaseOnces[jobID]
 			lm.mu.RUnlock()
 			if ok {
 				cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
 				once.Do(func() {
-					lm.releaseLease(cleanupCtx, jobID, leaseID, leaseKey)
+					if err := lm.releaseLease(cleanupCtx, jobID, leaseID, leaseKey); err != nil {
+						lm.log.Warnf("releaseLease on context cancel failed for job %s: %v", jobID, err)
+					}
 				})
 				cleanupCancel()
 			}
@@ -279,7 +286,9 @@ func (lm *LeaseManager) runHeartbeat(
 					if ok {
 						cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
 						once.Do(func() {
-							lm.releaseLease(cleanupCtx, jobID, leaseID, leaseKey)
+							if err := lm.releaseLease(cleanupCtx, jobID, leaseID, leaseKey); err != nil {
+								lm.log.Warnf("releaseLease after renewal failures failed for job %s: %v", jobID, err)
+							}
 						})
 						cleanupCancel()
 					}
@@ -376,7 +385,9 @@ func (lm *LeaseManager) ReleaseLeaseForJob(ctx context.Context, jobID string) er
 	lm.mu.RUnlock()
 	if ok {
 		once.Do(func() {
-			lm.releaseLease(ctx, jobID, info.LeaseID, leaseKey)
+			if err := lm.releaseLease(ctx, jobID, info.LeaseID, leaseKey); err != nil {
+				lm.log.Warnf("releaseLease on explicit Release failed for job %s: %v", jobID, err)
+			}
 		})
 	}
 

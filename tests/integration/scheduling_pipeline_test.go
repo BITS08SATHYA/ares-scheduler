@@ -1,3 +1,5 @@
+//go:build integration
+
 package integration_test
 
 import (
@@ -237,14 +239,14 @@ func TestScheduling_PreemptionFindsLowestPriorityVictim(t *testing.T) {
 	// Running jobs with different priorities
 	running := []*common.Job{
 		{
-			ID:   "victim-low",
-			Spec: &common.JobSpec{RequestID: "v1", Name: "low-pri", Image: "img", GPUCount: 4, Priority: 20, TimeoutSecs: 300, MaxRetries: 0, TargetLatencyMs: 5000},
+			ID:        "victim-low",
+			Spec:      &common.JobSpec{RequestID: "v1", Name: "low-pri", Image: "img", GPUCount: 4, Priority: 20, TimeoutSecs: 300, MaxRetries: 0, TargetLatencyMs: 5000},
 			Status:    common.StatusRunning,
 			StartTime: time.Now().Add(-5 * time.Minute),
 		},
 		{
-			ID:   "victim-mid",
-			Spec: &common.JobSpec{RequestID: "v2", Name: "mid-pri", Image: "img", GPUCount: 4, Priority: 50, TimeoutSecs: 300, MaxRetries: 0, TargetLatencyMs: 5000},
+			ID:        "victim-mid",
+			Spec:      &common.JobSpec{RequestID: "v2", Name: "mid-pri", Image: "img", GPUCount: 4, Priority: 50, TimeoutSecs: 300, MaxRetries: 0, TargetLatencyMs: 5000},
 			Status:    common.StatusRunning,
 			StartTime: time.Now().Add(-3 * time.Minute),
 		},

@@ -1,0 +1,48 @@
+version: "2"
+
+run:
+  timeout: 5m
+  build-tags:
+    - integration
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - misspell
+    - revive
+  settings:
+    errcheck:
+      exclude-functions:
+        # HTTP response encoding — client already has the status code,
+        # nothing useful we can do if the write fails.
+        - (*encoding/json.Encoder).Encode
+    revive:
+      rules:
+        - name: exported
+          disabled: true
+    misspell:
+      locale: US
+  exclusions:
+    paths:
+      - tests/integration
+      - bin
+    rules:
+      - path: _test\.go
+        linters:
+          - errcheck
+          - revive
+      # cmd/benchmark is a one-shot CLI benchmark tool; cleanup-path
+      # errors (Close/Delete/Revoke) are intentionally ignored.
+      - path: cmd/benchmark/
+        linters:
+          - errcheck
+
+formatters:
+  enable:
+    - gofmt
+    - goimports

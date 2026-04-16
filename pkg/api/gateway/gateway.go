@@ -8,6 +8,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
+
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/cluster"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/crdt"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/executor"
@@ -15,21 +17,21 @@ import (
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/lease"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/orchestrator"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/storage/etcd"
-	"strconv"
 
-	"github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler/common"
-	"github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler/global"
 	"io"
 	"net/http"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler/common"
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler/global"
 
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/gpu"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/job"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/logger"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/storage/redis"
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/telemetry"
 )
 
 // ============================================================================
@@ -293,13 +295,11 @@ type APIGateway struct {
 	idempotencyMgr *idempotency.IdempotencyManager
 	leaseManager   *lease.LeaseManager
 	clusterManager *cluster.ClusterManager // secluded cluster manager from API Gateway for management
-	globalMetrics  *cluster.GlobalMetrics
 
 	// Jobs
 	activeJobs    map[string]*executor.ExecutionContext
 	completedJobs map[string]*executor.ExecutionResult
 	podRegistry   map[string]*executor.PodInfo
-	k8sClient     executor.K8sClient
 
 	totalRequests   uint64
 	totalErrors     uint64
@@ -309,14 +309,14 @@ type APIGateway struct {
 	// Server
 	server *http.Server
 
-	// Handler mutex
-	handlerMu sync.RWMutex
-
 	metrics *Metrics // Prometheus metrics
 
 	// CRDT: Eventual consistency (Feature 16)
 	crdtStore   *crdt.CRDTStateStore
 	syncManager *crdt.SyncManager
+
+	// Storage clients for shutdown cleanup
+	etcdClient *etcd.ETCDClient
 }
 
 // GatewayConfig: Configuration for API gateway
@@ -390,7 +390,6 @@ type APIGatewayWithCoordinator struct {
 
 	// Layer 10: Job Coordinator (orchestrates all layers)
 	jobCoordinator *orchestrator.JobCoordinator
-	clusterManager *cluster.ClusterManager
 	log            *logger.Logger
 }
 
@@ -418,7 +417,7 @@ func NewAPIGatewayWithCoordinator(
 	if err != nil {
 		log.Error("Failed to connect to etcd: %v", err)
 		if etcdClient != nil {
-			etcdClient.Close()
+			_ = etcdClient.Close()
 		}
 		return nil, fmt.Errorf("etcd connection failed: %w", err)
 	}
@@ -427,7 +426,7 @@ func NewAPIGatewayWithCoordinator(
 	if err != nil {
 		log.Error("Failed to connect to Redis: %v", err)
 		if redisClient != nil {
-			redisClient.Close()
+			_ = redisClient.Close()
 		}
 		return nil, fmt.Errorf("redis connection failed: %w", err)
 	}
@@ -560,7 +559,7 @@ func NewAPIGatewayWithCoordinator(
 		metrics:         metrics,
 		crdtStore:       crdtStore,
 		syncManager:     syncManager,
-		//k8sClient:       mockK8sClient, //
+		etcdClient:      etcdClient,
 	}
 
 	gatewayWithCoordinator := &APIGatewayWithCoordinator{
@@ -718,7 +717,7 @@ func (ag *APIGateway) handleScheduleJob(w http.ResponseWriter, r *http.Request) 
 
 	// Parse request body
 	r.Body = http.MaxBytesReader(w, r.Body, ag.config.MaxRequestSize)
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 
 	var apiReq APIRequest
 	decoder := json.NewDecoder(r.Body)
@@ -887,7 +886,9 @@ func (ag *APIGateway) handleJobStatus(w http.ResponseWriter, r *http.Request) {
 
 	// Return Response
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(response)
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		ag.log.Warn("failed to encode job response: %v", err)
+	}
 	ag.log.Info("Job status query: %s (status=%s)", jobID, jobRecord.Status)
 }
 
@@ -962,12 +963,14 @@ func (ag *APIGateway) handleListJobs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	if err := json.NewEncoder(w).Encode(map[string]interface{}{
 		"success":   true,
 		"jobs":      jobResponses,
 		"count":     len(jobResponses),
 		"timestamp": time.Now().Format(time.RFC3339),
-	})
+	}); err != nil {
+		ag.log.Warn("failed to encode jobs list response: %v", err)
+	}
 }
 
 // formatTime: Helper to format time.Time to RFC3339 string
@@ -1011,7 +1014,9 @@ func (ag *APIGateway) handleHealthCheck(w http.ResponseWriter, r *http.Request) 
 	}
 
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(response)
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		ag.log.Warn("failed to encode stats response: %v", err)
+	}
 }
 
 // handleMetrics: GET /metrics
@@ -1026,12 +1031,14 @@ func (ag *APIGateway) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
 	w.WriteHeader(http.StatusOK)
 
-	ag.log.Info("DEBUG METRICS: latency_sum=%d, scheduled_count=%d",
+	ag.log.Debug("Metrics export: latency_sum=%d, scheduled_count=%d",
 		atomic.LoadInt64(&ag.metrics.SchedulingLatencySum),
 		atomic.LoadUint64(&ag.metrics.TotalScheduled))
 
 	// Export Metrics in Prometheus format
-	fmt.Fprint(w, ag.metrics.ExportPrometheus())
+	if _, err := fmt.Fprint(w, ag.metrics.ExportPrometheus()); err != nil {
+		ag.log.Warn("failed to write metrics response: %v", err)
+	}
 
 	//if ag.globalScheduler == nil {
 	//	ag.respondError(w, http.StatusInternalServerError, "NO_SCHEDULER", "scheduler not initialized")
@@ -1079,7 +1086,9 @@ func (ag *APIGateway) handleDatacenterStatus(w http.ResponseWriter, r *http.Requ
 	}
 	load := ag.globalScheduler.GetDatacenterLoad()
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]interface{}{"timestamp": time.Now().Format(time.RFC3339), "data": load})
+	if err := json.NewEncoder(w).Encode(map[string]interface{}{"timestamp": time.Now().Format(time.RFC3339), "data": load}); err != nil {
+		ag.log.Warn("failed to encode datacenter load response: %v", err)
+	}
 }
 
 func (ag *APIGateway) handleFederationStatus(w http.ResponseWriter, r *http.Request) {
@@ -1089,7 +1098,9 @@ func (ag *APIGateway) handleFederationStatus(w http.ResponseWriter, r *http.Requ
 	}
 	status := ag.globalScheduler.GetFederationStatus()
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]interface{}{"timestamp": time.Now().Format(time.RFC3339), "data": status})
+	if err := json.NewEncoder(w).Encode(map[string]interface{}{"timestamp": time.Now().Format(time.RFC3339), "data": status}); err != nil {
+		ag.log.Warn("failed to encode federation status response: %v", err)
+	}
 }
 
 func (ag *APIGateway) handleClusterStatus(w http.ResponseWriter, r *http.Request) {
@@ -1108,7 +1119,9 @@ func (ag *APIGateway) handleClusterStatus(w http.ResponseWriter, r *http.Request
 		return
 	}
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]interface{}{"timestamp": time.Now().Format(time.RFC3339), "cluster": cluster})
+	if err := json.NewEncoder(w).Encode(map[string]interface{}{"timestamp": time.Now().Format(time.RFC3339), "cluster": cluster}); err != nil {
+		ag.log.Warn("failed to encode cluster status response: %v", err)
+	}
 }
 
 func (ag *APIGateway) handleCapacity(w http.ResponseWriter, r *http.Request) {
@@ -1119,7 +1132,9 @@ func (ag *APIGateway) handleCapacity(w http.ResponseWriter, r *http.Request) {
 	totalCap := ag.globalScheduler.GetTotalCapacity()
 	availCap := ag.globalScheduler.GetAvailableCapacity()
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]interface{}{"timestamp": time.Now().Format(time.RFC3339), "total": totalCap, "available": availCap})
+	if err := json.NewEncoder(w).Encode(map[string]interface{}{"timestamp": time.Now().Format(time.RFC3339), "total": totalCap, "available": availCap}); err != nil {
+		ag.log.Warn("failed to encode capacity response: %v", err)
+	}
 }
 
 //func (ag *APIGateway) handleListClusters(w http.ResponseWriter, r *http.Request) {
@@ -1171,12 +1186,14 @@ func (ag *APIGateway) handleCancelJob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	if err := json.NewEncoder(w).Encode(map[string]interface{}{
 		"success":   true,
 		"job_id":    jobID,
-		"message":   fmt.Sprintf("Job %s cancelled", jobID),
+		"message":   fmt.Sprintf("Job %s canceled", jobID),
 		"timestamp": time.Now().Format(time.RFC3339),
-	})
+	}); err != nil {
+		ag.log.Warn("failed to encode cancel response for job %s: %v", jobID, err)
+	}
 }
 
 func (ag *APIGateway) handleRetryJob(w http.ResponseWriter, r *http.Request) {
@@ -1219,12 +1236,14 @@ func (ag *APIGateway) handleRetryJob(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	w.WriteHeader(http.StatusAccepted)
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	if err := json.NewEncoder(w).Encode(map[string]interface{}{
 		"success":   true,
 		"job_id":    jobID,
 		"message":   fmt.Sprintf("Job %s retry initiated (attempt %d/%d)", jobID, jobRecord.Attempts+1, jobRecord.Spec.MaxRetries),
 		"timestamp": time.Now().Format(time.RFC3339),
-	})
+	}); err != nil {
+		ag.log.Warn("failed to encode retry response for job %s: %v", jobID, err)
+	}
 }
 
 // ============================================================================
@@ -1322,7 +1341,9 @@ func (ag *APIGateway) respondError(w http.ResponseWriter, statusCode int, errorC
 		Timestamp: time.Now().Format(time.RFC3339),
 	}
 	w.WriteHeader(statusCode)
-	json.NewEncoder(w).Encode(response)
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		ag.log.Warn("failed to encode error response (%s): %v", errorCode, err)
+	}
 	ag.log.Warn("API Error: %s - %s (status=%d)", errorCode, message, statusCode)
 }
 
@@ -1339,9 +1360,13 @@ func (ag *APIGateway) generateRequestID() string {
 func (ag *APIGateway) Start() error {
 	mux := ag.RegisterRoutes()
 	addr := fmt.Sprintf(":%d", ag.config.Port)
+
+	// Wrap with OpenTelemetry tracing middleware
+	handler := telemetry.HTTPMiddleware(mux)
+
 	ag.server = &http.Server{
 		Addr:         addr,
-		Handler:      mux,
+		Handler:      handler,
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 15 * time.Second,
 		IdleTimeout:  60 * time.Second,
@@ -1377,17 +1402,35 @@ func (ag *APIGateway) Stop(timeout time.Duration) error {
 		return err
 	}
 
-	// Release all leases so jobs can be rescheduled immediately
+	// Ordered shutdown: Orchestrator → Lease Manager → Storage → Logger
+
+	// Step 2: Cancel all active job monitors
+	if ag.jobCoordinator != nil {
+		ag.jobCoordinator.Shutdown()
+		ag.log.Info("✓ Job coordinator shutdown — all monitors canceled")
+	}
+
+	// Step 3: Release all leases so jobs can be rescheduled immediately
 	// Without this, leases expire via TTL (30s) during which jobs are orphaned
 	if ag.leaseManager != nil {
 		count := ag.leaseManager.Close()
 		if ag.metrics != nil {
 			ag.metrics.RecordLeaseShutdown(count)
 		}
-		ag.log.Info("✓ Lease manager shutdown — %d heartbeats cancelled", count)
+		ag.log.Info("✓ Lease manager shutdown — %d heartbeats canceled", count)
 	}
 
-	ag.log.Info("✓ API Gateway stopped")
+	// Step 4: Close storage connections
+	if ag.etcdClient != nil {
+		_ = ag.etcdClient.Close()
+		ag.log.Info("✓ etcd connection closed")
+	}
+	if ag.redisClient != nil {
+		_ = ag.redisClient.Close()
+		ag.log.Info("✓ Redis connection closed")
+	}
+
+	ag.log.Info("✓ API Gateway stopped (ordered shutdown complete)")
 	return nil
 }
 

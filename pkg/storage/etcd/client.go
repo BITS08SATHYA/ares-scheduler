@@ -3,12 +3,13 @@ package etcd
 import (
 	"context"
 	"fmt"
-	"github.com/BITS08SATHYA/ares-scheduler/pkg/logger"
-	clientv3 "go.etcd.io/etcd/client/v3"
-	"go.etcd.io/etcd/client/v3/concurrency"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/logger"
+	clientv3 "go.etcd.io/etcd/client/v3"
+	"go.etcd.io/etcd/client/v3/concurrency"
 )
 
 // Layer 2: etcd client wrapper (depends on types, config, logger)
@@ -187,7 +188,7 @@ func (ec *ETCDClient) PutWithoutLease(ctx context.Context, key, value string) er
 
 	_, err := ec.cli.Put(putctx, key, value)
 	if err != nil {
-		return fmt.Errorf("Failed to put key %s: %w", key, err)
+		return fmt.Errorf("failed to put key %s: %w", key, err)
 	}
 
 	ec.log.Info("[etcd] Saved (Job) key permanently (no lease): %s", key)

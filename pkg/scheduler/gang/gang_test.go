@@ -288,7 +288,7 @@ func TestReportMemberReady_Idempotent(t *testing.T) {
 	gm.TryScheduleGang(context.Background(), state, testNodes(1, 16))
 
 	gm.ReportMemberReady("gang-1", 0)
-	gm.ReportMemberReady("gang-1", 0) // duplicate
+	gm.ReportMemberReady("gang-1", 0)    // duplicate
 	assert.Equal(t, 1, state.ReadyCount) // should still be 1
 }
 
@@ -357,7 +357,7 @@ func TestCancelGang(t *testing.T) {
 	err := gm.CancelGang("gang-1")
 	assert.NoError(t, err)
 	assert.Equal(t, GangCancelled, state.Phase)
-	assert.Contains(t, state.LastError, "cancelled")
+	assert.Contains(t, state.LastError, "canceled")
 }
 
 func TestCancelGang_NotFound(t *testing.T) {

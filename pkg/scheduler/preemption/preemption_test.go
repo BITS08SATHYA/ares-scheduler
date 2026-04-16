@@ -155,9 +155,9 @@ func TestFindPreemptionVictim_SelectsLowestPriority(t *testing.T) {
 
 	incoming := incomingSpec(90, 4)
 	running := []*common.Job{
-		runningJob("j-high", 60, 4, 2*time.Hour),  // gap=30, high priority victim
-		runningJob("j-low", 20, 4, 2*time.Hour),    // gap=70, low priority victim
-		runningJob("j-mid", 40, 4, 2*time.Hour),    // gap=50, mid priority victim
+		runningJob("j-high", 60, 4, 2*time.Hour), // gap=30, high priority victim
+		runningJob("j-low", 20, 4, 2*time.Hour),  // gap=70, low priority victim
+		runningJob("j-mid", 40, 4, 2*time.Hour),  // gap=50, mid priority victim
 	}
 
 	decision := pm.FindPreemptionVictim(context.Background(), incoming, running)
@@ -187,7 +187,7 @@ func TestFindPreemptionVictim_PrefersPreemptiblePriority(t *testing.T) {
 
 	incoming := incomingSpec(90, 4)
 	running := []*common.Job{
-		runningJob("j-normal", 50, 4, 2*time.Hour), // gap=40, above preemptible max (30)
+		runningJob("j-normal", 50, 4, 2*time.Hour),      // gap=40, above preemptible max (30)
 		runningJob("j-preemptible", 20, 4, 2*time.Hour), // gap=70, below preemptible max → bonus -50
 	}
 

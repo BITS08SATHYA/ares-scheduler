@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/BITS08SATHYA/ares-scheduler/pkg/executor"
-	"github.com/BITS08SATHYA/ares-scheduler/pkg/logger"
-	"github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler/common"
+	"net"
 	"net/http"
 	"strconv"
 	"time"
+
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/executor"
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/logger"
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler/common"
 )
 
 // ============================================================================
@@ -55,14 +57,18 @@ func (lss *LocalSchedulerServer) Start() error {
 
 	lss.log.Info("LocalScheduler HTTP server starting on %s", addr)
 
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("failed to listen on %s: %w", addr, err)
+	}
+
 	go func() {
-		if err := lss.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := lss.server.Serve(ln); err != nil && err != http.ErrServerClosed {
 			lss.log.Error("Server error: %v", err)
 		}
 	}()
 
-	time.Sleep(100 * time.Millisecond)
-	lss.log.Info("LocalScheduler HTTP server ready!")
+	lss.log.Info("LocalScheduler HTTP server ready on %s", addr)
 	return nil
 }
 
@@ -87,9 +93,11 @@ func (lss *LocalSchedulerServer) Stop(timeout time.Duration) error {
 func (lss *LocalSchedulerServer) handleSchedule(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
-		json.NewEncoder(w).Encode(map[string]string{
+		if err := json.NewEncoder(w).Encode(map[string]string{
 			"error": "expected POST",
-		})
+		}); err != nil {
+			lss.log.Warn("failed to encode method-not-allowed response: %v", err)
+		}
 		return
 	}
 
@@ -111,9 +119,11 @@ func (lss *LocalSchedulerServer) handleSchedule(w http.ResponseWriter, r *http.R
 	err := json.NewDecoder(r.Body).Decode(&req)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]string{
+		if encErr := json.NewEncoder(w).Encode(map[string]string{
 			"error": fmt.Sprintf("invalid request: %v", err),
-		})
+		}); encErr != nil {
+			lss.log.Warn("failed to encode bad-request response: %v", encErr)
+		}
 		return
 	}
 
@@ -124,10 +134,12 @@ func (lss *LocalSchedulerServer) handleSchedule(w http.ResponseWriter, r *http.R
 	if err != nil {
 		lss.log.Warn("Scheduling failed: %v", err)
 		w.WriteHeader(http.StatusConflict)
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		if encErr := json.NewEncoder(w).Encode(map[string]interface{}{
 			"success": false,
 			"error":   err.Error(),
-		})
+		}); encErr != nil {
+			lss.log.Warn("failed to encode scheduling-conflict response: %v", encErr)
+		}
 		return
 	}
 
@@ -319,7 +331,7 @@ func (lss *LocalSchedulerServer) handleCancel(w http.ResponseWriter, r *http.Req
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"success": true,
 		"job_id":  req.JobID,
-		"message": "job cancelled",
+		"message": "job canceled",
 	})
 }
 
@@ -387,7 +399,9 @@ func (lss *LocalSchedulerServer) handleResetGPUs(w http.ResponseWriter, r *http.
 
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
-	lss.scheduler.loadAllGPUAllocations(ctx)
+	if err := lss.scheduler.loadAllGPUAllocations(ctx); err != nil {
+		lss.scheduler.log.Warn("loadAllGPUAllocations failed on /reset-gpus: %v", err)
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)

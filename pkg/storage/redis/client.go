@@ -3,9 +3,10 @@ package redis
 
 import (
 	"context"
+	"time"
+
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/logger"
 	"github.com/redis/go-redis/v9"
-	"time"
 )
 
 // RedisClient: Wrapper around redis client

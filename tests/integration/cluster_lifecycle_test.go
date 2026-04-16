@@ -1,3 +1,5 @@
+//go:build integration
+
 package integration_test
 
 import (
@@ -222,8 +224,8 @@ func TestCluster_MultiFederationStats(t *testing.T) {
 
 	stats := cm.GetClusterStats()
 	assert.Equal(t, 3, stats["total_clusters"])
-	assert.Equal(t, 28, stats["total_gpus"])       // 8+4+16
-	assert.Equal(t, 10, stats["gpus_in_use"])       // 2+0+8
+	assert.Equal(t, 28, stats["total_gpus"])  // 8+4+16
+	assert.Equal(t, 10, stats["gpus_in_use"]) // 2+0+8
 	assert.Equal(t, 3, stats["healthy_clusters"])
 
 	t.Cleanup(func() {
@@ -239,10 +241,10 @@ func TestCluster_MultiFederationStats(t *testing.T) {
 // ============================================================================
 
 type mockClusterEventListener struct {
-	onJoin        func(ctx context.Context, c *cluster.Cluster) error
-	onLeave       func(ctx context.Context, clusterID string) error
+	onJoin         func(ctx context.Context, c *cluster.Cluster) error
+	onLeave        func(ctx context.Context, clusterID string) error
 	onHealthChange func(ctx context.Context, clusterID string, health *cluster.ClusterHealth) error
-	onStateChange func(ctx context.Context, clusterID string, oldState, newState cluster.ClusterState) error
+	onStateChange  func(ctx context.Context, clusterID string, oldState, newState cluster.ClusterState) error
 }
 
 func (m *mockClusterEventListener) OnClusterJoin(ctx context.Context, c *cluster.Cluster) error {

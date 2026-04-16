@@ -1,3 +1,5 @@
+//go:build integration
+
 package gpu_test
 
 import (
@@ -323,7 +325,7 @@ func TestGPUDiscoveryErrorHandling(t *testing.T) {
 	discovery := gpu.NewGPUDiscovery(redisClient)
 
 	t.Run("Handle context cancellation", func(t *testing.T) {
-		// Create cancelled context
+		// Create canceled context
 		cancelledCtx, cancel := context.WithCancel(ctx)
 		cancel() // Cancel immediately
 
@@ -331,7 +333,7 @@ func TestGPUDiscoveryErrorHandling(t *testing.T) {
 
 		// Should handle cancellation gracefully
 		if err != nil {
-			t.Logf("Correctly handled cancelled context: %v", err)
+			t.Logf("Correctly handled canceled context: %v", err)
 		}
 		// Should still return non-nil slice (even if empty)
 		assert.NotNil(t, gpus, "Should return non-nil slice even on error")

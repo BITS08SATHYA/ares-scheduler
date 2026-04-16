@@ -4,11 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
+	"time"
+
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/logger"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler/common"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/storage/etcd"
-	"sync"
-	"time"
 )
 
 // Layer 3: Job Store - Persistence layer for jobs
@@ -441,7 +442,9 @@ func (store *ETCDJobStore) CleanupOldJobs(ctx context.Context, olderThan time.Du
 	for _, job := range jobs {
 		if job.Status == common.StatusSucceeded || job.Status == common.StatusFailed {
 			if job.EndTime.Before(cutoff) {
-				store.DeleteJob(ctx, job.ID)
+				if err := store.DeleteJob(ctx, job.ID); err != nil {
+					store.log.Warn("Failed to delete old job %s during cleanup: %v", job.ID, err)
+				}
 			}
 		}
 	}

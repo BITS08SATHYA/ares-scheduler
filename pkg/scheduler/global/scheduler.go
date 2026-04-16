@@ -9,6 +9,10 @@ package global
 import (
 	"context"
 	"fmt"
+	_ "sort"
+	"sync"
+	"time"
+
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/cluster"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/logger"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler/common"
@@ -16,9 +20,6 @@ import (
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler/gang"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler/preemption"
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/storage/redis"
-	_ "sort"
-	"sync"
-	"time"
 )
 
 // ============================================================================
@@ -435,7 +436,7 @@ func (gs *GlobalScheduler) ScheduleJob(
 	}
 
 	if jobRecord.Spec.GPUCount < 0 || jobRecord.Spec.GPUCount > 256 {
-		return nil, fmt.Errorf("Invalid GPU count: %d", jobRecord.Spec.GPUCount)
+		return nil, fmt.Errorf("invalid GPU count: %d", jobRecord.Spec.GPUCount)
 	}
 
 	// ★ GANG SCHEDULING: If this is a gang job, route to gang manager
@@ -1251,7 +1252,7 @@ func (gs *GlobalScheduler) SetMetricsCallbacks(onGPURollback func()) {
 }
 
 func (gs *GlobalScheduler) cancelJobOnCluster(ctx context.Context, jobID string) {
-	gs.log.Info("PREEMPTION: Cancelling job %s", jobID)
+	gs.log.Info("PREEMPTION: Canceling job %s", jobID)
 
 	if gs.jobStore == nil {
 		gs.log.Warn("Cannot cancel job %s: jobStore not set", jobID)
@@ -1280,7 +1281,7 @@ func (gs *GlobalScheduler) cancelJobOnCluster(ctx context.Context, jobID string)
 			if cancelErr != nil {
 				gs.log.Warn("PREEMPTION: Failed to cancel pod on cluster %s: %v (marking as preempted anyway)", job.ClusterID, cancelErr)
 			} else {
-				gs.log.Info("PREEMPTION: Pod cancelled on cluster %s for job %s", job.ClusterID, jobID)
+				gs.log.Info("PREEMPTION: Pod canceled on cluster %s for job %s", job.ClusterID, jobID)
 			}
 
 			// Restore GPU count on the global cluster cache so retry can find capacity
@@ -1310,7 +1311,7 @@ func (gs *GlobalScheduler) cancelJobOnCluster(ctx context.Context, jobID string)
 
 	err = gs.jobStore.SaveJobFinal(ctx, job)
 	if err != nil {
-		gs.log.Error("PREEMPTION: Failed to save cancelled job %s: %v", jobID, err)
+		gs.log.Error("PREEMPTION: Failed to save canceled job %s: %v", jobID, err)
 		return
 	}
 

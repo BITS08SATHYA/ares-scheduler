@@ -112,7 +112,7 @@ type Metrics struct {
 	LeasesRenewed  uint64 // Lease renewals (heartbeats)
 	LeasesExpired  uint64 // Leases that expired (no renewal)
 	LeasesReleased uint64 // Leases explicitly released
-	LeasesShutdown uint64 // Leases cancelled during graceful shutdown
+	LeasesShutdown uint64 // Leases canceled during graceful shutdown
 
 	// Retry (Feature 7)
 	TotalRetries   uint64 // Total retry attempts
@@ -673,7 +673,7 @@ func (m *Metrics) ExportPrometheus() string {
 	output += promCounter("ares_circuit_breaker_rejects_total", "Requests rejected by open circuit breaker", atomic.LoadUint64(&m.CircuitBreakerRejects))
 	output += promCounter("ares_circuit_breaker_resets_total", "Times circuit breaker reset (etcd recovered)", atomic.LoadUint64(&m.CircuitBreakerResets))
 	output += promCounter("ares_idempotency_unavailable_total", "Idempotency checks failed (Redis down)", atomic.LoadUint64(&m.IdempotencyUnavailable))
-	output += promCounter("ares_leases_shutdown_total", "Leases cancelled during graceful shutdown", atomic.LoadUint64(&m.LeasesShutdown))
+	output += promCounter("ares_leases_shutdown_total", "Leases canceled during graceful shutdown", atomic.LoadUint64(&m.LeasesShutdown))
 
 	// ── 6. DRF FAIRNESS ──────────────────────────────────────────────────
 	output += promCounter("ares_drf_checks_total", "Total DRF fairness checks", atomic.LoadUint64(&m.DRFChecksTotal))

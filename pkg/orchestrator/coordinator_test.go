@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"context"
 	"testing"
 
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/cluster"
@@ -45,11 +46,11 @@ func TestResolveActualGPUType_EmptyFallback(t *testing.T) {
 
 func TestSchedulingResult_Fields(t *testing.T) {
 	r := &SchedulingResult{
-		JobID:     "job-1",
-		ClusterID: "cluster-a",
-		NodeID:    "node-1",
+		JobID:      "job-1",
+		ClusterID:  "cluster-a",
+		NodeID:     "node-1",
 		GPUIndices: []int{0, 1, 2, 3},
-		LeaseID:   12345,
+		LeaseID:    12345,
 	}
 	assert.Equal(t, "job-1", r.JobID)
 	assert.Equal(t, "cluster-a", r.ClusterID)
@@ -70,7 +71,11 @@ func TestMetricsRecorder_Callbacks(t *testing.T) {
 	mr := &MetricsRecorder{
 		OnDuplicateBlocked: func() { duplicateCount++ },
 		OnLeaseAcquired:    func() { leaseCount++ },
-		OnJobCompleted:     func(success bool) { if success { completedSuccess++ } },
+		OnJobCompleted: func(success bool) {
+			if success {
+				completedSuccess++
+			}
+		},
 	}
 
 	mr.OnDuplicateBlocked()
@@ -99,14 +104,14 @@ func TestNewJobCoordinator(t *testing.T) {
 
 func TestScheduleJob_NilSpec(t *testing.T) {
 	jc := NewJobCoordinator(nil, nil, nil, nil, nil)
-	_, err := jc.ScheduleJob(nil, nil)
+	_, err := jc.ScheduleJob(context.TODO(), nil)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid job spec")
 }
 
 func TestScheduleJob_EmptyRequestID(t *testing.T) {
 	jc := NewJobCoordinator(nil, nil, nil, nil, nil)
-	_, err := jc.ScheduleJob(nil, &common.JobSpec{RequestID: ""})
+	_, err := jc.ScheduleJob(context.TODO(), &common.JobSpec{RequestID: ""})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "empty request ID")
 }

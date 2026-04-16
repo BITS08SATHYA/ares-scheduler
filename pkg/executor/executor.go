@@ -3,16 +3,17 @@ package executor
 import (
 	"context"
 	"fmt"
-	"github.com/BITS08SATHYA/ares-scheduler/pkg/job"
-	"github.com/BITS08SATHYA/ares-scheduler/pkg/lease"
-	"github.com/BITS08SATHYA/ares-scheduler/pkg/logger"
-	"github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler/common"
-	_ "k8s.io/client-go/kubernetes"
 	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/job"
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/lease"
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/logger"
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/scheduler/common"
+	_ "k8s.io/client-go/kubernetes"
 )
 
 // Scope: Single cluster (runs on each cluster's control plane)
@@ -124,7 +125,7 @@ const (
 	StatusRunning    JobStatus = "Running"
 	StatusSuccessful JobStatus = "Successful"
 	StatusFailed     JobStatus = "Failed"
-	StatusCancelled  JobStatus = "Cancelled"
+	StatusCancelled  JobStatus = "Canceled"
 	StatusUnknown    JobStatus = "Unknown"
 )
 
@@ -267,7 +268,7 @@ func NewExecutor(
 	}
 
 	if jobStore == nil {
-		return nil, fmt.Errorf("Job Store cannot be nil")
+		return nil, fmt.Errorf("job store cannot be nil")
 	}
 
 	executor := &Executor{
@@ -418,9 +419,6 @@ func (ex *Executor) ExecuteJob(
 
 	// Increment metrics
 	atomic.AddUint64(&ex.TotalJobs, 1)
-
-	// Start background monitoring
-	//go ex.monitorJobExecution(ctx, execCtx)
 
 	// Use the caller's context so monitoring stops on executor shutdown.
 	// context.Background() would leak this goroutine indefinitely.
@@ -584,7 +582,7 @@ func (e *Executor) monitorAndUpdateJob(
 
 		select {
 		case <-ctx.Done():
-			e.Log.Info("❌ Context cancelled for job %s (reason: %v)", jobID, ctx.Err())
+			e.Log.Info("❌ Context canceled for job %s (reason: %v)", jobID, ctx.Err())
 			return ctx.Err()
 
 		case tickTime := <-ticker.C:
@@ -883,187 +881,6 @@ func (e *Executor) monitorAndUpdateJob(
 	}
 }
 
-// monitorJobExecution: Background job monitoring
-func (ex *Executor) monitorJobExecution(ctx context.Context, execCtx *ExecutionContext) {
-
-	ticker := time.NewTicker(ex.Config.HealthCheckInterval)
-	defer ticker.Stop()
-
-	timeoutTimer := time.NewTimer(execCtx.Timeout)
-	defer timeoutTimer.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			ex.handleJobCancellation(execCtx)
-			return
-
-		case <-timeoutTimer.C:
-			ex.handleJobTimeout(execCtx)
-			return
-
-		case <-ticker.C:
-			// Check Pod status
-			podInfo, err := ex.K8sClient.GetPod(ctx, execCtx.PodName)
-			if err != nil {
-				ex.Log.Warn("Failed to get Pod status for job %s: %v", execCtx.JobID, err)
-				continue
-			}
-
-			// Update execution context
-			execCtx.CurrentPhase = podInfo.Phase
-			execCtx.LastUpdated = time.Now()
-
-			// Map Pod phase to job status
-			switch podInfo.Phase {
-			case PhaseRunning:
-				execCtx.Status = StatusRunning
-				ex.Log.Debug("Job %s running on Pod %s", execCtx.JobID, execCtx.PodName)
-
-			case PhaseSucceeded:
-				result := completeJob(ex, execCtx, StatusSuccessful)
-				ex.Log.Info("Job %s completed successfully (duration=%.2fs)",
-					execCtx.JobID, result.Duration.Seconds())
-				return
-
-			case PhaseFailed:
-				result := completeJob(ex, execCtx, StatusFailed)
-				ex.Log.Warn("Job %s failed (duration=%.2fs, error=%s)",
-					execCtx.JobID, result.Duration.Seconds(), result.ErrorMessage)
-				return
-
-			case PhaseUnknown:
-				ex.Log.Warn("Job %s in unknown phase", execCtx.JobID)
-			}
-
-			// Collect metrics periodically
-			if ex.Config.MetricsCollectionEnabled {
-				metrics, err := ex.K8sClient.GetPodMetrics(ctx, execCtx.PodName)
-				if err == nil {
-					execCtx.Metrics = metrics
-				}
-			}
-
-			// Collect logs if job is completing
-			if podInfo.Phase == PhaseSucceeded || podInfo.Phase == PhaseFailed {
-				if ex.Config.LogCollectionEnabled {
-					logs, err := ex.K8sClient.GetPodLogs(ctx, execCtx.PodName)
-					if err == nil {
-						execCtx.Logs = logs
-					}
-				}
-			}
-		}
-	}
-}
-
-// handleJobTimeout: Handle job timeout
-func (ex *Executor) handleJobTimeout(execCtx *ExecutionContext) {
-	ex.Log.Warn("Job %s timeout after %.2fs", execCtx.JobID, execCtx.Timeout.Seconds())
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	err := ex.K8sClient.DeletePod(ctx, execCtx.PodName)
-	if err != nil {
-		ex.Log.Error("Failed to delete timed-out Pod %s: %v", execCtx.PodName, err)
-	}
-
-	result := &ExecutionResult{
-		JobID:        execCtx.JobID,
-		PodName:      execCtx.PodName,
-		Status:       StatusFailed,
-		Phase:        execCtx.CurrentPhase,
-		StartTime:    execCtx.StartTime,
-		EndTime:      time.Now(),
-		Duration:     time.Since(execCtx.StartTime),
-		ErrorMessage: fmt.Sprintf("Job timeout after %.2f seconds", execCtx.Timeout.Seconds()),
-		CompletedAt:  time.Now(),
-	}
-
-	ex.JobsMu.Lock()
-	delete(ex.ActiveJobs, execCtx.JobID)
-	ex.CompletedJobs[execCtx.JobID] = result
-	ex.JobsMu.Unlock()
-
-	atomic.AddUint64(&ex.TotalFailed, 1)
-}
-
-// handleJobCancellation: Handle job cancellation
-func (ex *Executor) handleJobCancellation(execCtx *ExecutionContext) {
-	ex.Log.Info("Cancelling job %s", execCtx.JobID)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	err := ex.K8sClient.DeletePod(ctx, execCtx.PodName)
-	if err != nil {
-		ex.Log.Error("Failed to delete cancelled Pod %s: %v", execCtx.PodName, err)
-	}
-
-	result := &ExecutionResult{
-		JobID:       execCtx.JobID,
-		PodName:     execCtx.PodName,
-		Status:      StatusCancelled,
-		Phase:       execCtx.CurrentPhase,
-		StartTime:   execCtx.StartTime,
-		EndTime:     time.Now(),
-		Duration:    time.Since(execCtx.StartTime),
-		CompletedAt: time.Now(),
-	}
-
-	ex.JobsMu.Lock()
-	delete(ex.ActiveJobs, execCtx.JobID)
-	ex.CompletedJobs[execCtx.JobID] = result
-	ex.JobsMu.Unlock()
-
-	atomic.AddUint64(&ex.TotalCancelled, 1)
-}
-
-// completeJob: Mark job as complete
-func completeJob(ex *Executor, execCtx *ExecutionContext,
-	status JobStatus) *ExecutionResult {
-	endTime := time.Now()
-	duration := endTime.Sub(execCtx.StartTime)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	if ex.Config.LogCollectionEnabled {
-		logs, err := ex.K8sClient.GetPodLogs(ctx, execCtx.PodName)
-		if err == nil {
-			execCtx.Logs = logs
-		}
-	}
-
-	result := &ExecutionResult{
-		JobID:       execCtx.JobID,
-		PodName:     execCtx.PodName,
-		Status:      status,
-		Phase:       execCtx.CurrentPhase,
-		StartTime:   execCtx.StartTime,
-		EndTime:     endTime,
-		Duration:    duration,
-		Logs:        execCtx.Logs,
-		Metrics:     execCtx.Metrics,
-		CompletedAt: time.Now(),
-	}
-
-	ex.JobsMu.Lock()
-	delete(ex.ActiveJobs, execCtx.JobID)
-	ex.CompletedJobs[execCtx.JobID] = result
-	ex.JobsMu.Unlock()
-
-	atomic.AddInt64(&ex.TotalDuration, duration.Nanoseconds())
-	if status == StatusSuccessful {
-		atomic.AddUint64(&ex.TotalSuccessful, 1)
-	} else if status == StatusFailed {
-		atomic.AddUint64(&ex.TotalFailed, 1)
-	}
-
-	return result
-}
-
 // ============================================================================
 // JOB QUERIES
 // ============================================================================
@@ -1151,7 +968,7 @@ func (ex *Executor) CancelJob(jobID string) error {
 		return fmt.Errorf("failed to cancel job: %w", err)
 	}
 
-	ex.Log.Info("Job %s cancelled", jobID)
+	ex.Log.Info("Job %s canceled", jobID)
 	return nil
 }
 
@@ -1189,7 +1006,7 @@ func (ex *Executor) GetStats() map[string]interface{} {
 		"total_jobs":       totalJobs,
 		"total_successful": totalSuccessful,
 		"total_failed":     totalFailed,
-		"total_cancelled":  totalCancelled,
+		"total_canceled":   totalCancelled,
 		"success_rate":     successRate,
 		"avg_duration_sec": avgDuration,
 		"max_concurrent":   ex.Config.MaxConcurrentJobs,

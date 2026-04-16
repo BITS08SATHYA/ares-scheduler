@@ -14,7 +14,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"github.com/BITS08SATHYA/ares-scheduler/pkg/executor"
 	"net"
 	"os"
 	"os/signal"
@@ -22,6 +21,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/executor"
 
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/cluster"
 	executorK8s "github.com/BITS08SATHYA/ares-scheduler/pkg/executor/kubernetes"
@@ -136,7 +137,7 @@ func main() {
 
 	// Initialize logger
 	log := initializeLogger(*logLevel)
-	defer log.Sync()
+	defer func() { _ = log.Sync() }()
 
 	log.Info("╔═══════════════════════════════════════════════════════╗")
 	log.Info("║   Ares Local Scheduler - Worker Cluster               ║")
@@ -179,7 +180,7 @@ func main() {
 		log.Error("Failed to connect to Redis: %v", err)
 		os.Exit(1)
 	}
-	defer redisClient.Close()
+	defer func() { _ = redisClient.Close() }()
 	log.Info("Connected to Redis")
 
 	// ========================================================================
@@ -194,7 +195,7 @@ func main() {
 		log.Error("Failed to connect to etcd: %v", err)
 		os.Exit(1)
 	}
-	defer etcdClient.Close()
+	defer func() { _ = etcdClient.Close() }()
 	log.Info("Connected to etcd")
 
 	// ========================================================================
@@ -529,7 +530,7 @@ func main() {
 	time.Sleep(200 * time.Millisecond)
 	log.Info("✓ Heartbeat stopped")
 
-	// Now deregister with a fresh context (the old one is cancelled)
+	// Now deregister with a fresh context (the old one is canceled)
 	deregCtx, deregCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer deregCancel()
 
@@ -589,7 +590,7 @@ func getHostIP() string {
 	if err != nil {
 		return ""
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	localAddr := conn.LocalAddr().(*net.UDPAddr)
 	return localAddr.IP.String()
@@ -612,23 +613,6 @@ func safeGetInt(m map[string]interface{}, key string, defaultVal int) int {
 	}
 	if floatVal, ok := val.(float64); ok {
 		return int(floatVal)
-	}
-	return defaultVal
-}
-
-func safeGetFloat64(m map[string]interface{}, key string, defaultVal float64) float64 {
-	if m == nil {
-		return defaultVal
-	}
-	val, exists := m[key]
-	if !exists {
-		return defaultVal
-	}
-	if floatVal, ok := val.(float64); ok {
-		return floatVal
-	}
-	if intVal, ok := val.(int); ok {
-		return float64(intVal)
 	}
 	return defaultVal
 }
@@ -657,15 +641,6 @@ func getEnvFloat64(key string, defaultValue float64) float64 {
 	if value := os.Getenv(key); value != "" {
 		if floatValue, err := strconv.ParseFloat(value, 64); err == nil {
 			return floatValue
-		}
-	}
-	return defaultValue
-}
-
-func getEnvBool(key string, defaultValue bool) bool {
-	if value := os.Getenv(key); value != "" {
-		if boolValue, err := strconv.ParseBool(value); err == nil {
-			return boolValue
 		}
 	}
 	return defaultValue

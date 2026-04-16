@@ -9,10 +9,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/BITS08SATHYA/ares-scheduler/pkg/logger"
-	"github.com/BITS08SATHYA/ares-scheduler/pkg/storage/redis"
 	"sync"
 	"time"
+
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/logger"
+	"github.com/BITS08SATHYA/ares-scheduler/pkg/storage/redis"
 )
 
 // ============================================================================
@@ -81,7 +82,9 @@ func (cr *ClusterRegistry) RegisterCluster(ctx context.Context, cluster *Cluster
 	}
 
 	// Update federation registry timestamp
-	cr.redis.Set(ctx, "ares:federation:last_sync", time.Now().Format(time.RFC3339), 24*time.Hour)
+	if err := cr.redis.Set(ctx, "ares:federation:last_sync", time.Now().Format(time.RFC3339), 24*time.Hour); err != nil {
+		cr.log.Warn("Failed to update federation last_sync (non-fatal): %v", err)
+	}
 
 	cr.log.Info("Registered cluster %s in registry", cluster.ClusterID)
 	return nil
