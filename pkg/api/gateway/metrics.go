@@ -107,12 +107,28 @@ type Metrics struct {
 	FencingTokensRejected    uint64 // Fencing token checks failed (stale)
 	FencedWritesRejected     uint64 // Atomic fenced writes rejected by etcd (split-brain prevented)
 
+	// Fencing check duration (histogram — exposed as bucket counters + sum + count)
+	FencingCheckDurationSum   int64    // Sum of fencing check durations (ns)
+	FencingCheckDurationCount uint64   // Number of fencing checks observed
+	FencingCheckBuckets       [8]uint64 // Cumulative buckets: 1ms, 5ms, 10ms, 50ms, 100ms, 500ms, 1s, +Inf
+
+	// Fencing rejection reason breakdown
+	FencingRejectsLeaseNotFound uint64 // Lease key missing in etcd
+	FencingRejectsLeaseMismatch uint64 // etcd lease ID didn't match expected
+	FencingRejectsEtcdError     uint64 // etcd read failed (transient)
+
 	// Leases (Feature 19)
 	LeasesAcquired uint64 // Leases granted
 	LeasesRenewed  uint64 // Lease renewals (heartbeats)
 	LeasesExpired  uint64 // Leases that expired (no renewal)
 	LeasesReleased uint64 // Leases explicitly released
 	LeasesShutdown uint64 // Leases canceled during graceful shutdown
+
+	// Lease heartbeat latency (histogram — exposed as bucket counters + sum + count)
+	HeartbeatLatencySum   int64    // Sum of heartbeat renewal durations (ns)
+	HeartbeatLatencyCount uint64   // Number of heartbeats observed (success + failure)
+	HeartbeatLatencyBuckets [8]uint64 // Cumulative buckets: 1ms, 5ms, 10ms, 50ms, 100ms, 500ms, 1s, +Inf
+	HeartbeatFailures     uint64   // Per-tick heartbeat renewal failures
 
 	// Retry (Feature 7)
 	TotalRetries   uint64 // Total retry attempts
@@ -384,6 +400,60 @@ func (m *Metrics) RecordLease(event string) {
 	}
 }
 
+// latencyBucketUpperBoundsNs: upper-bound edges for fencing/heartbeat histograms
+// (1ms, 5ms, 10ms, 50ms, 100ms, 500ms, 1s). The eighth bucket (+Inf) is the
+// overall count and is computed from HeartbeatLatencyCount / FencingCheckDurationCount.
+var latencyBucketUpperBoundsNs = [7]int64{
+	1 * int64(time.Millisecond),
+	5 * int64(time.Millisecond),
+	10 * int64(time.Millisecond),
+	50 * int64(time.Millisecond),
+	100 * int64(time.Millisecond),
+	500 * int64(time.Millisecond),
+	1 * int64(time.Second),
+}
+
+func recordBucket(buckets *[8]uint64, ns int64) {
+	for i, upper := range latencyBucketUpperBoundsNs {
+		if ns <= upper {
+			atomic.AddUint64(&buckets[i], 1)
+		}
+	}
+	atomic.AddUint64(&buckets[7], 1) // +Inf bucket
+}
+
+// RecordFencingCheckDuration observes a fencing-token ownership check duration.
+func (m *Metrics) RecordFencingCheckDuration(d time.Duration) {
+	ns := d.Nanoseconds()
+	atomic.AddInt64(&m.FencingCheckDurationSum, ns)
+	atomic.AddUint64(&m.FencingCheckDurationCount, 1)
+	recordBucket(&m.FencingCheckBuckets, ns)
+}
+
+// RecordFencingRejection records a fencing rejection bucketed by reason.
+// Reason strings are small, fixed enum values — keeps the metric cardinality bounded.
+func (m *Metrics) RecordFencingRejection(reason string) {
+	switch reason {
+	case "lease_not_found":
+		atomic.AddUint64(&m.FencingRejectsLeaseNotFound, 1)
+	case "lease_id_mismatch":
+		atomic.AddUint64(&m.FencingRejectsLeaseMismatch, 1)
+	case "etcd_error":
+		atomic.AddUint64(&m.FencingRejectsEtcdError, 1)
+	}
+}
+
+// RecordLeaseHeartbeat observes a single lease heartbeat renewal.
+func (m *Metrics) RecordLeaseHeartbeat(d time.Duration, success bool) {
+	ns := d.Nanoseconds()
+	atomic.AddInt64(&m.HeartbeatLatencySum, ns)
+	atomic.AddUint64(&m.HeartbeatLatencyCount, 1)
+	recordBucket(&m.HeartbeatLatencyBuckets, ns)
+	if !success {
+		atomic.AddUint64(&m.HeartbeatFailures, 1)
+	}
+}
+
 func (m *Metrics) RecordRetry(success bool, backoffSecs int) {
 	atomic.AddUint64(&m.TotalRetries, 1)
 	atomic.AddInt64(&m.BackoffWaitSum, int64(backoffSecs))
@@ -637,11 +707,42 @@ func (m *Metrics) ExportPrometheus() string {
 	output += promCounter("ares_fencing_tokens_validated_total", "Fencing token validations passed", atomic.LoadUint64(&m.FencingTokensValidated))
 	output += promCounter("ares_fencing_tokens_rejected_total", "Fencing token validations failed (stale)", atomic.LoadUint64(&m.FencingTokensRejected))
 
+	// Fencing check latency (histogram)
+	output += promLatencyHistogram(
+		"ares_fencing_check_duration_seconds",
+		"Fencing ownership check duration (etcd read)",
+		&m.FencingCheckBuckets,
+		atomic.LoadInt64(&m.FencingCheckDurationSum),
+		atomic.LoadUint64(&m.FencingCheckDurationCount),
+	)
+
+	// Fencing rejections by reason (a labeled counter across three fixed reasons)
+	output += promLabeledCounter(
+		"ares_fencing_rejections_total",
+		"Fencing rejections bucketed by reason",
+		"reason",
+		[][2]string{
+			{"lease_not_found", fmt.Sprint(atomic.LoadUint64(&m.FencingRejectsLeaseNotFound))},
+			{"lease_id_mismatch", fmt.Sprint(atomic.LoadUint64(&m.FencingRejectsLeaseMismatch))},
+			{"etcd_error", fmt.Sprint(atomic.LoadUint64(&m.FencingRejectsEtcdError))},
+		},
+	)
+
 	// Leases
 	output += promCounter("ares_leases_acquired_total", "Leases acquired", atomic.LoadUint64(&m.LeasesAcquired))
 	output += promCounter("ares_leases_renewed_total", "Lease renewals", atomic.LoadUint64(&m.LeasesRenewed))
 	output += promCounter("ares_leases_expired_total", "Leases expired", atomic.LoadUint64(&m.LeasesExpired))
 	output += promCounter("ares_leases_released_total", "Leases released", atomic.LoadUint64(&m.LeasesReleased))
+
+	// Lease heartbeat latency (histogram)
+	output += promLatencyHistogram(
+		"ares_lease_heartbeat_duration_seconds",
+		"Lease heartbeat renewal duration",
+		&m.HeartbeatLatencyBuckets,
+		atomic.LoadInt64(&m.HeartbeatLatencySum),
+		atomic.LoadUint64(&m.HeartbeatLatencyCount),
+	)
+	output += promCounter("ares_lease_heartbeat_failures_total", "Lease heartbeat renewal failures", atomic.LoadUint64(&m.HeartbeatFailures))
 
 	// Retry
 	output += promCounter("ares_retries_total", "Total retry attempts", atomic.LoadUint64(&m.TotalRetries))
@@ -710,4 +811,29 @@ func promGauge(name string, help string, value int64) string {
 
 func promGaugeF(name string, help string, value float64) string {
 	return fmt.Sprintf("# HELP %s %s\n# TYPE %s gauge\n%s %.4f\n\n", name, help, name, name, value)
+}
+
+// promLabeledCounter emits a single counter with one label dimension and a
+// small fixed set of label values. Cardinality is bounded by the caller.
+func promLabeledCounter(name, help, labelKey string, entries [][2]string) string {
+	out := fmt.Sprintf("# HELP %s %s\n# TYPE %s counter\n", name, help, name)
+	for _, e := range entries {
+		out += fmt.Sprintf("%s{%s=%q} %s\n", name, labelKey, e[0], e[1])
+	}
+	return out + "\n"
+}
+
+// promLatencyHistogram exports a Prometheus histogram given cumulative bucket
+// counts indexed by latencyBucketUpperBoundsNs (plus +Inf as buckets[7]),
+// a sum in nanoseconds, and an observation count.
+func promLatencyHistogram(name, help string, buckets *[8]uint64, sumNs int64, count uint64) string {
+	out := fmt.Sprintf("# HELP %s %s\n# TYPE %s histogram\n", name, help, name)
+	for i, upper := range latencyBucketUpperBoundsNs {
+		le := float64(upper) / float64(time.Second)
+		out += fmt.Sprintf("%s_bucket{le=\"%g\"} %d\n", name, le, atomic.LoadUint64(&buckets[i]))
+	}
+	out += fmt.Sprintf("%s_bucket{le=\"+Inf\"} %d\n", name, atomic.LoadUint64(&buckets[7]))
+	out += fmt.Sprintf("%s_sum %.6f\n", name, float64(sumNs)/float64(time.Second))
+	out += fmt.Sprintf("%s_count %d\n\n", name, count)
+	return out
 }

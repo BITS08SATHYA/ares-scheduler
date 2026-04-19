@@ -488,21 +488,25 @@ func NewAPIGatewayWithCoordinator(
 		jobStore,
 		globalScheduler,
 		&orchestrator.MetricsRecorder{
-			OnDuplicateBlocked:  func() { metrics.RecordDuplicateBlocked() },
-			OnLeaseAcquired:     func() { metrics.RecordLease("acquired") },
-			OnJobPriority:       func(p int) { metrics.RecordJobPriority(p) },
-			OnSchedulingLatency: func(d time.Duration) { metrics.RecordSchedulingLatency(d) },
-			OnFencingTokenSet:   func() { metrics.RecordFencingToken(true) },
-			OnFencingRejected:   func() { metrics.RecordFencingToken(false) },
-			OnFencedWriteReject: func() { metrics.RecordFencedWriteRejected() },
-			OnJobCompleted:      func(ok bool) { metrics.RecordJobCompleted(ok) },
-			OnJobQueued:         func() { metrics.RecordJobQueued() },
-			OnJobDequeued:       func() { metrics.RecordJobDequeued() },
-			OnJobRescheduled:    func() { metrics.RecordJobSubmitted() },
-			OnJobE2ELatency:     func(d time.Duration) { metrics.RecordJobE2ELatency(d) },
+			OnDuplicateBlocked:      func() { metrics.RecordDuplicateBlocked() },
+			OnLeaseAcquired:         func() { metrics.RecordLease("acquired") },
+			OnJobPriority:           func(p int) { metrics.RecordJobPriority(p) },
+			OnSchedulingLatency:     func(d time.Duration) { metrics.RecordSchedulingLatency(d) },
+			OnFencingTokenSet:       func() { metrics.RecordFencingToken(true) },
+			OnFencingRejected:       func() { metrics.RecordFencingToken(false) },
+			OnFencingRejectedReason: func(reason string) { metrics.RecordFencingRejection(reason) },
+			OnFencingCheckDuration:  func(d time.Duration) { metrics.RecordFencingCheckDuration(d) },
+			OnFencedWriteReject:     func() { metrics.RecordFencedWriteRejected() },
+			OnJobCompleted:          func(ok bool) { metrics.RecordJobCompleted(ok) },
+			OnJobQueued:             func() { metrics.RecordJobQueued() },
+			OnJobDequeued:           func() { metrics.RecordJobDequeued() },
+			OnJobRescheduled:        func() { metrics.RecordJobSubmitted() },
+			OnJobE2ELatency:         func(d time.Duration) { metrics.RecordJobE2ELatency(d) },
 			//OnJobRunning:        func() { metrics.RecordJobRunning() },
 		},
 	)
+
+	leaseManager.SetHeartbeatMetrics(metrics)
 
 	log.Info("✓ Layer 10: JobCoordinator")
 

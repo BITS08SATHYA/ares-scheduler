@@ -89,6 +89,14 @@ type LeaseManager struct {
 	heartbeatContexts map[string]context.CancelFunc // Store cancel functions
 	heartbeatWg       sync.WaitGroup                // Wait for heartbeat goroutines to exit
 	releaseOnces      map[string]*sync.Once
+	metrics           HeartbeatMetrics // Optional — may be nil
+}
+
+// HeartbeatMetrics lets the lease manager emit per-tick heartbeat observations
+// without taking a hard dependency on the gateway's Metrics type. Set via
+// SetHeartbeatMetrics; nil (default) means no-op.
+type HeartbeatMetrics interface {
+	RecordLeaseHeartbeat(d time.Duration, success bool)
 }
 
 // NewLeaseManager creates a new lease manager with heartbeat
@@ -103,6 +111,13 @@ func NewLeaseManager(etcdClient *etcd.ETCDClient, schedulerID string, log Logger
 		heartbeatContexts: make(map[string]context.CancelFunc),
 		releaseOnces:      make(map[string]*sync.Once),
 	}
+}
+
+// SetHeartbeatMetrics attaches an optional metrics recorder for per-tick
+// heartbeat renewal observations (latency + success/failure). Call once at
+// wiring time; concurrent re-assignment is not supported.
+func (lm *LeaseManager) SetHeartbeatMetrics(m HeartbeatMetrics) {
+	lm.metrics = m
 }
 
 // Close: Graceful shutdown — cancel all heartbeat goroutines and release leases.
@@ -263,7 +278,12 @@ func (lm *LeaseManager) runHeartbeat(
 
 		case <-ticker.C:
 			// Time to renew lease
+			tickStart := time.Now()
 			err := lm.etcdClient.KeepAliveOnce(context.Background(), leaseID)
+			tickDur := time.Since(tickStart)
+			if lm.metrics != nil {
+				lm.metrics.RecordLeaseHeartbeat(tickDur, err == nil)
+			}
 			if err != nil {
 				consecutiveFailures++
 				lm.log.Warnf("heartbeat FAILED for job %s: %v (attempt %d/%d)",

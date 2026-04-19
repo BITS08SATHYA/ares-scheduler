@@ -38,8 +38,56 @@ func NewIdempotencyManager(redisClient *redis.RedisClient) *IdempotencyManager {
 	return &IdempotencyManager{
 		redisClient: redisClient,
 		log:         logger.Get(),
-		ttl:         24 * time.Hour, // Cache dedup results for 24 hours
+		ttl:         defaultTTL,
 	}
+}
+
+// defaultTTL is used when no WithTTL option is supplied. It must exceed the
+// longest typical job runtime so retry-after-completion still hits the cache.
+const defaultTTL = 24 * time.Hour
+
+// ComputeTTL returns the idempotency cache TTL for a job with the given
+// timeoutSecs. TTLs shorter than defaultTTL are clamped up, and a one-hour
+// safety margin is added so a retry that arrives just after a job finishes
+// still sees the cached result.
+//
+// For example, a 30-hour training job gets TTL = 31h, not the 24h default —
+// without this, its 25h-retry would re-execute the job.
+func ComputeTTL(timeoutSecs int) time.Duration {
+	if timeoutSecs <= 0 {
+		return defaultTTL
+	}
+	ttl := time.Duration(timeoutSecs)*time.Second + time.Hour
+	if ttl < defaultTTL {
+		return defaultTTL
+	}
+	return ttl
+}
+
+// RecordOption customises a single idempotency operation. Use WithTTL to
+// override the per-call cache duration (e.g. for long-running jobs).
+type RecordOption func(*recordConfig)
+
+type recordConfig struct {
+	ttl time.Duration
+}
+
+// WithTTL overrides the dedup cache TTL for this call only. Pass
+// ComputeTTL(job.Spec.TimeoutSecs) from the orchestrator.
+func WithTTL(ttl time.Duration) RecordOption {
+	return func(c *recordConfig) {
+		if ttl > 0 {
+			c.ttl = ttl
+		}
+	}
+}
+
+func (im *IdempotencyManager) applyOptions(opts []RecordOption) recordConfig {
+	cfg := recordConfig{ttl: im.ttl}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+	return cfg
 }
 
 // ============================================================================
@@ -97,11 +145,12 @@ func (im *IdempotencyManager) CheckDuplicate(ctx context.Context, requestID stri
 // - If new request: reserves it atomically, returns (nil, false, nil)
 // - If duplicate: returns (cached result, true, nil)
 // - If Redis error: returns (nil, false, error) — caller should fail the request
-func (im *IdempotencyManager) CheckAndReserve(ctx context.Context, requestID string, jobID string) (*IdempotencyResult, bool, error) {
+func (im *IdempotencyManager) CheckAndReserve(ctx context.Context, requestID string, jobID string, opts ...RecordOption) (*IdempotencyResult, bool, error) {
 	if requestID == "" {
 		return nil, false, fmt.Errorf("request ID cannot be empty")
 	}
 
+	cfg := im.applyOptions(opts)
 	dedupeKey := fmt.Sprintf("ares:idempotency:%s", requestID)
 
 	// Store the real job ID in the placeholder so duplicates get it immediately
@@ -116,7 +165,7 @@ func (im *IdempotencyManager) CheckAndReserve(ctx context.Context, requestID str
 	}
 
 	// Atomic SetNX: only ONE concurrent request wins this race
-	wasSet, err := im.redisClient.SetNX(ctx, dedupeKey, string(placeholderJSON), im.ttl)
+	wasSet, err := im.redisClient.SetNX(ctx, dedupeKey, string(placeholderJSON), cfg.ttl)
 	if err != nil {
 		im.log.Error("Idempotency atomic reserve failed (Redis unreachable): %v", err)
 		return nil, false, fmt.Errorf("idempotency check unavailable (Redis error): %w", err)
@@ -155,11 +204,12 @@ func (im *IdempotencyManager) CheckAndReserve(ctx context.Context, requestID str
 
 // RecordSuccess: Record a successful job submission in dedup cache
 // Call this after job is successfully created
-func (im *IdempotencyManager) RecordSuccess(ctx context.Context, requestID string, jobID string) error {
+func (im *IdempotencyManager) RecordSuccess(ctx context.Context, requestID string, jobID string, opts ...RecordOption) error {
 	if requestID == "" || jobID == "" {
 		return fmt.Errorf("request ID and job ID cannot be empty")
 	}
 
+	cfg := im.applyOptions(opts)
 	dedupeKey := fmt.Sprintf("ares:idempotency:%s", requestID)
 
 	result := &IdempotencyResult{
@@ -174,8 +224,7 @@ func (im *IdempotencyManager) RecordSuccess(ctx context.Context, requestID strin
 		return fmt.Errorf("marshal failed: %w", err)
 	}
 
-	// Store with TTL (expires after 24 hours)
-	err = im.redisClient.Set(ctx, dedupeKey, string(resultJSON), im.ttl)
+	err = im.redisClient.Set(ctx, dedupeKey, string(resultJSON), cfg.ttl)
 	if err != nil {
 		im.log.Error("Failed to store dedup result: %v", err)
 		return fmt.Errorf("store failed: %w", err)
@@ -187,11 +236,12 @@ func (im *IdempotencyManager) RecordSuccess(ctx context.Context, requestID strin
 
 // RecordCompletion: Record job completion in dedup cache
 // Call this when job finishes (success or failure)
-func (im *IdempotencyManager) RecordCompletion(ctx context.Context, requestID string, jobID string, status string, result string) error {
+func (im *IdempotencyManager) RecordCompletion(ctx context.Context, requestID string, jobID string, status string, result string, opts ...RecordOption) error {
 	if requestID == "" || jobID == "" {
 		return fmt.Errorf("request ID and job ID cannot be empty")
 	}
 
+	cfg := im.applyOptions(opts)
 	dedupeKey := fmt.Sprintf("ares:idempotency:%s", requestID)
 
 	// Preserve original submit time from existing cache entry if available
@@ -217,7 +267,7 @@ func (im *IdempotencyManager) RecordCompletion(ctx context.Context, requestID st
 		return fmt.Errorf("marshal failed: %w", err)
 	}
 
-	err = im.redisClient.Set(ctx, dedupeKey, string(completionJSON), im.ttl)
+	err = im.redisClient.Set(ctx, dedupeKey, string(completionJSON), cfg.ttl)
 	if err != nil {
 		im.log.Error("Failed to store completion: %v", err)
 		return fmt.Errorf("store failed: %w", err)
@@ -307,8 +357,10 @@ func (im *IdempotencyManager) CountCacheEntries(ctx context.Context) (int64, err
 // ============================================================================
 
 // RecordJobTransition: Record job state transition in dedup cache
-// Call this when job changes status
-func (im *IdempotencyManager) RecordJobTransition(ctx context.Context, requestID string, job *common.Job) error {
+// Call this when job changes status. TTL defaults to the manager default;
+// callers with long-running jobs should pass WithTTL(ComputeTTL(job.Spec.TimeoutSecs)).
+func (im *IdempotencyManager) RecordJobTransition(ctx context.Context, requestID string, job *common.Job, opts ...RecordOption) error {
+	cfg := im.applyOptions(opts)
 	dedupeKey := fmt.Sprintf("ares:idempotency:%s", requestID)
 
 	// Get current result
@@ -348,7 +400,7 @@ func (im *IdempotencyManager) RecordJobTransition(ctx context.Context, requestID
 		return fmt.Errorf("marshal failed: %w", err)
 	}
 
-	err = im.redisClient.Set(ctx, dedupeKey, string(resultJSON), im.ttl)
+	err = im.redisClient.Set(ctx, dedupeKey, string(resultJSON), cfg.ttl)
 	if err != nil {
 		return fmt.Errorf("store failed: %w", err)
 	}

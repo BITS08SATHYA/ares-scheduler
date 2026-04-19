@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -51,19 +52,21 @@ type JobCoordinator struct {
 
 // Metrics Recorder
 type MetricsRecorder struct {
-	OnDuplicateBlocked  func()
-	OnLeaseAcquired     func()
-	OnJobPriority       func(int)
-	OnSchedulingLatency func(time.Duration)
-	OnFencingTokenSet   func()
-	OnFencingRejected   func() // Fencing check failed (lease lost)
-	OnFencedWriteReject func() // Atomic fenced write rejected by etcd
-	OnJobCompleted      func(bool)
-	OnJobQueued         func()
-	OnJobDequeued       func()
-	OnJobRescheduled    func()
-	OnJobE2ELatency     func(time.Duration) // Record End-to-End Latency
-	OnJobRunning        func()
+	OnDuplicateBlocked      func()
+	OnLeaseAcquired         func()
+	OnJobPriority           func(int)
+	OnSchedulingLatency     func(time.Duration)
+	OnFencingTokenSet       func()
+	OnFencingRejected       func()              // Fencing check failed (lease lost)
+	OnFencingRejectedReason func(reason string) // Reason bucket for fencing failure
+	OnFencingCheckDuration  func(time.Duration) // Latency of the etcd ownership probe
+	OnFencedWriteReject     func()              // Atomic fenced write rejected by etcd
+	OnJobCompleted          func(bool)
+	OnJobQueued             func()
+	OnJobDequeued           func()
+	OnJobRescheduled        func()
+	OnJobE2ELatency         func(time.Duration) // Record End-to-End Latency
+	OnJobRunning            func()
 }
 type SchedulingResult struct {
 	JobID              string    `json:"job_id"`
@@ -141,7 +144,8 @@ func (jc *JobCoordinator) ScheduleJob(
 	jobID := fmt.Sprintf("job-%d-%s", time.Now().UnixNano(), jobSpec.RequestID)
 	span.SetAttributes(attribute.String("job_id", jobID))
 
-	cachedResult, isDuplicate, err := jc.idempotencyMgr.CheckAndReserve(ctx, jobSpec.RequestID, jobID)
+	dedupTTL := idempotency.WithTTL(idempotency.ComputeTTL(jobSpec.TimeoutSecs))
+	cachedResult, isDuplicate, err := jc.idempotencyMgr.CheckAndReserve(ctx, jobSpec.RequestID, jobID, dedupTTL)
 	if err != nil {
 		// Redis unavailable — fail the request so client retries with same ID later
 		return nil, fmt.Errorf("idempotency check failed: %w", err)
@@ -296,7 +300,7 @@ func (jc *JobCoordinator) ScheduleJob(
 	// STEP 6: Record in idempotency cache
 	// ========================================================================
 
-	err = jc.idempotencyMgr.RecordSuccess(ctx, jobSpec.RequestID, jobID)
+	err = jc.idempotencyMgr.RecordSuccess(ctx, jobSpec.RequestID, jobID, dedupTTL)
 	if err != nil {
 		jc.log.Warn("Failed to record idempotency (non-fatal): %v", err)
 	}
@@ -518,17 +522,46 @@ func (jc *JobCoordinator) MonitorJob(ctx context.Context, jobID string, leaseID 
 // 5. A: Check lease before write → lease expired → ABORT ✓
 // 5. B: Check lease before write → lease ours → proceed ✓
 func (jc *JobCoordinator) checkFencingToken(ctx context.Context, jobID string, leaseID int64) (int64, error) {
+	start := time.Now()
 	modRevision, err := jc.leaseManager.CheckLeaseOwnership(ctx, jobID, leaseID)
+	dur := time.Since(start)
+
+	if jc.metricsRecorder != nil && jc.metricsRecorder.OnFencingCheckDuration != nil {
+		jc.metricsRecorder.OnFencingCheckDuration(dur)
+	}
+
 	if err != nil {
 		jc.log.Error("FENCING TRIGGERED: %v", err)
-		if jc.metricsRecorder != nil && jc.metricsRecorder.OnFencingRejected != nil {
-			jc.metricsRecorder.OnFencingRejected()
+		if jc.metricsRecorder != nil {
+			if jc.metricsRecorder.OnFencingRejected != nil {
+				jc.metricsRecorder.OnFencingRejected()
+			}
+			if jc.metricsRecorder.OnFencingRejectedReason != nil {
+				jc.metricsRecorder.OnFencingRejectedReason(classifyFencingError(err))
+			}
 		}
 		return 0, err
 	}
 
 	jc.log.Debug("Fencing check passed for job %s (modRevision=%d)", jobID, modRevision)
 	return modRevision, nil
+}
+
+// classifyFencingError maps a fencing error message to a bounded reason label.
+// The lease manager uses fixed phrases, so substring matches are stable.
+func classifyFencingError(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "lease not found"), strings.Contains(msg, "split-brain prevented"):
+		return "lease_not_found"
+	case strings.Contains(msg, "lease ID mismatch"):
+		return "lease_id_mismatch"
+	default:
+		return "etcd_error"
+	}
 }
 
 // ============================================================================

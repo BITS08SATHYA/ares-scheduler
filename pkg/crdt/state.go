@@ -198,14 +198,65 @@ func NewCRDTJobState(nodeID string, jobID string) *CRDTJobState {
 	}
 }
 
-// UpdateStatus: Update job status with causal tracking
-func (js *CRDTJobState) UpdateStatus(nodeID string, status string) {
+// ErrInvalidTransition is returned by UpdateStatus when the caller requests
+// a state transition that violates the job lifecycle state machine (e.g. from
+// a terminal state back to PENDING).
+var ErrInvalidTransition = fmt.Errorf("invalid job status transition")
+
+// allowedJobTransitions encodes the legal job lifecycle state machine.
+// Terminal states (SUCCEEDED, FAILED, CANCELED) have no outgoing edges.
+// QUEUED is a soft-entry state used when scheduling is deferred, and can
+// transition forward exactly like PENDING.
+var allowedJobTransitions = map[string]map[string]bool{
+	"PENDING":   {"SCHEDULED": true, "QUEUED": true, "FAILED": true, "CANCELED": true, "PREEMPTED": true},
+	"QUEUED":    {"PENDING": true, "SCHEDULED": true, "FAILED": true, "CANCELED": true},
+	"SCHEDULED": {"RUNNING": true, "FAILED": true, "CANCELED": true, "PREEMPTED": true, "RETRYING": true},
+	"RUNNING":   {"SUCCEEDED": true, "FAILED": true, "CANCELED": true, "PREEMPTED": true},
+	"RETRYING":  {"PENDING": true, "SCHEDULED": true, "FAILED": true, "CANCELED": true},
+	"PREEMPTED": {"PENDING": true, "SCHEDULED": true, "CANCELED": true},
+	"SUCCEEDED": {},
+	"FAILED":    {},
+	"CANCELED":  {},
+}
+
+// UpdateStatus updates job status with causal tracking. Returns
+// ErrInvalidTransition if the requested status is not reachable from the
+// current status per allowedJobTransitions. An empty/missing current status
+// is treated as PENDING (the initial state set by NewCRDTJobState).
+func (js *CRDTJobState) UpdateStatus(nodeID string, status string) error {
 	js.mu.Lock()
 	defer js.mu.Unlock()
+
+	current := ""
+	if v, ok := js.Status.Value.(string); ok {
+		current = v
+	}
+	if current == "" {
+		current = "PENDING"
+	}
+
+	if current == status {
+		// No-op transition (idempotent from the same node). Still bump the
+		// clock so replicas see the heartbeat; don't rewrite the register
+		// value to avoid producing a later timestamp that would shadow a
+		// concurrent terminal write.
+		js.Clock.Increment(nodeID)
+		js.UpdatedAt = time.Now()
+		return nil
+	}
+
+	allowed, ok := allowedJobTransitions[current]
+	if !ok {
+		return fmt.Errorf("%w: unknown current status %q", ErrInvalidTransition, current)
+	}
+	if !allowed[status] {
+		return fmt.Errorf("%w: %s -> %s", ErrInvalidTransition, current, status)
+	}
 
 	js.Status.Set(nodeID, status)
 	js.Clock.Increment(nodeID)
 	js.UpdatedAt = time.Now()
+	return nil
 }
 
 // UpdatePlacement: Update job placement info
