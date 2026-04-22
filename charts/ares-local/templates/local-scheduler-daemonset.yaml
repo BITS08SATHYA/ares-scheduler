@@ -23,7 +23,7 @@ spec:
       {{- end }}
       hostNetwork: false
       hostPID: false
-      serviceAccountName: ares-scheduler
+      serviceAccountName: ares-local
       containers:
         - name: ares-local
           image: {{ required "image.repository is required — set via --set image.repository=<your-registry>/ares-scheduler-local" .Values.image.repository }}:{{ .Values.image.tag }}

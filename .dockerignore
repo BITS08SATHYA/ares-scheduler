@@ -1,0 +1,12 @@
+.git
+.github
+.vscode
+.idea
+bin/
+/global
+/local
+*.log
+*.test
+*.out
+coverage.*
+docs/

@@ -1,0 +1,59 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: gpu-smoke
+  namespace: default
+spec:
+  restartPolicy: Never
+  containers:
+    - name: smoke
+      image: nvcr.io/nvidia/k8s/cuda-sample:nbody-cuda11.7.1
+      command: ["bash", "-c"]
+      args:
+        - |
+          export LD_LIBRARY_PATH=/opt/nvidia/lib:$LD_LIBRARY_PATH
+          export PATH=/opt/nvidia/bin:$PATH
+          echo "=== /dev/nvidia* ==="
+          ls -la /dev/nvidia* 2>&1 || echo NONE
+          echo "=== nvidia-smi ==="
+          /opt/nvidia/bin/nvidia-smi 2>&1 || echo FAIL
+      resources:
+        limits:
+          nvidia.com/gpu: 1
+      volumeMounts:
+        - name: libnvidia-ml-1
+          mountPath: /opt/nvidia/lib/libnvidia-ml.so.1
+          readOnly: true
+        - name: libnvidia-ml
+          mountPath: /opt/nvidia/lib/libnvidia-ml.so.580.105.08
+          readOnly: true
+        - name: libcuda-1
+          mountPath: /opt/nvidia/lib/libcuda.so.1
+          readOnly: true
+        - name: libcuda
+          mountPath: /opt/nvidia/lib/libcuda.so.580.105.08
+          readOnly: true
+        - name: nvidia-smi
+          mountPath: /opt/nvidia/bin/nvidia-smi
+          readOnly: true
+  volumes:
+    - name: libnvidia-ml-1
+      hostPath:
+        path: /usr/lib/x86_64-linux-gnu/libnvidia-ml.so.1
+        type: File
+    - name: libnvidia-ml
+      hostPath:
+        path: /usr/lib/x86_64-linux-gnu/libnvidia-ml.so.580.105.08
+        type: File
+    - name: libcuda-1
+      hostPath:
+        path: /usr/lib/x86_64-linux-gnu/libcuda.so.1
+        type: File
+    - name: libcuda
+      hostPath:
+        path: /usr/lib/x86_64-linux-gnu/libcuda.so.580.105.08
+        type: File
+    - name: nvidia-smi
+      hostPath:
+        path: /usr/bin/nvidia-smi
+        type: File

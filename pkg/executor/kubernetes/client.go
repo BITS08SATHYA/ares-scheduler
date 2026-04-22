@@ -120,12 +120,18 @@ func (kc *K8sClientImpl) CreatePod(ctx context.Context, podSpec *executor.PodSpe
 		requests[corev1.ResourceName("nvidia.com/gpu")] = resource.MustParse(fmt.Sprintf("%d", podSpec.GPUCount))
 	}
 
+	// Build env vars; inject GPU driver-lib hints when the pod requests a GPU
+	envVars := podSpec.EnvVars
+	if podSpec.GPUCount > 0 {
+		envVars = mergeGPUDriverEnv(envVars)
+	}
+
 	// Build container spec
 	container := corev1.Container{
 		Name:            podSpec.PodName,
 		Image:           podSpec.Image,
 		ImagePullPolicy: corev1.PullPolicy(podSpec.ImagePullPolicy),
-		Env:             envMapToEnvVars(podSpec.EnvVars),
+		Env:             envMapToEnvVars(envVars),
 		Resources: corev1.ResourceRequirements{
 			Requests: requests,
 			Limits:   requests,
@@ -143,6 +149,18 @@ func (kc *K8sClientImpl) CreatePod(ctx context.Context, podSpec *executor.PodSpe
 	// Build tolerations - ALIGNED WITH DAEMONSET (OPTION 1: CATCH-ALL)
 	tolerations := buildPodTolerations()
 
+	// Attach GPU driver-lib hostPath mount when the pod requests a GPU.
+	// The device-plugin provides /dev/nvidia* char devices via the GPU request,
+	// but CUDA user-space libs (libcuda, libnvidia-ml) and nvidia-smi must be
+	// bind-mounted from the host — nvidia-container-runtime/CDI injection is
+	// not working on the target containerd on local microk8s.
+	var podVolumes []corev1.Volume
+	if podSpec.GPUCount > 0 {
+		vol, mount := buildGPUDriverVolume()
+		podVolumes = append(podVolumes, vol)
+		container.VolumeMounts = append(container.VolumeMounts, mount)
+	}
+
 	// Build Pod object
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -157,6 +175,7 @@ func (kc *K8sClientImpl) CreatePod(ctx context.Context, podSpec *executor.PodSpe
 				"kubernetes.io/hostname": podSpec.NodeID,
 			},
 			Tolerations: tolerations, // ✅ CRITICAL: Aligned with DaemonSet
+			Volumes:     podVolumes,
 		},
 	}
 
@@ -254,6 +273,45 @@ func buildPodTolerations() []corev1.Toleration {
 			Effect:   corev1.TaintEffectNoExecute,
 		},
 	}
+}
+
+// gpuDriverHostPath is the directory on each GPU node that aggregates
+// NVIDIA driver libraries and nvidia-smi for containers to consume.
+// Matches the ares-local DaemonSet's gpu.hostPath value — keep them in sync.
+const gpuDriverHostPath = "/opt/nvidia"
+
+// buildGPUDriverVolume returns the hostPath volume and container mount that
+// expose the node's NVIDIA driver libs + nvidia-smi to a GPU pod. The char
+// devices under /dev/nvidia* come from the device-plugin via the GPU resource
+// request; this mount only covers user-space libs that nvidia-container-runtime
+// would normally inject.
+func buildGPUDriverVolume() (corev1.Volume, corev1.VolumeMount) {
+	hostPathType := corev1.HostPathDirectory
+	return corev1.Volume{
+			Name: "ares-gpu-driver",
+			VolumeSource: corev1.VolumeSource{
+				HostPath: &corev1.HostPathVolumeSource{
+					Path: gpuDriverHostPath,
+					Type: &hostPathType,
+				},
+			},
+		}, corev1.VolumeMount{
+			Name:      "ares-gpu-driver",
+			MountPath: gpuDriverHostPath,
+			ReadOnly:  true,
+		}
+}
+
+// mergeGPUDriverEnv returns a copy of envMap with LD_LIBRARY_PATH and PATH
+// pre-set to point at the gpu driver mount. Caller-supplied values always win.
+func mergeGPUDriverEnv(envMap map[string]string) map[string]string {
+	out := make(map[string]string, len(envMap)+2)
+	out["LD_LIBRARY_PATH"] = gpuDriverHostPath + "/lib64:" + gpuDriverHostPath + "/lib"
+	out["PATH"] = gpuDriverHostPath + "/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+	for k, v := range envMap {
+		out[k] = v
+	}
+	return out
 }
 
 // envMapToEnvVars: Convert map to Kubernetes EnvVar slice
