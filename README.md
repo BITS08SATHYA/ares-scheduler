@@ -2,7 +2,7 @@
 
 # Ares: Distributed GPU Scheduler for Kubernetes
 
-### v0.1.0
+### v0.2.0
 
 **Multi-cluster scheduling with exactly-once execution, CRDT-based consistency, gang scheduling, and DRF fairness.**
 
