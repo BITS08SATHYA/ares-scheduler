@@ -1149,7 +1149,7 @@ func (gs *GlobalScheduler) OnClusterStateChange(
 	}
 
 	gs.clustersMu.Lock()
-	_, exists := gs.clusters[clusterID]
+	info, exists := gs.clusters[clusterID]
 	gs.clustersMu.Unlock()
 
 	if !exists {
@@ -1160,8 +1160,22 @@ func (gs *GlobalScheduler) OnClusterStateChange(
 	gs.log.Info("GlobalScheduler: Cluster %s state changed: %s → %s",
 		clusterID, oldState, newState)
 
-	// Update cluster state in cache if needed
-	// (You might want to track this in ClusterInfo struct)
+	// Re-sync capacity from ClusterManager: JoinCluster fires this listener
+	// BEFORE UpdateClusterCapacity runs, so the initial ClusterInfo snapshot
+	// has TotalGPUs=0. Refresh it on JOINING→READY when capacity is known.
+	if newState == cluster.StateReady {
+		fresh, err := gs.clusterManager.GetClusterInfo(clusterID)
+		if err == nil && fresh != nil {
+			gs.clustersMu.Lock()
+			info.TotalGPUs = fresh.TotalGPUs
+			info.AvailableGPUs = fresh.AvailableGPUs
+			info.TotalMemoryGB = fresh.TotalMemoryGB
+			info.AvailableMemoryGB = fresh.AvailableMemoryGB
+			gs.clustersMu.Unlock()
+			gs.log.Info("GlobalScheduler: Synced capacity for %s (TotalGPUs=%d, AvailableGPUs=%d)",
+				clusterID, fresh.TotalGPUs, fresh.AvailableGPUs)
+		}
+	}
 
 	return nil
 }
