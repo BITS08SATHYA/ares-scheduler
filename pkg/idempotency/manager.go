@@ -64,7 +64,7 @@ func ComputeTTL(timeoutSecs int) time.Duration {
 	return ttl
 }
 
-// RecordOption customises a single idempotency operation. Use WithTTL to
+// RecordOption customizes a single idempotency operation. Use WithTTL to
 // override the per-call cache duration (e.g. for long-running jobs).
 type RecordOption func(*recordConfig)
 

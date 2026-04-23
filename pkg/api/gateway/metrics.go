@@ -108,8 +108,8 @@ type Metrics struct {
 	FencedWritesRejected     uint64 // Atomic fenced writes rejected by etcd (split-brain prevented)
 
 	// Fencing check duration (histogram — exposed as bucket counters + sum + count)
-	FencingCheckDurationSum   int64    // Sum of fencing check durations (ns)
-	FencingCheckDurationCount uint64   // Number of fencing checks observed
+	FencingCheckDurationSum   int64     // Sum of fencing check durations (ns)
+	FencingCheckDurationCount uint64    // Number of fencing checks observed
 	FencingCheckBuckets       [8]uint64 // Cumulative buckets: 1ms, 5ms, 10ms, 50ms, 100ms, 500ms, 1s, +Inf
 
 	// Fencing rejection reason breakdown
@@ -125,10 +125,10 @@ type Metrics struct {
 	LeasesShutdown uint64 // Leases canceled during graceful shutdown
 
 	// Lease heartbeat latency (histogram — exposed as bucket counters + sum + count)
-	HeartbeatLatencySum   int64    // Sum of heartbeat renewal durations (ns)
-	HeartbeatLatencyCount uint64   // Number of heartbeats observed (success + failure)
+	HeartbeatLatencySum     int64     // Sum of heartbeat renewal durations (ns)
+	HeartbeatLatencyCount   uint64    // Number of heartbeats observed (success + failure)
 	HeartbeatLatencyBuckets [8]uint64 // Cumulative buckets: 1ms, 5ms, 10ms, 50ms, 100ms, 500ms, 1s, +Inf
-	HeartbeatFailures     uint64   // Per-tick heartbeat renewal failures
+	HeartbeatFailures       uint64    // Per-tick heartbeat renewal failures
 
 	// Retry (Feature 7)
 	TotalRetries   uint64 // Total retry attempts

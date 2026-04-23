@@ -11,10 +11,10 @@ func TestComputeTTL_DefaultForShortJobs(t *testing.T) {
 	// Any job with timeout <= 23h gets clamped up to the 24h default so
 	// normal retry windows remain covered.
 	assert.Equal(t, 24*time.Hour, ComputeTTL(0))
-	assert.Equal(t, 24*time.Hour, ComputeTTL(60))            // 1 min job
-	assert.Equal(t, 24*time.Hour, ComputeTTL(3600))          // 1h job
-	assert.Equal(t, 24*time.Hour, ComputeTTL(23*3600))       // 23h job
-	assert.Equal(t, 24*time.Hour, ComputeTTL(-1))            // malformed → default
+	assert.Equal(t, 24*time.Hour, ComputeTTL(60))      // 1 min job
+	assert.Equal(t, 24*time.Hour, ComputeTTL(3600))    // 1h job
+	assert.Equal(t, 24*time.Hour, ComputeTTL(23*3600)) // 23h job
+	assert.Equal(t, 24*time.Hour, ComputeTTL(-1))      // malformed → default
 }
 
 func TestComputeTTL_LongRunningJob(t *testing.T) {

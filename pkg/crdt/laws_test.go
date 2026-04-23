@@ -290,7 +290,7 @@ func randomLWWRegister(rng *rand.Rand) *LWWRegister {
 	nodeID := fmt.Sprintf("node-%d", rng.Intn(3))
 	value := fmt.Sprintf("val-%d", rng.Intn(100))
 	r := NewLWWRegister(nodeID, value)
-	// Randomise the timestamp across a small window so concurrent writes
+	// Randomize the timestamp across a small window so concurrent writes
 	// collide on timestamp equality (exercises the nodeID tiebreak).
 	r.Timestamp = time.Unix(0, int64(rng.Intn(1_000_000_000)))
 	return r
