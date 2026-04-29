@@ -87,24 +87,29 @@ Storage: etcd (leases, consensus) · Redis (idempotency, caching)
 
 ### Codebase Breakdown
 
+**36,828 lines of Go across 261 commits.**
+
 | Package | Lines | What It Does |
 |---------|-------|-------------|
-| `pkg/scheduler/` | 5,119 | Global scheduler, local scheduler, DRF, preemption, gang scheduling |
-| `pkg/api/` | 2,922 | API gateway, HTTP handlers, Prometheus metrics (714 lines covering 7 subsystems) |
-| `pkg/cluster/` | 2,782 | Cluster manager, registry, health monitor, heartbeat agent, autonomy engine, auto-registration |
-| `pkg/gpu/` | 1,897 | GPU discovery (`nvidia-smi` parsing), topology scoring (NVLink graph, placement algorithm) |
-| `pkg/executor/` | 1,801 | Job execution engine, K8s pod management, fencing token validation |
-| `pkg/crdt/` | 1,553 | Vector clocks, LWW-registers, OR-Sets, cluster/job state CRDTs, cross-cluster sync |
-| `pkg/job/` | 961 | Job model (state machine), persistent store (etcd-backed) |
-| `pkg/orchestrator/` | 828 | Multi-cluster coordination |
-| `pkg/lease/` | 652 | Distributed lease manager, heartbeat renewal, `sync.Once` release safety |
-| `pkg/storage/` | 784 | etcd client (leases, CAS writes), Redis client (caching, idempotency) |
-| `pkg/checkpoint/` | 307 | Checkpoint metadata management, S3 path injection |
-| `pkg/queue/` | 321 | Priority job queue |
-| `pkg/idempotency/` | 297 | Request deduplication (Redis-backed) |
-| `cmd/` | 2,701 | Global entry point, local entry point, benchmark suite (1,576 lines), test harness |
-| `tests/unit/` | 3,973 | Unit tests: idempotency, leases, storage (etcd + Redis), GPU discovery, GPU topology, API gateway |
-| **Total** | **27,334** | |
+| `pkg/scheduler/` | 7,968 | Global scheduler, local scheduler, DRF, preemption, gang scheduling |
+| `tests/unit/` | 4,015 | Unit tests: idempotency, leases, storage (etcd + Redis), GPU discovery, GPU topology, API gateway |
+| `cmd/` | 3,773 | Global entry point, local entry point, benchmark suite (2,635 lines), test harness |
+| `pkg/cluster/` | 3,373 | Cluster manager, registry, health monitor, heartbeat agent, autonomy engine, auto-registration |
+| `pkg/api/` | 3,185 | API gateway, HTTP handlers, Prometheus metrics (839 lines covering 7 subsystems) |
+| `pkg/crdt/` | 2,573 | Vector clocks, LWW-registers, OR-Sets, cluster/job state CRDTs, cross-cluster sync |
+| `pkg/gpu/` | 2,167 | GPU discovery (`nvidia-smi` parsing), topology scoring (NVLink graph, placement algorithm) |
+| `pkg/executor/` | 1,786 | Job execution engine, K8s pod management, fencing token validation |
+| `pkg/job/` | 1,486 | Job model (state machine), persistent store (etcd-backed) |
+| `tests/integration/` | 1,484 | Integration tests: end-to-end scheduling, multi-cluster, CRDT sync |
+| `pkg/orchestrator/` | 1,093 | Multi-cluster coordination |
+| `pkg/storage/` | 816 | etcd client (leases, CAS writes), Redis client (caching, idempotency) |
+| `pkg/lease/` | 689 | Distributed lease manager, heartbeat renewal, `sync.Once` release safety |
+| `pkg/checkpoint/` | 642 | Checkpoint metadata management, S3 path injection |
+| `pkg/config/` | 586 | Configuration loading and validation |
+| `pkg/idempotency/` | 470 | Request deduplication (Redis-backed) |
+| `pkg/queue/` | 322 | Priority job queue |
+| `pkg/logger/` + `pkg/telemetry/` | 400 | Structured logging and OpenTelemetry tracing |
+| **Total** | **36,828** | |
 
 
 ### Exactly-Once Execution
@@ -379,7 +384,7 @@ go run cmd/benchmark/main.go -control-plane http://localhost:8080 -suite gang-sc
 go run cmd/benchmark/main.go -control-plane http://localhost:8080 -suite drf-fairness
 go run cmd/benchmark/main.go -control-plane http://localhost:8080 -suite multi-cluster-routing
 
-# Unit tests (3,973 lines across 7 test files)
+# Unit tests (4,015 lines across 7 test files)
 go test ./tests/unit/...
 ```
 
