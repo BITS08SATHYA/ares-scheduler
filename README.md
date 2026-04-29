@@ -6,7 +6,7 @@
 
 **Multi-cluster scheduling with exactly-once execution, CRDT-based consistency, gang scheduling, and DRF fairness.**
 
-**27,000+ lines of Go · 48 files**
+**36,828 lines of Go · 71 files · 261 commits**
 
 [![CI](https://github.com/BITS08SATHYA/ares-scheduler/actions/workflows/ci.yml/badge.svg)](https://github.com/BITS08SATHYA/ares-scheduler/actions/workflows/ci.yml)
 [![Go](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go&logoColor=white)]()
