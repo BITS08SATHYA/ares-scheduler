@@ -466,6 +466,9 @@ func main() {
 		ClusterID:       *clusterID,
 		ControlPlaneURL: *controlPlane,
 		Interval:        10 * time.Second,
+		// Enable self-healing re-registration: if the control plane restarts and
+		// forgets this cluster, the heartbeat loop re-registers automatically.
+		RegistrationConfig: autoRegConfig,
 		GetLoadFunc: func() map[string]interface{} {
 			load := localScheduler.GetClusterLoad()
 

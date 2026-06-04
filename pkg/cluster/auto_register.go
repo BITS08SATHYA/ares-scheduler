@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -18,6 +19,12 @@ import (
 
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/logger"
 )
+
+// ErrClusterNotRegistered is returned by sendHeartbeatRequest when the control
+// plane rejects a heartbeat because it has no record of the cluster (HTTP 404).
+// This happens when the global control plane restarts and loses its in-memory
+// cluster registry. The heartbeat loop uses this signal to re-register.
+var ErrClusterNotRegistered = errors.New("cluster not registered with control plane")
 
 // ============================================================================
 // TYPE DEFINITIONS (REQUIRED!)
@@ -124,6 +131,24 @@ func AutoRegisterCluster(ctx context.Context, config *AutoRegistrationConfig) er
 	return fmt.Errorf("failed to register cluster after %d attempts", maxRetries)
 }
 
+// reRegisterCluster: Single-shot re-registration used by the heartbeat loop to
+// recover from a control-plane that lost its registry. Unlike AutoRegisterCluster
+// (which retries with backoff at startup), this makes one attempt — the heartbeat
+// interval is the retry cadence.
+func reRegisterCluster(ctx context.Context, config *AutoRegistrationConfig) error {
+	regReq := &ClusterRegistrationRequest{
+		ClusterID:          config.ClusterID,
+		Region:             config.Region,
+		Zone:               config.Zone,
+		LocalSchedulerAddr: config.LocalSchedulerAddr,
+		TotalGPUs:          config.TotalGPUs,
+		TotalCPUs:          config.TotalCPUs,
+		TotalMemoryGB:      config.TotalMemoryGB,
+		GPUTopology:        config.GPUTopology,
+	}
+	return sendRegistrationRequest(ctx, config.ControlPlaneURL, regReq)
+}
+
 // sendRegistrationRequest: Send HTTP POST request to control plane
 func sendRegistrationRequest(ctx context.Context, controlPlaneURL string, req *ClusterRegistrationRequest) error {
 	body, err := json.Marshal(req)
@@ -165,6 +190,12 @@ type HeartbeatConfig struct {
 	ControlPlaneURL string
 	Interval        time.Duration
 	GetLoadFunc     func() map[string]interface{} // ✅ FIX: This is a FUNCTION now
+
+	// RegistrationConfig lets the heartbeat loop re-register the cluster if the
+	// control plane reports it as unknown (ErrClusterNotRegistered). This makes
+	// registration self-healing across control-plane restarts. Optional: if nil,
+	// the loop logs the lost registration but cannot recover on its own.
+	RegistrationConfig *AutoRegistrationConfig
 }
 
 // StartHeartbeat: Start sending periodic heartbeats
@@ -233,6 +264,22 @@ func StartHeartbeat(ctx context.Context, config *HeartbeatConfig) {
 
 			// Send heartbeat
 			err := sendHeartbeatRequest(ctx, config.ControlPlaneURL, hbReq)
+
+			// Self-heal: the control plane has no record of this cluster (it
+			// restarted and lost its in-memory registry, or our initial
+			// registration never landed). Re-register so subsequent heartbeats
+			// are accepted. The heartbeat interval is the natural retry cadence.
+			if errors.Is(err, ErrClusterNotRegistered) && config.RegistrationConfig != nil {
+				log.Warn("Control plane does not recognize cluster %s — re-registering", config.ClusterID)
+				if regErr := reRegisterCluster(ctx, config.RegistrationConfig); regErr != nil {
+					log.Warn("Re-registration failed: %v (will retry next heartbeat)", regErr)
+				} else {
+					log.Info("✓ Cluster %s re-registered with control plane", config.ClusterID)
+					failureCount = 0
+					continue
+				}
+			}
+
 			if err != nil {
 				failureCount++
 				log.Debug("Heartbeat failed: %v (failures=%d)", err, failureCount)
@@ -275,6 +322,12 @@ func sendHeartbeatRequest(ctx context.Context, controlPlaneURL string, req *Clus
 		return fmt.Errorf("http request failed: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode == http.StatusNotFound {
+		// Control plane has no record of this cluster (e.g. it restarted and
+		// lost its in-memory registry). Signal the loop to re-register.
+		return ErrClusterNotRegistered
+	}
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("heartbeat failed: status=%d", resp.StatusCode)
