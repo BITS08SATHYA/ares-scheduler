@@ -717,6 +717,15 @@ func (e *Executor) monitorAndUpdateJob(
 				jobRecord.Status = newJobStatus
 				jobRecord.EndTime = time.Now()
 				jobRecord.ExitCode = 0
+				// A succeeded job carries no error. Clear any leftover message
+				// from the queued/scheduling phase so the final record isn't
+				// misleading (e.g. a "queued: no GPUs" error on a SUCCEEDED job).
+				jobRecord.ErrorMsg = ""
+				// Backfill the cluster the job actually ran on if an upstream
+				// writer left it blank — the executor knows its own cluster.
+				if jobRecord.ClusterID == "" {
+					jobRecord.ClusterID = e.ClusterID
+				}
 				e.Log.Info("→ Status change detected: %s → SUCCEEDED (final)", lastKnownStatus)
 				// Fenced save: verify lease ownership before persisting final state.
 				// Completed jobs are saved without lease (permanent) but we must verify
