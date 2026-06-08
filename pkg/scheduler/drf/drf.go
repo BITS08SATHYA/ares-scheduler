@@ -36,10 +36,26 @@ type DRFManager struct {
 	// Per-tenant usage tracking
 	tenantUsage map[string]*TenantUsage // tenantID -> usage
 
+	// Per-job allocation ledger: jobID -> exactly what that job consumed.
+	// This lets ReleaseJob() refund the precise amount exactly once, so DRF
+	// accounting stays balanced no matter how a job terminates (success,
+	// failure, retry, timeout, preemption). Without it, usage only ever
+	// grew because nothing called the decrement path.
+	jobAllocations map[string]*jobAllocation
+
 	// Total cluster capacity (updated by heartbeats)
 	totalGPUs  int
 	totalCPUs  int
 	totalMemGB float64
+}
+
+// jobAllocation records what a single scheduled job consumed, so it can be
+// released exactly once on completion — keyed by jobID for idempotency.
+type jobAllocation struct {
+	tenantID string
+	gpus     int
+	cpus     int
+	memGB    float64
 }
 
 // DRFConfig: Configuration for DRF
@@ -106,9 +122,10 @@ func NewDRFManager(config *DRFConfig) *DRFManager {
 	}
 
 	return &DRFManager{
-		log:         logger.Get(),
-		config:      config,
-		tenantUsage: make(map[string]*TenantUsage),
+		log:            logger.Get(),
+		config:         config,
+		tenantUsage:    make(map[string]*TenantUsage),
+		jobAllocations: make(map[string]*jobAllocation),
 	}
 }
 
@@ -276,15 +293,8 @@ func (dm *DRFManager) hasLowestDominantShare(tenantID string) bool {
 // RESOURCE ACCOUNTING
 // ============================================================================
 
-// OnJobScheduled: Update tenant usage when a job is scheduled
-func (dm *DRFManager) OnJobScheduled(tenantID string, gpus, cpus int, memGB float64) {
-	dm.mu.Lock()
-	defer dm.mu.Unlock()
-
-	if tenantID == "" {
-		return
-	}
-
+// creditLocked: add a job's resources to a tenant's usage. Caller holds dm.mu.
+func (dm *DRFManager) creditLocked(tenantID string, gpus, cpus int, memGB float64) {
 	usage, exists := dm.tenantUsage[tenantID]
 	if !exists {
 		usage = &TenantUsage{
@@ -302,20 +312,11 @@ func (dm *DRFManager) OnJobScheduled(tenantID string, gpus, cpus int, memGB floa
 	usage.LastUpdated = time.Now()
 
 	dm.recalculateShares(usage)
-
-	dm.log.Info("DRF: Tenant %s job scheduled (GPUs=%d/%d, dominant=%.1f%% %s)",
-		tenantID, usage.GPUsInUse, dm.totalGPUs, usage.DominantShare*100, usage.DominantType)
 }
 
-// OnJobCompleted: Update tenant usage when a job finishes
-func (dm *DRFManager) OnJobCompleted(tenantID string, gpus, cpus int, memGB float64) {
-	dm.mu.Lock()
-	defer dm.mu.Unlock()
-
-	if tenantID == "" {
-		return
-	}
-
+// debitLocked: remove a job's resources from a tenant's usage (clamped at 0).
+// Caller holds dm.mu.
+func (dm *DRFManager) debitLocked(tenantID string, gpus, cpus int, memGB float64) {
 	usage, exists := dm.tenantUsage[tenantID]
 	if !exists {
 		return
@@ -340,9 +341,101 @@ func (dm *DRFManager) OnJobCompleted(tenantID string, gpus, cpus int, memGB floa
 	usage.LastUpdated = time.Now()
 
 	dm.recalculateShares(usage)
+}
 
-	dm.log.Info("DRF: Tenant %s job completed (GPUs=%d/%d, dominant=%.1f%% %s)",
+// OnJobScheduled: Update tenant usage when a job is scheduled (amount-based).
+// Prefer TrackJobScheduled in production so the allocation can be released by
+// jobID; this remains for direct accounting and tests.
+func (dm *DRFManager) OnJobScheduled(tenantID string, gpus, cpus int, memGB float64) {
+	if tenantID == "" {
+		return
+	}
+
+	dm.mu.Lock()
+	defer dm.mu.Unlock()
+
+	dm.creditLocked(tenantID, gpus, cpus, memGB)
+
+	usage := dm.tenantUsage[tenantID]
+	dm.log.Info("DRF: Tenant %s job scheduled (GPUs=%d/%d, dominant=%.1f%% %s)",
 		tenantID, usage.GPUsInUse, dm.totalGPUs, usage.DominantShare*100, usage.DominantType)
+}
+
+// OnJobCompleted: Update tenant usage when a job finishes (amount-based).
+func (dm *DRFManager) OnJobCompleted(tenantID string, gpus, cpus int, memGB float64) {
+	if tenantID == "" {
+		return
+	}
+
+	dm.mu.Lock()
+	defer dm.mu.Unlock()
+
+	dm.debitLocked(tenantID, gpus, cpus, memGB)
+
+	if usage, exists := dm.tenantUsage[tenantID]; exists {
+		dm.log.Info("DRF: Tenant %s job completed (GPUs=%d/%d, dominant=%.1f%% %s)",
+			tenantID, usage.GPUsInUse, dm.totalGPUs, usage.DominantShare*100, usage.DominantType)
+	}
+}
+
+// TrackJobScheduled: record a job's resource consumption against its tenant AND
+// remember the allocation by jobID so it can be released exactly once later.
+//
+// Re-tracking the same jobID (e.g. a retry that re-enters scheduling) replaces
+// the prior record — the stale allocation is debited first so usage never
+// double-counts. This is the production entry point; pair it with ReleaseJob.
+func (dm *DRFManager) TrackJobScheduled(jobID, tenantID string, gpus, cpus int, memGB float64) {
+	if jobID == "" || tenantID == "" {
+		return
+	}
+
+	dm.mu.Lock()
+	defer dm.mu.Unlock()
+
+	// If this job was already tracked, undo the old record so a re-track nets
+	// to a single live allocation.
+	if prev, exists := dm.jobAllocations[jobID]; exists {
+		dm.debitLocked(prev.tenantID, prev.gpus, prev.cpus, prev.memGB)
+	}
+
+	dm.jobAllocations[jobID] = &jobAllocation{
+		tenantID: tenantID,
+		gpus:     gpus,
+		cpus:     cpus,
+		memGB:    memGB,
+	}
+	dm.creditLocked(tenantID, gpus, cpus, memGB)
+
+	usage := dm.tenantUsage[tenantID]
+	dm.log.Info("DRF: Tracked job %s for tenant %s (GPUs=%d/%d, dominant=%.1f%% %s)",
+		jobID, tenantID, usage.GPUsInUse, dm.totalGPUs, usage.DominantShare*100, usage.DominantType)
+}
+
+// ReleaseJob: free a finished job's allocation, keyed by jobID.
+//
+// Idempotent and self-balancing: if the job was never tracked, or was already
+// released, this is a no-op. The exact amount that was credited is refunded —
+// callers don't need to recompute resource counts or worry about being called
+// more than once across success/failure/retry/timeout/preemption paths.
+func (dm *DRFManager) ReleaseJob(jobID string) {
+	if jobID == "" {
+		return
+	}
+
+	dm.mu.Lock()
+	defer dm.mu.Unlock()
+
+	alloc, exists := dm.jobAllocations[jobID]
+	if !exists {
+		return // never tracked, or already released
+	}
+	delete(dm.jobAllocations, jobID)
+
+	dm.debitLocked(alloc.tenantID, alloc.gpus, alloc.cpus, alloc.memGB)
+
+	usage := dm.tenantUsage[alloc.tenantID]
+	dm.log.Info("DRF: Released job %s for tenant %s (GPUs now=%d/%d, dominant=%.1f%% %s)",
+		jobID, alloc.tenantID, usage.GPUsInUse, dm.totalGPUs, usage.DominantShare*100, usage.DominantType)
 }
 
 // recalculateShares: Recalculate a tenant's resource shares

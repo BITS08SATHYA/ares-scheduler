@@ -567,9 +567,11 @@ func (gs *GlobalScheduler) ScheduleJob(
 
 	gs.recordSchedulingSuccess(bestCluster.ClusterID)
 
-	// ★ DRF: Track resource usage for this tenant
+	// ★ DRF: Track resource usage for this tenant, keyed by job ID so it can be
+	// released exactly once when the job finishes (see ReleaseJobResources).
 	if gs.drfManager != nil && jobRecord.Spec.TenantID != "" {
-		gs.drfManager.OnJobScheduled(
+		gs.drfManager.TrackJobScheduled(
+			jobRecord.ID,
 			jobRecord.Spec.TenantID,
 			jobRecord.Spec.GPUCount,
 			jobRecord.Spec.CPUMillis/1000,
@@ -1329,7 +1331,24 @@ func (gs *GlobalScheduler) cancelJobOnCluster(ctx context.Context, jobID string)
 		return
 	}
 
+	// Refund the preempted job's DRF allocation so the tenant's fair-share
+	// frees up immediately (the GPUs were already returned to the cluster cache
+	// above). Idempotent — safe even if the job was never DRF-tracked.
+	if gs.drfManager != nil {
+		gs.drfManager.ReleaseJob(jobID)
+	}
+
 	gs.log.Info("PREEMPTION: Job %s marked as PREEMPTED", jobID)
+}
+
+// ReleaseJobResources frees a finished job's DRF fair-share allocation.
+// Called by the orchestrator when a job reaches a terminal state. Safe to call
+// multiple times for the same job (idempotent) and safe when DRF is disabled.
+func (gs *GlobalScheduler) ReleaseJobResources(jobID string) {
+	if gs == nil || gs.drfManager == nil {
+		return
+	}
+	gs.drfManager.ReleaseJob(jobID)
 }
 
 // scheduleGangJob: Route gang jobs to the gang manager

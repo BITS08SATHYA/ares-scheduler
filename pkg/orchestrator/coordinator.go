@@ -435,6 +435,10 @@ func (jc *JobCoordinator) MonitorJob(ctx context.Context, jobID string, leaseID 
 				if jc.metricsRecorder != nil && jc.metricsRecorder.OnJobE2ELatency != nil {
 					jc.metricsRecorder.OnJobE2ELatency(time.Since(jobRecord.SubmitTime))
 				}
+				// Refund the job's DRF fair-share allocation (idempotent).
+				if jc.globalScheduler != nil {
+					jc.globalScheduler.ReleaseJobResources(jobID)
+				}
 				func() {
 					ctx, cancel := contextWithCleanupTimeout()
 					defer cancel()
@@ -448,6 +452,12 @@ func (jc *JobCoordinator) MonitorJob(ctx context.Context, jobID string, leaseID 
 			if jobRecord.Status == common.StatusFailed {
 				if jc.metricsRecorder != nil && jc.metricsRecorder.OnJobCompleted != nil {
 					jc.metricsRecorder.OnJobCompleted(false)
+				}
+				// Refund the job's DRF fair-share allocation (idempotent). On a
+				// retry, RetryJob re-enters scheduling and re-tracks the job, so
+				// releasing here keeps usage balanced during the backoff window.
+				if jc.globalScheduler != nil {
+					jc.globalScheduler.ReleaseJobResources(jobID)
 				}
 				// Auto-retry if attempts remaining
 				if jobRecord.Spec.MaxRetries > 0 && jobRecord.Attempts < jobRecord.Spec.MaxRetries {
@@ -488,6 +498,10 @@ func (jc *JobCoordinator) MonitorJob(ctx context.Context, jobID string, leaseID 
 				// ★ FIX: Record timeout as failure
 				if jc.metricsRecorder != nil && jc.metricsRecorder.OnJobCompleted != nil {
 					jc.metricsRecorder.OnJobCompleted(false)
+				}
+				// Refund the job's DRF fair-share allocation (idempotent).
+				if jc.globalScheduler != nil {
+					jc.globalScheduler.ReleaseJobResources(jobID)
 				}
 				func() {
 					ctx, cancel := contextWithCleanupTimeout()
