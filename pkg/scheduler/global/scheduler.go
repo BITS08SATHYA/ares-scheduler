@@ -1351,6 +1351,18 @@ func (gs *GlobalScheduler) ReleaseJobResources(jobID string) {
 	gs.drfManager.ReleaseJob(jobID)
 }
 
+// OnGangMemberStatus forwards a gang member's job-status transition to the gang
+// manager so the all-or-nothing barrier can advance (RUNNING), cascade-fail
+// (FAILED), or complete (all SUCCEEDED). No-op for non-gang jobs / disabled gang.
+func (gs *GlobalScheduler) OnGangMemberStatus(gangID string, memberIndex int, status common.JobStatus, errMsg string) {
+	if gs == nil || gs.gangManager == nil || gangID == "" {
+		return
+	}
+	if err := gs.gangManager.OnMemberStatus(gangID, memberIndex, status, errMsg); err != nil {
+		gs.log.Debug("GANG: member status %s for %s[%d] not applied: %v", status, gangID, memberIndex, err)
+	}
+}
+
 // scheduleGangJob: Route gang jobs to the gang manager
 func (gs *GlobalScheduler) scheduleGangJob(
 	ctx context.Context,

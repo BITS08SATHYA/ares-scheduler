@@ -27,6 +27,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/BITS08SATHYA/ares-scheduler/pkg/logger"
@@ -173,12 +174,13 @@ type GangManager struct {
 	// Deadlock detection
 	deadlockDetector *DeadlockDetector
 
-	// Metrics
-	totalGangsSubmitted uint64
-	totalGangsCompleted uint64
-	totalGangsFailed    uint64
-	totalGangsTimedOut  uint64
-	totalDeadlocks      uint64
+	// Metrics. Atomic so they can be read (GetStats) and written from any
+	// path without depending on which of gm.mu / gang.mu the caller holds.
+	totalGangsSubmitted atomic.Uint64
+	totalGangsCompleted atomic.Uint64
+	totalGangsFailed    atomic.Uint64
+	totalGangsTimedOut  atomic.Uint64
+	totalDeadlocks      atomic.Uint64
 }
 
 // GangConfig: Configuration
@@ -276,7 +278,7 @@ func (gm *GangManager) SubmitGang(ctx context.Context, spec *GangSpec) (*GangSta
 
 	gm.gangs[spec.GangID] = state
 	gm.waitQueue = append(gm.waitQueue, state)
-	gm.totalGangsSubmitted++
+	gm.totalGangsSubmitted.Add(1)
 
 	gm.log.Info("GANG: Submitted gang %s (%s): %d members × %d GPUs = %d total GPUs",
 		spec.GangID, spec.Name, spec.MinMembers, spec.GPUsPerMember, spec.TotalGPUs)
@@ -310,7 +312,7 @@ func (gm *GangManager) TryScheduleGang(
 		gang.Phase = GangTimeout
 		gang.PhaseTime = time.Now()
 		gang.LastError = "scheduling timed out"
-		gm.totalGangsTimedOut++
+		gm.totalGangsTimedOut.Add(1)
 		return nil, fmt.Errorf("gang %s scheduling timed out after %s", gang.Spec.GangID, gang.Spec.ScheduleTimeout)
 	}
 
@@ -321,7 +323,8 @@ func (gm *GangManager) TryScheduleGang(
 	candidateNodes := gm.filterCandidateNodes(gang.Spec, availableNodes)
 	if len(candidateNodes) == 0 {
 		gang.Phase = GangPending // Back to waiting
-		return nil, nil          // Not an error, just not enough resources yet
+		gm.recordContention(gang.Spec.GangID)
+		return nil, nil // Not an error, just not enough resources yet
 	}
 
 	// Step 2: Check total capacity
@@ -331,6 +334,7 @@ func (gm *GangManager) TryScheduleGang(
 	}
 	if totalAvailGPUs < gang.Spec.TotalGPUs {
 		gang.Phase = GangPending
+		gm.recordContention(gang.Spec.GangID)
 		return nil, nil // Not enough total GPUs
 	}
 
@@ -365,11 +369,38 @@ func (gm *GangManager) TryScheduleGang(
 		}
 	}
 
+	// Feed the deadlock detector: this gang now HOLDS resources and is no
+	// longer WAITING. With atomic all-or-nothing allocation a holder never has
+	// outgoing wait edges, so this can only ever form a cycle if a future
+	// holder also blocks — which is exactly the hold-and-wait we want to catch.
+	if gm.config.EnableDeadlock {
+		holds := make([]ResourceHold, 0, len(placement.Assignments))
+		for _, a := range placement.Assignments {
+			holds = append(holds, ResourceHold{NodeID: a.NodeID, GPUCount: len(a.GPUIndices)})
+		}
+		gm.deadlockDetector.RegisterHolding(gang.Spec.GangID, holds)
+		gm.deadlockDetector.ClearWaiting(gang.Spec.GangID)
+	}
+
 	gm.log.Info("GANG: Allocated %s: %d GPUs across %d nodes (score=%.2f, colocated=%v, nvlink=%v)",
 		gang.Spec.GangID, placement.TotalGPUs, len(placement.NodesUsed),
 		placement.Score, placement.IsColocated, placement.NVLinkConnected)
 
 	return placement, nil
+}
+
+// recordContention records, in the deadlock detector, that a gang is blocked
+// waiting on resources currently held by other gangs. This feeds the wait-for
+// graph so DetectCycle operates on real data instead of an always-empty graph.
+func (gm *GangManager) recordContention(gangID string) {
+	if !gm.config.EnableDeadlock {
+		return
+	}
+	for _, holder := range gm.deadlockDetector.Holders() {
+		if holder != gangID {
+			gm.deadlockDetector.AddWaiting(gangID, holder)
+		}
+	}
 }
 
 // ============================================================================
@@ -467,9 +498,13 @@ func (gm *GangManager) findOptimalPlacement(spec *GangSpec, nodes []NodeResource
 			if gpuStart < 0 {
 				gpuStart = 0
 			}
+			// gpuStart already advances by GPUsPerMember each iteration because
+			// `remaining` shrinks below — so the index range for this member is
+			// simply [gpuStart, gpuStart+GPUsPerMember). Adding m*GPUsPerMember
+			// here would double-count the offset and push indices out of range.
 			gpuIndices := make([]int, spec.GPUsPerMember)
 			for g := 0; g < spec.GPUsPerMember; g++ {
-				gpuIndices[g] = gpuStart + (m * spec.GPUsPerMember) + g
+				gpuIndices[g] = gpuStart + g
 			}
 
 			assignments = append(assignments, MemberAssignment{
@@ -628,7 +663,7 @@ func (gm *GangManager) ReportMemberReady(gangID string, memberIndex int) error {
 	if time.Since(gang.PhaseTime) > gang.Spec.BarrierTimeout {
 		gang.Phase = GangTimeout
 		gang.LastError = "barrier timed out waiting for all members"
-		gm.totalGangsTimedOut++
+		gm.totalGangsTimedOut.Add(1)
 		return fmt.Errorf("gang %s barrier timed out", gangID)
 	}
 
@@ -669,7 +704,7 @@ func (gm *GangManager) ReportMemberFailed(gangID string, memberIndex int, err st
 	}
 	// Remove failed gang from map to prevent unbounded growth
 	delete(gm.gangs, gangID)
-	gm.totalGangsFailed++
+	gm.totalGangsFailed.Add(1)
 	gm.mu.Unlock()
 
 	gang.mu.Lock()
@@ -690,8 +725,9 @@ func (gm *GangManager) ReportMemberFailed(gangID string, memberIndex int, err st
 	gm.log.Warn("GANG: %s FAILED — member %d error: %s (canceling all members)",
 		gangID, memberIndex, err)
 
-	// Remove from wait queue
+	// Remove from wait queue and release its deadlock-detector holdings.
 	gm.removeFromWaitQueue(gangID)
+	gm.deadlockDetector.RemoveGang(gangID)
 
 	return nil
 }
@@ -706,7 +742,7 @@ func (gm *GangManager) ReportGangCompleted(gangID string) error {
 	}
 	// Remove completed gang from map to prevent unbounded growth
 	delete(gm.gangs, gangID)
-	gm.totalGangsCompleted++
+	gm.totalGangsCompleted.Add(1)
 	gm.mu.Unlock()
 
 	gang.mu.Lock()
@@ -720,9 +756,64 @@ func (gm *GangManager) ReportGangCompleted(gangID string) error {
 	gm.log.Info("GANG: ★ %s SUCCEEDED — %d members completed in %s",
 		gangID, gang.Spec.MinMembers, duration)
 
-	// Remove from wait queue (in case it's still there)
+	// Remove from wait queue (in case it's still there) and release holdings.
 	gm.removeFromWaitQueue(gangID)
+	gm.deadlockDetector.RemoveGang(gangID)
 
+	return nil
+}
+
+// OnMemberStatus maps a gang member's job-status transition onto the gang
+// lifecycle. This is the integration seam the orchestrator calls as each
+// member's job changes state:
+//
+//	RUNNING   -> ReportMemberReady   (advances the all-or-nothing barrier)
+//	FAILED    -> ReportMemberFailed  (fails the whole gang)
+//	SUCCEEDED -> mark member done; complete the gang once all members are done
+//
+// Other statuses (PENDING/SCHEDULED/etc.) are ignored. Safe to call repeatedly
+// for the same member — the underlying barrier counters are idempotent.
+func (gm *GangManager) OnMemberStatus(gangID string, memberIndex int, status common.JobStatus, errMsg string) error {
+	switch status {
+	case common.StatusRunning:
+		return gm.ReportMemberReady(gangID, memberIndex)
+	case common.StatusFailed:
+		return gm.ReportMemberFailed(gangID, memberIndex, errMsg)
+	case common.StatusSucceeded:
+		return gm.reportMemberSucceeded(gangID, memberIndex)
+	default:
+		return nil
+	}
+}
+
+// reportMemberSucceeded records one member finishing and completes the whole
+// gang once every member has succeeded.
+func (gm *GangManager) reportMemberSucceeded(gangID string, memberIndex int) error {
+	gm.mu.RLock()
+	gang, exists := gm.gangs[gangID]
+	gm.mu.RUnlock()
+	if !exists {
+		return fmt.Errorf("gang %s not found", gangID)
+	}
+
+	gang.mu.Lock()
+	if memberIndex >= 0 && memberIndex < len(gang.Members) {
+		gang.Members[memberIndex].Status = common.StatusSucceeded
+	}
+	succeeded := 0
+	for _, m := range gang.Members {
+		if m.Status == common.StatusSucceeded {
+			succeeded++
+		}
+	}
+	allDone := succeeded >= gang.Spec.MinMembers
+	gang.mu.Unlock()
+
+	// Release the gang lock before ReportGangCompleted, which takes gm.mu then
+	// the gang lock itself (avoids holding both / reentrant locking).
+	if allDone {
+		return gm.ReportGangCompleted(gangID)
+	}
 	return nil
 }
 
@@ -786,6 +877,7 @@ func (gm *GangManager) CancelGang(gangID string) error {
 	gang.EndTime = time.Now()
 	gang.LastError = "canceled by user"
 
+	gm.deadlockDetector.RemoveGang(gangID)
 	gm.log.Info("GANG: %s canceled", gangID)
 	return nil
 }
@@ -813,7 +905,7 @@ type DeadlockDetector struct {
 	// Resource holdings: gangID -> resources held
 	holdings map[string][]ResourceHold
 
-	totalDetections uint64
+	totalDetections atomic.Uint64
 }
 
 // ResourceHold: A resource held by a gang
@@ -838,6 +930,33 @@ func (dd *DeadlockDetector) AddWaiting(waitingGang, holdingGang string) {
 		dd.waitGraph[waitingGang] = make(map[string]bool)
 	}
 	dd.waitGraph[waitingGang][holdingGang] = true
+}
+
+// RegisterHolding: Record the resources a gang holds once it is allocated.
+// This populates the holdings map so the wait-for graph reflects real state.
+func (dd *DeadlockDetector) RegisterHolding(gangID string, holds []ResourceHold) {
+	dd.mu.Lock()
+	defer dd.mu.Unlock()
+	dd.holdings[gangID] = holds
+}
+
+// ClearWaiting: Drop a gang's outgoing wait edges — called once it stops
+// waiting (e.g. it just got allocated, so it no longer blocks on anyone).
+func (dd *DeadlockDetector) ClearWaiting(gangID string) {
+	dd.mu.Lock()
+	defer dd.mu.Unlock()
+	delete(dd.waitGraph, gangID)
+}
+
+// Holders: List the gangs currently holding resources (allocated/running).
+func (dd *DeadlockDetector) Holders() []string {
+	dd.mu.RLock()
+	defer dd.mu.RUnlock()
+	out := make([]string, 0, len(dd.holdings))
+	for g := range dd.holdings {
+		out = append(out, g)
+	}
+	return out
 }
 
 // RemoveGang: Remove a gang from the wait-for graph (when it completes/cancels)
@@ -867,7 +986,7 @@ func (dd *DeadlockDetector) DetectCycle() []string {
 	for node := range dd.waitGraph {
 		if !visited[node] {
 			if cycle := dd.dfs(node, visited, inStack, path); cycle != nil {
-				dd.totalDetections++
+				dd.totalDetections.Add(1)
 				return cycle
 			}
 		}
@@ -922,6 +1041,11 @@ func (gm *GangManager) RunSchedulingLoop(ctx context.Context, getNodes func() []
 			return
 
 		case <-ticker.C:
+			// Backstop: fail gangs stuck waiting for their barrier. ReportMemberReady
+			// only checks the deadline when a member reports, so a gang whose members
+			// never reach RUNNING would otherwise hang forever holding resources.
+			gm.sweepBarrierTimeouts()
+
 			// Try to schedule pending gangs
 			pending := gm.GetPendingGangs()
 			if len(pending) == 0 {
@@ -966,6 +1090,44 @@ func (gm *GangManager) RunSchedulingLoop(ctx context.Context, getNodes func() []
 	}
 }
 
+// sweepBarrierTimeouts: Fail any gang that has been ALLOCATED but hasn't gotten
+// all members to RUNNING within BarrierTimeout. This is the authoritative
+// backstop — the opportunistic check in ReportMemberReady only fires when a
+// member reports, so a gang whose members hang would never time out otherwise.
+// The barrier budget is measured from allocation (ScheduleTime), so it also
+// covers the case where NO member ever reaches RUNNING (still in ALLOCATED).
+func (gm *GangManager) sweepBarrierTimeouts() {
+	gm.mu.RLock()
+	gangs := make([]*GangState, 0, len(gm.gangs))
+	for _, g := range gm.gangs {
+		gangs = append(gangs, g)
+	}
+	gm.mu.RUnlock()
+
+	for _, gang := range gangs {
+		gang.mu.Lock()
+		timedOut := (gang.Phase == GangAllocated || gang.Phase == GangBarrier) &&
+			!gang.ScheduleTime.IsZero() &&
+			time.Since(gang.ScheduleTime) > gang.Spec.BarrierTimeout
+		if !timedOut {
+			gang.mu.Unlock()
+			continue
+		}
+		gang.Phase = GangTimeout
+		gang.PhaseTime = time.Now()
+		gang.EndTime = time.Now()
+		gang.LastError = "barrier timed out waiting for all members to reach running"
+		gangID := gang.Spec.GangID
+		barrier := gang.Spec.BarrierTimeout
+		gm.totalGangsTimedOut.Add(1)
+		gang.mu.Unlock()
+
+		gm.removeFromWaitQueue(gangID)
+		gm.deadlockDetector.RemoveGang(gangID)
+		gm.log.Warn("GANG: %s barrier timed out (no full quorum within %s)", gangID, barrier)
+	}
+}
+
 // removeFromWaitQueue: Remove gang from wait queue after scheduling
 func (gm *GangManager) removeFromWaitQueue(gangID string) {
 	gm.mu.Lock()
@@ -982,7 +1144,7 @@ func (gm *GangManager) removeFromWaitQueue(gangID string) {
 // handleDeadlock: Resolve a detected deadlock by canceling lowest-priority gang
 func (gm *GangManager) handleDeadlock(cycle []string) {
 	gm.log.Warn("GANG: ⚠ DEADLOCK DETECTED in cycle: %v", cycle)
-	gm.totalDeadlocks++
+	gm.totalDeadlocks.Add(1)
 
 	// Find lowest-priority gang in cycle
 	var lowestGang *GangState
@@ -1012,17 +1174,20 @@ func (gm *GangManager) handleDeadlock(cycle []string) {
 // ============================================================================
 
 func (gm *GangManager) GetStats() map[string]interface{} {
+	// Counters are atomic; only the map sizes need the lock.
 	gm.mu.RLock()
-	defer gm.mu.RUnlock()
+	activeGangs := len(gm.gangs)
+	queueDepth := len(gm.waitQueue)
+	gm.mu.RUnlock()
 
 	return map[string]interface{}{
-		"total_submitted": gm.totalGangsSubmitted,
-		"total_completed": gm.totalGangsCompleted,
-		"total_failed":    gm.totalGangsFailed,
-		"total_timed_out": gm.totalGangsTimedOut,
-		"total_deadlocks": gm.totalDeadlocks,
-		"active_gangs":    len(gm.gangs),
-		"queue_depth":     len(gm.waitQueue),
+		"total_submitted": gm.totalGangsSubmitted.Load(),
+		"total_completed": gm.totalGangsCompleted.Load(),
+		"total_failed":    gm.totalGangsFailed.Load(),
+		"total_timed_out": gm.totalGangsTimedOut.Load(),
+		"total_deadlocks": gm.totalDeadlocks.Load(),
+		"active_gangs":    activeGangs,
+		"queue_depth":     queueDepth,
 	}
 }
 

@@ -426,6 +426,14 @@ func (jc *JobCoordinator) MonitorJob(ctx context.Context, jobID string, leaseID 
 				jobRecord = latest
 			}
 
+			// Gang barrier: forward this member's status so the gang can advance
+			// (RUNNING releases the barrier, FAILED cascades, all-SUCCEEDED
+			// completes). No-op for non-gang jobs. Idempotent across ticks.
+			if jobRecord.Spec != nil && jobRecord.Spec.GangID != "" && jc.globalScheduler != nil {
+				jc.globalScheduler.OnGangMemberStatus(
+					jobRecord.Spec.GangID, jobRecord.Spec.GangMemberIdx, jobRecord.Status, jobRecord.ErrorMsg)
+			}
+
 			// ★ Check completion BEFORE fencing
 			if jobRecord.Status == common.StatusSucceeded {
 				jc.log.Info("Job %s succeeded", jobID)
