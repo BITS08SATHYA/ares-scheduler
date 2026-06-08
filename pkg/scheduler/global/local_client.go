@@ -206,14 +206,16 @@ func (c *LocalSchedulerClient) CancelJob(
 	localSchedulerAddr string,
 	jobID string,
 	reason string,
+	gracePeriodSeconds int64,
 ) error {
 	if localSchedulerAddr == "" {
 		return fmt.Errorf("local scheduler address cannot be empty")
 	}
 
-	reqBody, err := json.Marshal(map[string]string{
-		"job_id": jobID,
-		"reason": reason,
+	reqBody, err := json.Marshal(map[string]interface{}{
+		"job_id":        jobID,
+		"reason":        reason,
+		"grace_seconds": gracePeriodSeconds,
 	})
 	if err != nil {
 		return fmt.Errorf("marshal failed: %w", err)

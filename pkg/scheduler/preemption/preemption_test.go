@@ -207,8 +207,8 @@ func TestFindPreemptionVictim_HourlyRateLimit(t *testing.T) {
 	pm := NewPreemptionManager(cfg)
 
 	// Record 2 preemptions
-	pm.RecordPreemption("in1", "v1", 90, 10, "cluster-1")
-	pm.RecordPreemption("in2", "v2", 90, 10, "cluster-1")
+	pm.RecordPreemption("in1", "v1", "", 90, 10, "cluster-1")
+	pm.RecordPreemption("in2", "v2", "", 90, 10, "cluster-1")
 
 	incoming := incomingSpec(90, 4)
 	running := []*common.Job{runningJob("j1", 10, 4, 2*time.Hour)}
@@ -225,7 +225,7 @@ func TestFindPreemptionVictim_DailyRateLimit(t *testing.T) {
 	pm := NewPreemptionManager(cfg)
 
 	for i := 0; i < 3; i++ {
-		pm.RecordPreemption("in", "v", 90, 10, "c")
+		pm.RecordPreemption("in", "v", "", 90, 10, "c")
 	}
 
 	incoming := incomingSpec(90, 4)
@@ -243,7 +243,7 @@ func TestFindPreemptionVictim_DailyRateLimit(t *testing.T) {
 func TestRecordPreemption(t *testing.T) {
 	pm := NewPreemptionManager(testConfig())
 
-	pm.RecordPreemption("incoming-1", "victim-1", 90, 10, "cluster-a")
+	pm.RecordPreemption("incoming-1", "victim-1", "", 90, 10, "cluster-a")
 
 	stats := pm.GetStats()
 	assert.Equal(t, uint64(1), stats["preemptions_this_hour"])
@@ -254,9 +254,9 @@ func TestRecordPreemption(t *testing.T) {
 func TestGetRecentPreemptions(t *testing.T) {
 	pm := NewPreemptionManager(testConfig())
 
-	pm.RecordPreemption("in1", "v1", 90, 10, "c1")
-	pm.RecordPreemption("in2", "v2", 80, 20, "c2")
-	pm.RecordPreemption("in3", "v3", 70, 30, "c3")
+	pm.RecordPreemption("in1", "v1", "", 90, 10, "c1")
+	pm.RecordPreemption("in2", "v2", "", 80, 20, "c2")
+	pm.RecordPreemption("in3", "v3", "", 70, 30, "c3")
 
 	recent := pm.GetRecentPreemptions(2)
 	assert.Len(t, recent, 2)
@@ -266,7 +266,7 @@ func TestGetRecentPreemptions(t *testing.T) {
 
 func TestGetRecentPreemptions_LargerThanHistory(t *testing.T) {
 	pm := NewPreemptionManager(testConfig())
-	pm.RecordPreemption("in1", "v1", 90, 10, "c1")
+	pm.RecordPreemption("in1", "v1", "", 90, 10, "c1")
 
 	recent := pm.GetRecentPreemptions(100)
 	assert.Len(t, recent, 1)
@@ -274,10 +274,63 @@ func TestGetRecentPreemptions_LargerThanHistory(t *testing.T) {
 
 func TestGetRecentPreemptions_ZeroLimit(t *testing.T) {
 	pm := NewPreemptionManager(testConfig())
-	pm.RecordPreemption("in1", "v1", 90, 10, "c1")
+	pm.RecordPreemption("in1", "v1", "", 90, 10, "c1")
 
 	recent := pm.GetRecentPreemptions(0)
 	assert.Len(t, recent, 1) // returns all
+}
+
+// ============================================================================
+// SECTION 6b: Per-tenant cooldown
+// ============================================================================
+
+func runningJobForTenant(id, tenant string, priority, gpuCount int, age time.Duration) *common.Job {
+	j := runningJob(id, priority, gpuCount, age)
+	j.Spec.TenantID = tenant
+	return j
+}
+
+func TestCooldown_ShieldsRecentlyRaidedTenant(t *testing.T) {
+	pm := NewPreemptionManager(testConfig()) // cooldown 5m
+
+	// A job belonging to tenant-x was just preempted -> tenant-x enters cooldown.
+	pm.RecordPreemption("prev-in", "prev-victim", "tenant-x", 90, 10, "c1")
+
+	incoming := incomingSpec(90, 4)
+	running := []*common.Job{runningJobForTenant("j1", "tenant-x", 10, 4, 2*time.Hour)}
+
+	decision := pm.FindPreemptionVictim(context.Background(), incoming, running)
+	assert.False(t, decision.ShouldPreempt)
+	assert.Contains(t, decision.Reason, "no preemptible candidates")
+}
+
+func TestCooldown_DisabledWhenZero(t *testing.T) {
+	cfg := testConfig()
+	cfg.CooldownPeriod = 0 // disabled
+	pm := NewPreemptionManager(cfg)
+
+	pm.RecordPreemption("prev-in", "prev-victim", "tenant-x", 90, 10, "c1")
+
+	incoming := incomingSpec(90, 4)
+	running := []*common.Job{runningJobForTenant("j1", "tenant-x", 10, 4, 2*time.Hour)}
+
+	decision := pm.FindPreemptionVictim(context.Background(), incoming, running)
+	assert.True(t, decision.ShouldPreempt) // no shield -> still a valid victim
+	assert.Equal(t, "j1", decision.Victim.JobID)
+}
+
+func TestCooldown_OtherTenantsStillPreemptible(t *testing.T) {
+	pm := NewPreemptionManager(testConfig())
+
+	// tenant-x is in cooldown, but the candidate belongs to tenant-y.
+	pm.RecordPreemption("prev-in", "prev-victim", "tenant-x", 90, 10, "c1")
+
+	incoming := incomingSpec(90, 4)
+	running := []*common.Job{runningJobForTenant("j1", "tenant-y", 10, 4, 2*time.Hour)}
+
+	decision := pm.FindPreemptionVictim(context.Background(), incoming, running)
+	assert.True(t, decision.ShouldPreempt)
+	assert.Equal(t, "j1", decision.Victim.JobID)
 }
 
 // ============================================================================
