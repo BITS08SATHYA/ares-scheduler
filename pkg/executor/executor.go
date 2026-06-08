@@ -205,6 +205,16 @@ type K8Decision struct {
 	CheckpointPath    string // Where to write checkpoints
 	CheckpointRestore string // Last checkpoint to restore from (empty = fresh)
 	CheckpointMeta    string // Metadata from last checkpoint
+
+	// Gang scheduling: rank/world-size for distributed frameworks (torchrun,
+	// Horovod, DeepSpeed). The gang manager already knows each member's index
+	// and the gang size; these surface that into the pod env so the training
+	// entrypoint can self-configure. Zero-valued for non-gang jobs.
+	// NOTE: MASTER_ADDR for rendezvous is intentionally NOT here yet — it needs
+	// a per-gang headless Service so rank-0's pod resolves via stable DNS.
+	GangID        string // Gang identifier (empty = not a gang member)
+	GangSize      int    // Total members in the gang (world size)
+	GangMemberIdx int    // 0-based rank of this member within the gang
 }
 
 // ============================================================================
@@ -478,6 +488,19 @@ func createPodSpec(
 		// before writing results. Prevents split-brain when lease changes hands.
 		"ARES_LEASE_ID":      fmt.Sprintf("%d", decision.LeaseID),
 		"ARES_FENCING_TOKEN": decision.FencingToken,
+	}
+
+	// ★ Gang scheduling: surface rank/world-size so distributed-training
+	// entrypoints (torchrun --node_rank=$ARES_GANG_RANK --nnodes=$ARES_GANG_WORLD_SIZE,
+	// Horovod, DeepSpeed) can self-configure without the user wiring it by hand.
+	// ARES_GANG_MASTER_PORT is a fixed convention; the matching MASTER_ADDR
+	// (rank-0 rendezvous host) still requires a per-gang headless Service and is
+	// deliberately not injected yet — see K8Decision gang-field note.
+	if decision.GangID != "" {
+		envVars["ARES_GANG_ID"] = decision.GangID
+		envVars["ARES_GANG_RANK"] = fmt.Sprintf("%d", decision.GangMemberIdx)
+		envVars["ARES_GANG_WORLD_SIZE"] = fmt.Sprintf("%d", decision.GangSize)
+		envVars["ARES_GANG_MASTER_PORT"] = "29500"
 	}
 
 	// ★ Checkpointing: inject restore path if job has a previous checkpoint

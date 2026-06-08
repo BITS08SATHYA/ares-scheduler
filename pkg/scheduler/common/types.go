@@ -167,14 +167,20 @@ type GPUTopology struct {
 	NVLinkPairs [][]int
 
 	// NVLink link count per GPU pair: "gpu0-gpu1" -> link count
-	// On p4d.24xlarge (8×A100): NV12 = same NVSwitch (600 GB/s), NV6 = cross-NVSwitch (300 GB/s)
-	// Higher link count = higher bandwidth = better placement score
-	// Example: {"0-1": 12, "0-4": 6} means GPU 0↔1 has 12 links, GPU 0↔4 has 6 links
+	// Higher link count = higher bandwidth = better placement score.
+	// The values are hardware-dependent:
+	//   - Full-crossbar NVSwitch (DGX A100 / p4d.24xlarge): every pair is NV12
+	//     (~600 GB/s). Uniform — there is no "near"/"far" GPU.
+	//   - Hybrid cube-mesh, no NVSwitch (DGX-1 / p3.16xlarge V100): mixed counts
+	//     (NV1/NV2/NV6) — some pairs are directly linked, others are not.
+	// Example: {"0-1": 12, "0-4": 6} means GPU 0↔1 has 12 links, GPU 0↔4 has 6.
 	NVLinkCount map[string]int `json:"nvlink_count,omitempty"`
 
 	// NVSwitch domain grouping: domain_id -> []gpu_indices
-	// GPUs within the same NVSwitch domain have maximum NVLink bandwidth
-	// On p4d.24xlarge: domain 0 = [0,1,2,3], domain 1 = [4,5,6,7]
+	// GPUs within the same domain have maximum mutual NVLink bandwidth.
+	// On a full-crossbar NVSwitch box (p4d.24xlarge) this is a SINGLE domain of
+	// all 8 GPUs. Multiple domains only appear on partial-connectivity hardware
+	// (e.g. DGX-1 V100 hybrid mesh), where some GPU pairs are not full-bandwidth.
 	NVSwitchDomains map[int][]int `json:"nvswitch_domains,omitempty"`
 
 	// GPU to NUMA node mapping (for memory locality)

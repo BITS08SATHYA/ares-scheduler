@@ -161,6 +161,11 @@ func (lss *LocalSchedulerServer) handleSchedule(w http.ResponseWriter, r *http.R
 			Image:            req.JobSpec.Image,
 			LeaseID:          req.LeaseID,
 			FencingToken:     req.FencingToken,
+			// gang: pass rank/world-size through to the pod env so distributed
+			// training frameworks can self-configure (no-op for non-gang jobs).
+			GangID:        req.JobSpec.GangID,
+			GangSize:      req.JobSpec.GangSize,
+			GangMemberIdx: req.JobSpec.GangMemberIdx,
 			// checkpoint
 			CheckpointEnabled: req.CheckpointEnabled,
 			CheckpointPath:    req.CheckpointPath,

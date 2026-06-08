@@ -182,13 +182,18 @@ func (gtm *GPUTopologyManager) extractNVLinkCount(connectivity string) int {
 	return count
 }
 
-// DetectNVSwitchDomains: Identify groups of GPUs on the same NVSwitch
-// On p4d.24xlarge: GPUs 0-3 share NVSwitch-0, GPUs 4-7 share NVSwitch-1
-// GPUs within the same domain have maximum NVLink bandwidth (NV12)
-// GPUs across domains have reduced NVLink bandwidth (NV6)
+// DetectNVSwitchDomains: Identify groups of GPUs that are mutually connected at
+// full NVLink bandwidth (one "domain" = one max-bandwidth island).
 //
-// Algorithm: GPUs connected with the highest link count form a domain.
-// Uses union-find on pairs with link count >= threshold (max_links * 0.8)
+// The number of domains is HARDWARE-DEPENDENT — this is the common confusion:
+//   - Full-crossbar NVSwitch (DGX A100 / p4d.24xlarge): every pair is NV12, so
+//     union-find collapses to a SINGLE domain of all 8 GPUs. Topology-aware
+//     placement is effectively a no-op there — any GPU set is equally optimal.
+//   - Hybrid cube-mesh, no NVSwitch (DGX-1 V100): pairs are a mix of NV1/NV2/NV6,
+//     so thresholding splits GPUs into multiple domains and placement matters.
+//
+// Algorithm: GPUs connected at the highest link count form a domain.
+// Uses union-find on pairs with link count >= threshold (max_links * 0.8).
 func (gtm *GPUTopologyManager) DetectNVSwitchDomains(
 	gpuCount int,
 	nvlinkPairs [][]int,
@@ -208,7 +213,9 @@ func (gtm *GPUTopologyManager) DetectNVSwitchDomains(
 	}
 
 	// Threshold: pairs with >= 80% of max links are in the same NVSwitch domain
-	// On p4d: max=12, threshold=9.6 -> NV12 pairs are same-domain, NV6 are cross-domain
+	// Hybrid-mesh example (V100): max=12, threshold=9 -> NV12 pairs are
+	// same-domain, NV6 pairs are cross-domain. On a full-crossbar A100 box
+	// every pair is NV12, so all GPUs land in one domain.
 	threshold := int(float64(maxLinks) * 0.8)
 
 	// Union-Find to group GPUs into domains
