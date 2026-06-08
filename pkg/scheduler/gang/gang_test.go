@@ -293,6 +293,150 @@ func TestReportMemberReady_Idempotent(t *testing.T) {
 }
 
 // ============================================================================
+// SECTION 4b: OnMemberStatus ingestion (barrier wiring)
+// ============================================================================
+
+func allocatedGang(t *testing.T, gm *GangManager, id string, members int) *GangState {
+	t.Helper()
+	state, _ := gm.SubmitGang(context.Background(), testGangSpec(id, members, 4))
+	gm.TryScheduleGang(context.Background(), state, testNodes(1, 16))
+	require.Equal(t, GangAllocated, state.Phase)
+	return state
+}
+
+func TestOnMemberStatus_DrivesBarrierAndSuccess(t *testing.T) {
+	gm := NewGangManager(testGangConfig())
+	state := allocatedGang(t, gm, "gang-1", 3)
+
+	// All members reach RUNNING -> barrier releases.
+	require.NoError(t, gm.OnMemberStatus("gang-1", 0, common.StatusRunning, ""))
+	require.NoError(t, gm.OnMemberStatus("gang-1", 1, common.StatusRunning, ""))
+	require.NoError(t, gm.OnMemberStatus("gang-1", 2, common.StatusRunning, ""))
+	assert.Equal(t, GangRunning, state.Phase)
+
+	// All members succeed -> gang completes.
+	gm.OnMemberStatus("gang-1", 0, common.StatusSucceeded, "")
+	gm.OnMemberStatus("gang-1", 1, common.StatusSucceeded, "")
+	gm.OnMemberStatus("gang-1", 2, common.StatusSucceeded, "")
+	assert.Equal(t, GangSucceeded, state.Phase)
+}
+
+func TestOnMemberStatus_FailureCascades(t *testing.T) {
+	gm := NewGangManager(testGangConfig())
+	state := allocatedGang(t, gm, "gang-1", 3)
+
+	gm.OnMemberStatus("gang-1", 0, common.StatusRunning, "")
+	require.NoError(t, gm.OnMemberStatus("gang-1", 1, common.StatusFailed, "OOM killed"))
+	assert.Equal(t, GangFailed, state.Phase)
+}
+
+func TestOnMemberStatus_PartialSuccessDoesNotComplete(t *testing.T) {
+	gm := NewGangManager(testGangConfig())
+	state := allocatedGang(t, gm, "gang-1", 3)
+
+	for i := 0; i < 3; i++ {
+		gm.OnMemberStatus("gang-1", i, common.StatusRunning, "")
+	}
+	gm.OnMemberStatus("gang-1", 0, common.StatusSucceeded, "")
+	gm.OnMemberStatus("gang-1", 1, common.StatusSucceeded, "")
+	assert.Equal(t, GangRunning, state.Phase) // not all done yet
+}
+
+func TestOnMemberStatus_IgnoresNonTerminalStatuses(t *testing.T) {
+	gm := NewGangManager(testGangConfig())
+	state := allocatedGang(t, gm, "gang-1", 2)
+
+	require.NoError(t, gm.OnMemberStatus("gang-1", 0, common.StatusScheduled, ""))
+	assert.Equal(t, GangAllocated, state.Phase) // unchanged
+}
+
+// ============================================================================
+// SECTION 4c: Regression — GPU index allocation, deadlock wiring, barrier sweep
+// ============================================================================
+
+// TestFindOptimalPlacement_GPUIndicesContiguousAndInRange guards the bug where
+// packing >1 member onto a node double-counted the per-member offset, producing
+// out-of-range GPU indices (e.g. [8,9,10,11] on an 8-GPU node).
+func TestFindOptimalPlacement_GPUIndicesContiguousAndInRange(t *testing.T) {
+	gm := NewGangManager(testGangConfig())
+	spec := testGangSpec("gang-1", 2, 4) // 2 members × 4 GPUs = 8, fits one node
+	spec.TotalGPUs = 8
+
+	placement := gm.findOptimalPlacement(spec, testNodes(1, 8))
+	require.NotNil(t, placement)
+	require.Len(t, placement.Assignments, 2)
+	assert.True(t, placement.IsColocated, "both members should pack onto one node")
+
+	seen := map[int]bool{}
+	for _, a := range placement.Assignments {
+		require.Len(t, a.GPUIndices, 4)
+		for _, idx := range a.GPUIndices {
+			assert.GreaterOrEqual(t, idx, 0)
+			assert.Less(t, idx, 8, "GPU index must stay within the node's 8 GPUs")
+			assert.False(t, seen[idx], "GPU index %d assigned twice", idx)
+			seen[idx] = true
+		}
+	}
+	// All 8 distinct GPUs 0..7 must be covered exactly once.
+	assert.Len(t, seen, 8)
+}
+
+// TestDeadlockDetector_FedFromLifecycle verifies the wait-for graph is populated
+// from real allocation/contention rather than being permanently empty.
+func TestDeadlockDetector_FedFromLifecycle(t *testing.T) {
+	gm := NewGangManager(testGangConfig())
+
+	// Gang A grabs the only node's GPUs (allocated -> becomes a holder).
+	a, _ := gm.SubmitGang(context.Background(), testGangSpec("gang-a", 2, 4))
+	nodes := testNodes(1, 8)
+	_, err := gm.TryScheduleGang(context.Background(), a, nodes)
+	require.NoError(t, err)
+	require.Equal(t, GangAllocated, a.Phase)
+	assert.Contains(t, gm.deadlockDetector.Holders(), "gang-a")
+
+	// Gang B can't fit (node now logically full) -> records a wait edge on A.
+	b, _ := gm.SubmitGang(context.Background(), testGangSpec("gang-b", 2, 4))
+	emptyNode := testNodes(1, 8)
+	emptyNode[0].AvailableGPUs = 0 // A holds them all
+	_, err = gm.TryScheduleGang(context.Background(), b, emptyNode)
+	require.NoError(t, err)
+	require.Equal(t, GangPending, b.Phase)
+	assert.True(t, gm.deadlockDetector.waitGraph["gang-b"]["gang-a"],
+		"B should be recorded as waiting on holder A")
+
+	// When A completes, its holdings are released from the detector.
+	for i := 0; i < 2; i++ {
+		gm.OnMemberStatus("gang-a", i, common.StatusRunning, "")
+	}
+	for i := 0; i < 2; i++ {
+		gm.OnMemberStatus("gang-a", i, common.StatusSucceeded, "")
+	}
+	assert.NotContains(t, gm.deadlockDetector.Holders(), "gang-a")
+}
+
+// TestSweepBarrierTimeouts_FailsStuckGang guards the gap where a gang whose
+// members never reach RUNNING would hang in ALLOCATED forever, because the only
+// barrier-deadline check lived inside ReportMemberReady.
+func TestSweepBarrierTimeouts_FailsStuckGang(t *testing.T) {
+	gm := NewGangManager(testGangConfig())
+	spec := testGangSpec("gang-1", 3, 4)
+	spec.BarrierTimeout = 10 * time.Millisecond
+	state, _ := gm.SubmitGang(context.Background(), spec)
+	_, err := gm.TryScheduleGang(context.Background(), state, testNodes(1, 16))
+	require.NoError(t, err)
+	require.Equal(t, GangAllocated, state.Phase)
+
+	// No member ever reports RUNNING. Before the deadline: still allocated.
+	gm.sweepBarrierTimeouts()
+	assert.Equal(t, GangAllocated, state.Phase)
+
+	time.Sleep(15 * time.Millisecond)
+	gm.sweepBarrierTimeouts()
+	assert.Equal(t, GangTimeout, state.Phase)
+	assert.Equal(t, uint64(1), gm.GetStats()["total_timed_out"])
+}
+
+// ============================================================================
 // SECTION 5: Member Failure
 // ============================================================================
 
