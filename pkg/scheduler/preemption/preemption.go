@@ -42,6 +42,11 @@ type PreemptionManager struct {
 	lastHourReset       time.Time
 	lastDayReset        time.Time
 
+	// Per-tenant cooldown: victimTenantID -> time its last job was preempted.
+	// A tenant that was just raided is shielded from further eviction for
+	// CooldownPeriod, so one tenant can't be repeatedly victimized.
+	tenantCooldowns map[string]time.Time
+
 	// History (for audit trail)
 	history []PreemptionEvent
 }
@@ -117,12 +122,25 @@ func NewPreemptionManager(config *PreemptionConfig) *PreemptionManager {
 
 	now := time.Now()
 	return &PreemptionManager{
-		log:           logger.Get(),
-		config:        config,
-		lastHourReset: now,
-		lastDayReset:  now,
-		history:       make([]PreemptionEvent, 0),
+		log:             logger.Get(),
+		config:          config,
+		lastHourReset:   now,
+		lastDayReset:    now,
+		tenantCooldowns: make(map[string]time.Time),
+		history:         make([]PreemptionEvent, 0),
 	}
+}
+
+// isTenantInCooldown reports whether tenant had a job preempted within the
+// configured CooldownPeriod (and so should be shielded from further eviction).
+func (pm *PreemptionManager) isTenantInCooldown(tenantID string) bool {
+	if tenantID == "" || pm.config.CooldownPeriod <= 0 {
+		return false
+	}
+	pm.mu.RLock()
+	last, ok := pm.tenantCooldowns[tenantID]
+	pm.mu.RUnlock()
+	return ok && time.Since(last) < pm.config.CooldownPeriod
 }
 
 // ============================================================================
@@ -252,6 +270,13 @@ func (pm *PreemptionManager) buildCandidates(
 			continue
 		}
 
+		// Rule 4: Shield tenants that were recently raided (cooldown), so a
+		// single tenant can't be repeatedly victimized in a short window.
+		if pm.isTenantInCooldown(job.Spec.TenantID) {
+			pm.log.Debug("Preemption: skipping job %s — tenant %s in cooldown", job.ID, job.Spec.TenantID)
+			continue
+		}
+
 		// Score the candidate (lower = better victim to evict)
 		score := pm.scoreCandidate(job, incomingJob, age)
 
@@ -355,10 +380,12 @@ func (pm *PreemptionManager) checkRateLimits() bool {
 // PREEMPTION EXECUTION
 // ============================================================================
 
-// RecordPreemption: Record that a preemption happened (for rate limiting + audit)
+// RecordPreemption: Record that a preemption happened (for rate limiting + audit
+// + per-tenant cooldown). victimTenantID is the tenant whose job was evicted.
 func (pm *PreemptionManager) RecordPreemption(
 	incomingJobID string,
 	victimJobID string,
+	victimTenantID string,
 	incomingPri int,
 	victimPri int,
 	clusterID string,
@@ -382,6 +409,10 @@ func (pm *PreemptionManager) RecordPreemption(
 	// Keep last 1000 events
 	if len(pm.history) > 1000 {
 		pm.history = pm.history[len(pm.history)-1000:]
+	}
+	// Start the victim tenant's cooldown window.
+	if victimTenantID != "" {
+		pm.tenantCooldowns[victimTenantID] = time.Now()
 	}
 	pm.mu.Unlock()
 

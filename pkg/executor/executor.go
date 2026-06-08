@@ -144,7 +144,7 @@ const (
 type K8sClient interface {
 	CreatePod(ctx context.Context, pod *PodSpec) (podName string, err error)
 	GetPod(ctx context.Context, podName string) (*PodInfo, error)
-	DeletePod(ctx context.Context, podName string) error
+	DeletePod(ctx context.Context, podName string, gracePeriodSeconds int64) error
 	ListPods(ctx context.Context) ([]*PodInfo, error)
 	GetPodLogs(ctx context.Context, podName string) (string, error)
 	GetPodMetrics(ctx context.Context, podName string) (map[string]interface{}, error)
@@ -954,8 +954,10 @@ func (ex *Executor) ListCompletedJobs() []*ExecutionResult {
 	return results
 }
 
-// CancelJob: Cancel a running job
-func (ex *Executor) CancelJob(jobID string) error {
+// CancelJob: Cancel a running job. gracePeriodSeconds gives the pod time to
+// catch SIGTERM and checkpoint before being killed; pass a negative value to
+// fall back to the pod's default termination grace.
+func (ex *Executor) CancelJob(jobID string, gracePeriodSeconds int64) error {
 	if jobID == "" {
 		return fmt.Errorf("job ID cannot be empty")
 	}
@@ -968,10 +970,11 @@ func (ex *Executor) CancelJob(jobID string) error {
 		return fmt.Errorf("job %s not found", jobID)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// Allow the kill itself to outlast the grace window.
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(gracePeriodSeconds)*time.Second+10*time.Second)
 	defer cancel()
 
-	err := ex.K8sClient.DeletePod(ctx, execCtx.PodName)
+	err := ex.K8sClient.DeletePod(ctx, execCtx.PodName, gracePeriodSeconds)
 	if err != nil {
 		ex.Log.Error("Failed to cancel job %s: %v", jobID, err)
 		return fmt.Errorf("failed to cancel job: %w", err)
@@ -1207,7 +1210,7 @@ func (m *MockK8sClient) GetPod(ctx context.Context, podName string) (*PodInfo, e
 }
 
 // DeletePod: Mock delete Pod
-func (m *MockK8sClient) DeletePod(ctx context.Context, podName string) error {
+func (m *MockK8sClient) DeletePod(ctx context.Context, podName string, gracePeriodSeconds int64) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 

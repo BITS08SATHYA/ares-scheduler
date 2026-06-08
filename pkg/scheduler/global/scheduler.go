@@ -489,10 +489,10 @@ func (gs *GlobalScheduler) ScheduleJob(
 					jobRecord.ID, jobRecord.Spec.Priority)
 
 				gs.preemptionManager.RecordPreemption(
-					jobRecord.ID, decision.Victim.JobID,
+					jobRecord.ID, decision.Victim.JobID, decision.Victim.TenantID,
 					jobRecord.Spec.Priority, decision.Victim.Priority, "")
 
-				gs.cancelJobOnCluster(ctx, decision.Victim.JobID)
+				gs.cancelJobOnCluster(ctx, decision.Victim.JobID, int64(decision.GracePeriod.Seconds()))
 
 				// Retry scheduling after freeing resources
 				bestCluster, clusterScore, err = gs.SelectBestCluster(ctx, jobRecord.Spec, "")
@@ -1267,7 +1267,7 @@ func (gs *GlobalScheduler) SetMetricsCallbacks(onGPURollback func()) {
 	gs.log.Info("Metrics callbacks injected into GlobalScheduler")
 }
 
-func (gs *GlobalScheduler) cancelJobOnCluster(ctx context.Context, jobID string) {
+func (gs *GlobalScheduler) cancelJobOnCluster(ctx context.Context, jobID string, gracePeriodSeconds int64) {
 	gs.log.Info("PREEMPTION: Canceling job %s", jobID)
 
 	if gs.jobStore == nil {
@@ -1293,7 +1293,7 @@ func (gs *GlobalScheduler) cancelJobOnCluster(ctx context.Context, jobID string)
 
 		if exists && clusterInfo.LocalSchedulerAddr != "" {
 			localClient := NewLocalSchedulerClient()
-			cancelErr := localClient.CancelJob(ctx, clusterInfo.LocalSchedulerAddr, jobID, "preempted by higher priority job")
+			cancelErr := localClient.CancelJob(ctx, clusterInfo.LocalSchedulerAddr, jobID, "preempted by higher priority job", gracePeriodSeconds)
 			if cancelErr != nil {
 				gs.log.Warn("PREEMPTION: Failed to cancel pod on cluster %s: %v (marking as preempted anyway)", job.ClusterID, cancelErr)
 			} else {

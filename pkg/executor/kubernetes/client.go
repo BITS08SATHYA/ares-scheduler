@@ -353,8 +353,16 @@ func (kc *K8sClientImpl) GetPod(ctx context.Context, podName string) (*executor.
 }
 
 // DeletePod: Delete a Pod
-func (kc *K8sClientImpl) DeletePod(ctx context.Context, podName string) error {
-	return kc.clientset.CoreV1().Pods(kc.namespace).Delete(ctx, podName, metav1.DeleteOptions{})
+func (kc *K8sClientImpl) DeletePod(ctx context.Context, podName string, gracePeriodSeconds int64) error {
+	opts := metav1.DeleteOptions{}
+	// A non-negative grace period overrides the pod's default: Kubernetes sends
+	// SIGTERM, waits gracePeriodSeconds for the container to checkpoint/exit, then
+	// SIGKILLs. A negative value leaves DeleteOptions empty (use the pod's spec
+	// terminationGracePeriodSeconds), preserving prior behavior.
+	if gracePeriodSeconds >= 0 {
+		opts.GracePeriodSeconds = &gracePeriodSeconds
+	}
+	return kc.clientset.CoreV1().Pods(kc.namespace).Delete(ctx, podName, opts)
 }
 
 // ListPods: List all Pods in namespace

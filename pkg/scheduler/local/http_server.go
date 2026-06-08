@@ -296,8 +296,9 @@ func (lss *LocalSchedulerServer) handleCancel(w http.ResponseWriter, r *http.Req
 	}
 
 	var req struct {
-		JobID  string `json:"job_id"`
-		Reason string `json:"reason,omitempty"`
+		JobID        string `json:"job_id"`
+		Reason       string `json:"reason,omitempty"`
+		GraceSeconds *int64 `json:"grace_seconds,omitempty"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -312,11 +313,17 @@ func (lss *LocalSchedulerServer) handleCancel(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	lss.log.Info("PREEMPTION: Received cancel request for job %s (reason: %s)", req.JobID, req.Reason)
+	// Default to the pod's own termination grace when the caller doesn't specify.
+	graceSeconds := int64(-1)
+	if req.GraceSeconds != nil {
+		graceSeconds = *req.GraceSeconds
+	}
+
+	lss.log.Info("PREEMPTION: Received cancel request for job %s (reason: %s, grace=%ds)", req.JobID, req.Reason, graceSeconds)
 
 	// Step 1: Delete the pod via executor
 	if lss.executor != nil {
-		if err := lss.executor.CancelJob(req.JobID); err != nil {
+		if err := lss.executor.CancelJob(req.JobID, graceSeconds); err != nil {
 			lss.log.Warn("PREEMPTION: Pod deletion failed for job %s: %v (may already be gone)", req.JobID, err)
 		} else {
 			lss.log.Info("PREEMPTION: Pod deleted for job %s", req.JobID)
