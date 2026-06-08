@@ -234,6 +234,68 @@ func TestOnJobScheduled_EmptyTenant(t *testing.T) {
 	assert.Empty(t, dm.GetTenantStats())
 }
 
+// TrackJobScheduled + ReleaseJob: the jobID-keyed path used in production.
+
+func TestReleaseJob_BalancesTrack(t *testing.T) {
+	dm := NewDRFManager(nil)
+	dm.UpdateCapacity(100, 1000, 1000.0)
+
+	dm.TrackJobScheduled("job-1", "tenant-a", 8, 16, 64.0)
+	usage := dm.GetTenantStats()["tenant-a"]
+	assert.Equal(t, 8, usage.GPUsInUse)
+	assert.Equal(t, 1, usage.RunningJobs)
+
+	dm.ReleaseJob("job-1")
+	usage = dm.GetTenantStats()["tenant-a"]
+	assert.Equal(t, 0, usage.GPUsInUse)
+	assert.Equal(t, 0, usage.RunningJobs)
+}
+
+func TestReleaseJob_Idempotent(t *testing.T) {
+	dm := NewDRFManager(nil)
+	dm.UpdateCapacity(100, 1000, 1000.0)
+
+	// Two jobs for the same tenant; releasing one twice must not corrupt the other.
+	dm.TrackJobScheduled("job-1", "tenant-a", 8, 16, 64.0)
+	dm.TrackJobScheduled("job-2", "tenant-a", 5, 10, 32.0)
+
+	dm.ReleaseJob("job-1")
+	dm.ReleaseJob("job-1") // duplicate — should be a no-op
+	dm.ReleaseJob("job-1") // and again
+
+	usage := dm.GetTenantStats()["tenant-a"]
+	assert.Equal(t, 5, usage.GPUsInUse)  // only job-2 remains
+	assert.Equal(t, 1, usage.RunningJobs) // not driven negative by extra releases
+}
+
+func TestReleaseJob_UnknownJobIsNoOp(t *testing.T) {
+	dm := NewDRFManager(nil)
+	dm.UpdateCapacity(100, 1000, 1000.0)
+
+	dm.TrackJobScheduled("job-1", "tenant-a", 8, 16, 64.0)
+	dm.ReleaseJob("job-does-not-exist") // never tracked
+
+	usage := dm.GetTenantStats()["tenant-a"]
+	assert.Equal(t, 8, usage.GPUsInUse) // untouched
+}
+
+func TestTrackJobScheduled_RetryReplacesAllocation(t *testing.T) {
+	dm := NewDRFManager(nil)
+	dm.UpdateCapacity(100, 1000, 1000.0)
+
+	// Same jobID tracked twice (e.g. a retry re-enters scheduling).
+	dm.TrackJobScheduled("job-1", "tenant-a", 8, 16, 64.0)
+	dm.TrackJobScheduled("job-1", "tenant-a", 8, 16, 64.0)
+
+	usage := dm.GetTenantStats()["tenant-a"]
+	assert.Equal(t, 8, usage.GPUsInUse)  // not double-counted to 16
+	assert.Equal(t, 1, usage.RunningJobs) // still a single live allocation
+
+	dm.ReleaseJob("job-1")
+	usage = dm.GetTenantStats()["tenant-a"]
+	assert.Equal(t, 0, usage.GPUsInUse)
+}
+
 func TestOnJobCompleted_EmptyTenant(t *testing.T) {
 	dm := NewDRFManager(nil)
 	dm.OnJobCompleted("", 8, 16, 64.0)
