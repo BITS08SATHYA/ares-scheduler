@@ -262,8 +262,20 @@ func TestSelectBestCluster_OptimisticDecrement(t *testing.T) {
 
 	cfg := &cluster.ClusterConfig{ClusterID: "c1", Region: "us-west", Zone: "a", ControlAddr: "http://localhost:1"}
 	gs.clusterManager.JoinCluster(context.Background(), cfg)
+
+	// Seed the cache before UpdateClusterCapacity so the JOINING→READY
+	// listener finds the cluster and re-syncs capacity into it. That listener
+	// runs in a goroutine (manager.go), and it overwrites AvailableGPUs — so
+	// if it lands after the optimistic decrement below it clobbers 12 back to
+	// 16. Start at 0 and wait for the sync, making the ordering deterministic.
+	addTestCluster(gs, "c1", "us-west", 0, 0, true, nil)
 	gs.clusterManager.UpdateClusterCapacity(context.Background(), "c1", 16, 64, 256.0)
-	addTestCluster(gs, "c1", "us-west", 16, 16, true, nil)
+
+	require.Eventually(t, func() bool {
+		gs.clustersMu.RLock()
+		defer gs.clustersMu.RUnlock()
+		return gs.clusters["c1"].AvailableGPUs == 16
+	}, 5*time.Second, 10*time.Millisecond, "capacity re-sync never landed")
 
 	gs.SelectBestCluster(context.Background(), testJobSpec(4), "")
 
