@@ -10,25 +10,38 @@ jobs:
   test:
     name: build + vet + unit tests
     runs-on: ubuntu-latest
+    services:
+      # pkg/cluster, pkg/scheduler/global and pkg/scheduler/local talk to a
+      # real Redis (same image as docker-compose.yml); without it they panic
+      # with "test redis not available".
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version: '1.25'
           cache: true
       - run: go build ./...
       - run: go vet ./...
-      - run: go test ./tests/unit/...
+      - run: go test ./...
 
   lint:
     name: golangci-lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version: '1.25'
           cache: true
-      - uses: golangci/golangci-lint-action@v8
+      - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.11.4

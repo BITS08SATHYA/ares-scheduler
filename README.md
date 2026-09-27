@@ -2,7 +2,7 @@
 
 # Ares: Distributed GPU Scheduler for Kubernetes
 
-### v0.2.0
+### v0.3.0
 
 **Multi-cluster scheduling with exactly-once execution, CRDT-based consistency, gang scheduling, and DRF fairness.**
 
@@ -481,11 +481,13 @@ We ran NCCL `all_reduce_perf` on p4d.24xlarge to validate our topology assumptio
 
 ## Roadmap
 
-**v0.1.0 (current release)**: All 8/8 benchmark suites passing. Exactly-once execution, GPU topology scoring, multi-cluster routing, gang scheduling, DRF fairness, priority preemption, failure recovery, chaos resilience — all validated against live GKE + EKS clusters. CRDT-based consistency, cluster autonomy, observability (7 Prometheus subsystems), Helm charts + Makefile for multi-cluster deployment.
+**v0.1.0** *(shipped Mar 2026)*: All 8/8 benchmark suites passing against live GKE + EKS clusters. Exactly-once execution, GPU topology scoring, multi-cluster routing, gang scheduling, DRF fairness, priority preemption, failure recovery, chaos resilience. CRDT-based consistency, cluster autonomy, observability (7 Prometheus subsystems), Helm charts + Makefile for multi-cluster deployment.
 
-**v0.2.0 (next)**: End-to-end GPU placement integration via `CUDA_VISIBLE_DEVICES`. Cross-node NCCL benchmarks (NVLink vs EFA) to quantify inter-node scheduling impact.
+**v0.2.0** *(shipped Apr 2026)*: End-to-end GPU job execution on Kubernetes — control plane → cluster router → local scheduler → executor spawning real GPU pods, with `CUDA_VISIBLE_DEVICES` placement. OpenTelemetry tracing, leader election, structured logging. CI pipeline (GitHub Actions + golangci-lint v2).
 
-**v0.3.0**: NUMA-aware memory placement. RBAC and tenant isolation. Audit logging.
+**v0.3.0** *(current release, Jun 2026)*: Gang scheduling rank/world-size env injection for distributed workloads. Member-status barrier, preemption grace period and per-tenant cooldown, DRF allocation release on job completion, cluster registration self-healing.
+
+**Next**: NUMA-aware memory placement. RBAC and tenant isolation. Audit logging. Cross-node NCCL benchmarks (NVLink vs EFA) to quantify inter-node scheduling impact.
 
 **Future**: Network bandwidth-aware scheduling. Multi-cloud federation (GKE + EKS + AKS).
 
