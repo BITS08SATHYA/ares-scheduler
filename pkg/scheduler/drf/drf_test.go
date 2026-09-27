@@ -264,7 +264,7 @@ func TestReleaseJob_Idempotent(t *testing.T) {
 	dm.ReleaseJob("job-1") // and again
 
 	usage := dm.GetTenantStats()["tenant-a"]
-	assert.Equal(t, 5, usage.GPUsInUse)  // only job-2 remains
+	assert.Equal(t, 5, usage.GPUsInUse)   // only job-2 remains
 	assert.Equal(t, 1, usage.RunningJobs) // not driven negative by extra releases
 }
 
@@ -288,7 +288,7 @@ func TestTrackJobScheduled_RetryReplacesAllocation(t *testing.T) {
 	dm.TrackJobScheduled("job-1", "tenant-a", 8, 16, 64.0)
 
 	usage := dm.GetTenantStats()["tenant-a"]
-	assert.Equal(t, 8, usage.GPUsInUse)  // not double-counted to 16
+	assert.Equal(t, 8, usage.GPUsInUse)   // not double-counted to 16
 	assert.Equal(t, 1, usage.RunningJobs) // still a single live allocation
 
 	dm.ReleaseJob("job-1")
